@@ -1,12 +1,13 @@
-# EngineSim — simulator mesin real-time (C++)
+# EngineSim — real-time engine simulator (C++)
 
-Simulator mesin pembakaran dalam dengan fisika per-silinder, suara yang **dihasilkan dari fisika**
-(gelombang tekanan di knalpot & intake), dyno, dan semua konfigurasi diubah **langsung di dalam
-aplikasi saat mesin hidup** (tanpa file config). Mendukung mesin **piston** dan **rotari Wankel**.
+An internal-combustion engine simulator with per-cylinder physics, sound **generated from the physics**
+(pressure waves in the exhaust and intake), a dyno, and an ECU tuning platform. Everything is configured
+**live inside the application while the engine is running** (no config files). Both **piston** and
+**Wankel rotary** engines are supported.
 
 ## Build (Windows, MSVC 2019 + CMake)
 
-CMake tidak ada di PATH; pakai CMake bawaan Visual Studio:
+If CMake is not on your PATH, use the one bundled with Visual Studio:
 
 ```bash
 "/c/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe" -S . -B build -G "Visual Studio 16 2019" -A x64
@@ -16,234 +17,232 @@ CMake tidak ada di PATH; pakai CMake bawaan Visual Studio:
 "/c/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe" --build build --config Release
 ```
 
-Dependensi (Dear ImGui 1.90.9-docking, ImPlot 0.16, miniaudio 0.11.21) diunduh otomatis lewat
-FetchContent saat configure pertama.
+Dependencies (Dear ImGui 1.90.9-docking, ImPlot 0.16, ImPlot3D 0.2, miniaudio 0.11.21) are downloaded
+automatically through FetchContent on the first configure.
 
-Jalankan: `build/Release/enginesim.exe` — atau langsung dengan preset tertentu:
-`build/Release/enginesim.exe --preset 12` (rotari 13B).
+Run `build/Release/enginesim.exe`, or start directly with a given preset:
+`build/Release/enginesim.exe --preset 12` (13B rotary).
 
-## Kontrol
+## Controls
 
-| Tombol | Fungsi |
+| Key | Action |
 |---|---|
-| `S` (tahan) | starter / crank (otomatis menyalakan ignition) |
+| `S` (hold) | starter / crank (switches the ignition on automatically) |
 | `I` | ignition on/off |
-| `W` / `↑` (tahan) | gas (naik perlahan, lepas = turun) |
-| `Space` (tahan) | gas penuh (WOT) |
-| `1`…`9`, `0` | throttle tetap 10 %…90 %, 100 % |
-| `↓` | lepas gas |
-| `D` | jalankan dyno sweep |
-| `L` | ganti posisi pendengar (knalpot / ruang mesin / kabin) |
-| `V` | mode berkendara on/off (mobil sebagai beban) |
-| `E` / `Q` | naik / turun gigi (otomatis: `E` = D, `Q` = N) |
-| `N` | netral |
-| `C` (tahan) | kopling diinjak (dilepas pelan ~0.4 dtk) |
-| `B` / `↓` (tahan) | rem |
+| `W` / `↑` (hold) | throttle (opens gradually, release = closes) |
+| `Space` (hold) | full throttle (WOT) |
+| `1`…`9`, `0` | fixed throttle 10 %…90 %, 100 % |
+| `↓` | release throttle |
+| `D` | run a dyno sweep |
+| `L` | change listener position (tailpipe / engine bay / cabin) |
+| `V` | driving mode on/off (car as the load) |
+| `E` / `Q` | shift up / down (automatic: `E` = D, `Q` = N) |
+| `N` | neutral |
+| `C` (hold) | clutch pedal down (released slowly, ~0.4 s) |
+| `B` / `↓` (hold) | brake |
 
-Tombol **START ENGINE** men-crank sampai mesin hidup sendiri.
+The **START ENGINE** button cranks until the engine runs on its own.
 
-### Tata letak
+### Layout
 
-Header di atas selalu terlihat: ignition, START ENGINE, crank, throttle, pilihan preset, dan angka utama
-(RPM, MAP, AFR, timing, boost, EGT, torsi, gigi). Di kiri ada navigasi 12 bagian gaya software ECU:
-Engine Setup, ECU Setup, Fuel Tuning, Ignition Tuning, Boost Control, Engine Control, Sensor Configuration,
-Engine Protection, Live Dashboard, Data Logging, Virtual Dyno, Calibration Manager. Bagian yang diredupkan
-belum dibuat dan hanya menjelaskan rencananya (lihat [docs/ECU_PLAN.md](docs/ECU_PLAN.md)).
-`build/Release/enginesim.exe --section 11` membuka langsung bagian tertentu (1–12).
+The header at the top is always visible: ignition, START ENGINE, crank, throttle, preset selection, and the
+main readouts (RPM, MAP, AFR, timing, boost, EGT, torque, gear). On the left is a 12-section navigation in the
+style of ECU software: Engine Setup, ECU Setup, Fuel Tuning, Ignition Tuning, Boost Control, Engine Control,
+Sensor Configuration, Engine Protection, Live Dashboard, Data Logging, Virtual Dyno, Calibration Manager.
+Dimmed sections are not built yet and only describe what is planned (see [docs/ECU_PLAN.md](docs/ECU_PLAN.md)).
+`build/Release/enginesim.exe --section 11` opens a given section directly (1–12).
 
-## Apa yang bisa dikonfigurasi (semua realtime)
+## What can be configured (all in real time)
 
-- **Engine**: tipe mesin Piston / Rotary; layout Inline / V / Boxer, 1–16 silinder, sudut bank,
-  bore, stroke, panjang conrod, kompresi, inersia flywheel, **firing order** (urut ulang dengan
-  panah), firing genap atau **fase per silinder bebas** (odd-fire V-twin, big-bang), dan pembagian
-  bank knalpot kiri/kanan.
-- **Valvetrain**: jumlah & diameter katup, durasi cam, lift, centerline/LSA, cam advance (VVT),
-  valve lash, plus grafik lift katup + overlap.
-- **Ignition**: base / mekanis / vakum advance, rev limiter (ignition cut = letupan, fuel cut).
-- **Fuel & Intake**: **EFI** (port / throttle-body, ukuran injector, target AFR, ECU tuned
-  vs tidak, idle target) atau **karburator** (barrel, venturi, main jet, idle mixture, idle screw,
-  pompa akselerasi, choke); throttle body, ITB, volume plenum, panjang/diameter runner, filter udara.
-- **Exhaust**: log manifold / header N-into-1 / tri-Y 4-2-1, panjang primary (sama atau berbeda
-  per silinder — "boxer rumble"), diameter, collector, crossover (true dual / H-pipe / X-pipe / Y),
-  catalytic converter, resonator, muffler (lurus / glasspack / chambered / turbo), tailpipe.
-- **Sound style** (tab Audio): *Smooth* (default, gaya engine-sim: sinyal utamanya tekanan pulsa gas buang,
-  dibatasi frekuensinya oleh low-pass orde 4 *Smoothing*, diberi air noise halus, lalu dibentuk impulse response)
-  atau *Raw* (model asli: hanya radiasi aliran tailpipe, tanpa lapisan tambahan, tanpa IR, silinder seragam).
-  *Pulse pressure mix* mengatur porsi tekanan pulsa (bulat, penuh) vs radiasi aliran (lebih cerah).
-- **Audio**: posisi pendengar, volume, oversampling fisika, *Rasp* (noise turbulensi jet gas di
-  tailpipe, kuatnya ∝ kecepatan gas², frekuensinya mengikuti Strouhal 0.3·v/D), *Punch* (komponen
-  tekanan pulsa frekuensi rendah), *Wave steepening* (opsional, default mati: pulsa bertekanan tinggi merambat lebih cepat sehingga menajam — menambah gigitan tapi juga kekasaran), dan *Environment* (jalan terbuka / garasi / ruang dyno / terowongan,
-  reverb feedback-delay-network) + jumlah reverb. Ide air-noise dan campuran tekanan/turunan terinspirasi
-  dari [engine-sim](https://github.com/ange-yaghi/engine-sim), tapi diturunkan dari aliran yang disimulasikan.
-- **Impulse response (konvolusi)**: suara knalpot dilewatkan ke IR lewat konvolusi FFT terpartisi
-  (latensi 256 sampel). Pilihan: *Auto* (sesuai muffler/motor), *Raw pipe*, *Sport*, *Stock muffler*,
-  *Race*, *Motorcycle* (dibuat prosedural: pantulan awal rapat, ekor yang meredup, resonansi bodi
-  knalpot), atau **Load WAV...** untuk IR sendiri (PCM 16/24/32-bit / float, otomatis di-resample).
-  IR dari `ir_lib` engine-sim (lisensi MIT) bisa dipakai — cantumkan lisensinya.
-- **Imperfection** (tab Engine): selisih kecil antar silinder (aliran port, injector, timing, pembakaran,
-  panjang primary; rata-rata nol) + variasi antar siklus, supaya suara tidak steril seperti mesin
-  sempurna.
-- **Komponen (Engine Setup → Components)**: setiap part punya efek fisik.
-  - *Piston / connecting rod / crankshaft*: bahan dan massa menentukan inersia tambahan dan **batas rpm aman**
-    (gaya inersia vs kekuatan part terlemah); tension ring piston menambah friksi.
-  - *Lifter + pegas katup*: massa yang bergerak vs gaya pegas menentukan rpm **valve float**. Di atasnya katup
-    terlambat menutup dan memantul: torsi turun, misfire. Pegas lebih keras = friksi lebih besar.
-  - *Throttle body* kabel atau drive-by-wire (waktu respons motor), *injector* (laju alir + dead time).
-  - *Coil* (distributor / wasted spark / coil-on-plug, energi, waktu charge) dan *busi* (heat range, gap):
-    energi percikan kurang = misfire. Busi terlalu panas = pre-ignition/knock, terlalu dingin + kaya = fouling.
-  - *Pompa oli / air*: tekanan oli vs rpm (lampu Oil di header) dan daya penggerak (friksi).
-  - Opsi **Allow mechanical failure**: part yang kelebihan beban, knock berat, atau katup menabrak piston
-    menumpuk kerusakan sampai mesin rusak dan terkunci (tombol *Repair engine*).
-  - *Size parts to this engine* memilih part yang aman untuk rev limiter saat ini. Kalau limiter dinaikkan
-    tanpa mengganti part, mesin bisa valve float atau rusak.
-- **ECU terpisah + sensor virtual**: ECU (tab *ECU Setup*) hanya membaca sensor (TPS, pedal, MAP, MAF, IAT, ECT,
-  O2 narrowband, wideband, CKP, CMP, knock, EGT, tekanan & suhu oli, tekanan bahan bakar, kecepatan, gigi, aki).
-  Laju loop ECU bisa diatur (100–5000 Hz). Tab *Sensor Configuration* menampilkan nilai sebenarnya vs yang dibaca
-  ECU, tegangan sinyal, status, dan bisa mengatur noise, lag, serta kerusakan (putus, korslet, macet, noisy).
-  ECU mendeteksi sinyal di luar rentang dan memakai fallback (MAP rusak → estimasi dari bukaan gas, CKP putus →
-  mesin mati, CMP hilang → batch fire). Sensor yang *macet* tidak terdeteksi, persis seperti aslinya.
-- **Model termal**: suhu coolant, oli, dan udara masuk; thermostat, radiator (kecepatan mobil + kipas), pompa air.
-  Oli dingin = friksi lebih besar; dinding port dingin = film bensin lebih banyak dan sebagian bensin tidak
-  menguap. Opsi **Cold start** (ECU Setup): ECU memakai pengayaan cranking/warm-up dan fast idle; karburator
-  memakai choke otomatis + fast-idle cam.
-- **Suplai bahan bakar & listrik**: tekanan rail dari pompa + regulator (berreferensi manifold atau returnless),
-  pompa kekecilan = tekanan turun = campuran kurus; tegangan aki (turun saat cranking, alternator saat jalan)
-  memengaruhi dead time injektor.
-- **Kalibrasi ECU (tabel)**: *Fuel Tuning* dan *Ignition Tuning* berisi peta VE (speed density dan alpha-N),
-  target lambda, pengapian, kurva enrichment / koreksi, data injektor, trim per silinder, dan mode beban
-  (SD / alpha-N / MAF / hybrid). Editor tabel: grid berwarna dengan titik operasi + jejak, keyboard (panah,
-  angka, +/−, Ctrl+C/V/Z/Y), interpolasi, smoothing, lock, diff, dan permukaan 3D. Base map VE diukur otomatis
-  di dyno virtual (latar belakang, di-cache di `basemaps/`); auto-tune wideband bisa menyempurnakannya.
-- **Calibration Manager**: simpan / muat / duplikat / hapus / import / export kalibrasi (JSON di
-  `calibrations/<mesin>/`), riwayat versi + restore, catatan, compare dengan versi lain, lock peta, validasi.
-- **Pause / Resume / Reset** di header (reset = mesin baru dalam keadaan diam, dingin atau panas).
-- **Mesin rotari (Wankel, gaya Mazda)**: pilih *Engine type → Rotary (Wankel)*. Atur jumlah rotor
-  (1–4), generating radius R, eksentrisitas e, lebar rotor B, kompresi, dan keausan apex seal.
-  Tab **Ports** (pengganti Valvetrain) mengatur buka/tutup port intake & exhaust (derajat poros
-  eksentrik), luas port, dan preset porting: *stock side port*, *street port*, *bridge port*
-  (idle brap-brap), *peripheral port* (balap). Preset: 13B 2-rotor, 20B 3-rotor,
-  26B 4-rotor peripheral port, 1-rotor karburator.
+- **Engine**: Piston / Rotary engine type; Inline / V / Boxer layout, 1–16 cylinders, bank angle, bore, stroke,
+  conrod length, compression, flywheel inertia, **firing order** (reorder with arrows), even firing or
+  **free per-cylinder phasing** (odd-fire V-twin, big-bang), and the left/right exhaust bank split.
+- **Valvetrain**: number and diameter of valves, cam duration, lift, centerline/LSA, cam advance (VVT),
+  valve lash, plus a valve lift + overlap graph.
+- **Ignition**: base / mechanical / vacuum advance, rev limiter (ignition cut = pops, fuel cut).
+- **Fuel & Intake**: **EFI** (port / throttle-body, injector size, target AFR, tuned vs untuned ECU, idle target)
+  or a **carburettor** (barrels, venturi, main jet, idle mixture, idle screw, accelerator pump, choke);
+  throttle body, ITBs, plenum volume, runner length/diameter, air filter.
+- **Exhaust**: log manifold / N-into-1 header / tri-Y 4-2-1, primary length (equal or different per cylinder —
+  "boxer rumble"), diameter, collector, crossover (true dual / H-pipe / X-pipe / Y), catalytic converter,
+  resonator, muffler (straight / glasspack / chambered / turbo), tailpipe.
+- **Sound style** (Audio tab): *Smooth* (default, engine-sim style: the main signal is the exhaust pulse
+  pressure, band-limited by a 4th-order *Smoothing* low-pass, with subtle air noise, then shaped by an impulse
+  response) or *Raw* (the original model: tailpipe flow radiation only, no extra layers, no IR, identical
+  cylinders). *Pulse pressure mix* sets the share of pulse pressure (round, full) vs flow radiation (brighter).
+- **Audio**: listener position, volume, physics oversampling, *Rasp* (jet turbulence noise at the tailpipe,
+  strength ∝ gas velocity², frequency following Strouhal 0.3·v/D), *Punch* (low-frequency pulse pressure
+  component), *Wave steepening* (optional, off by default: high-pressure pulses travel faster and sharpen —
+  adds bite but also roughness), and *Environment* (open road / garage / dyno cell / tunnel, feedback-delay-network
+  reverb) + reverb amount. The air-noise idea and the pressure/derivative mix are inspired by
+  [engine-sim](https://github.com/ange-yaghi/engine-sim), but derived from the simulated flow.
+- **Impulse response (convolution)**: the exhaust sound is passed through an IR with a partitioned FFT
+  convolution (256-sample latency). Choices: *Auto* (matches the muffler / bike), *Raw pipe*, *Sport*,
+  *Stock muffler*, *Race*, *Motorcycle* (procedural: dense early reflections, a decaying tail, a muffler body
+  resonance), or **Load WAV...** for your own IR (PCM 16/24/32-bit / float, resampled automatically).
+  IRs from engine-sim's `ir_lib` (MIT license) can be used — keep their license notice.
+- **Imperfection** (Engine tab): small differences between cylinders (port flow, injector, timing, combustion,
+  primary length; zero on average) + cycle-to-cycle variation, so the sound is not sterile like a perfect engine.
+- **Components (Engine Setup → Components)**: every part has a physical effect.
+  - *Piston / connecting rod / crankshaft*: material and mass set the extra inertia and the **safe rpm limit**
+    (inertia forces vs the weakest part's strength); piston ring tension adds friction.
+  - *Lifters + valve springs*: moving mass vs spring force sets the **valve float** rpm. Above it the valves
+    close late and bounce: torque drops, misfires. Stiffer springs = more friction.
+  - *Throttle body*: cable or drive-by-wire (motor response time); *injectors* (flow rate + dead time).
+  - *Coil* (distributor / wasted spark / coil-on-plug, energy, charge time) and *spark plugs* (heat range, gap):
+    too little spark energy = misfire. Plug too hot = pre-ignition/knock, too cold + rich = fouling.
+  - *Oil / water pump*: oil pressure vs rpm (Oil lamp in the header) and drive power (friction).
+  - **Allow mechanical failure** option: overloaded parts, heavy knock, or valves hitting pistons accumulate
+    damage until the engine fails and seizes (*Repair engine* button).
+  - *Size parts to this engine* picks parts that are safe for the current rev limiter. Raising the limiter
+    without changing parts can cause valve float or a failure.
+- **Separate ECU + virtual sensors**: the ECU (*ECU Setup*) only reads sensors (TPS, pedal, MAP, MAF, IAT, ECT,
+  narrowband O2, wideband, CKP, CMP, knock, EGT, oil pressure & temperature, fuel pressure, speed, gear,
+  battery). The ECU loop rate is adjustable (100–5000 Hz). *Sensor Configuration* shows the true value vs what
+  the ECU reads, signal voltage and status, and lets you set noise, lag and faults (open, short, stuck, noisy).
+  The ECU detects out-of-range signals and uses fallbacks (MAP failure → estimate from throttle opening, CKP lost
+  → engine stops, CMP lost → batch fire). A *stuck* sensor goes undetected, just like the real thing.
+- **Thermal model**: coolant, oil and intake air temperatures; thermostat, radiator (vehicle speed + fan), water
+  pump. Cold oil = more friction; cold port walls = more fuel film and some fuel not evaporating. **Cold start**
+  option (ECU Setup): the ECU uses cranking/warm-up enrichment and fast idle; carburettors use an automatic choke
+  + fast-idle cam.
+- **Fuel supply & electrics**: rail pressure from pump + regulator (manifold-referenced or returnless); an
+  undersized pump = falling pressure = lean mixture; battery voltage (drops while cranking, alternator when
+  running) affects injector dead time.
+- **ECU calibration (tables)**: *Fuel Tuning* and *Ignition Tuning* hold the VE maps (speed density and
+  alpha-N), target lambda, ignition, enrichment / correction curves, injector data, per-cylinder trims, and the
+  load mode (SD / alpha-N / MAF / hybrid). Table editor: colour-coded grid with operating point + trail,
+  keyboard (arrows, digits, +/−, Ctrl+C/V/Z/Y), interpolation, smoothing, lock, diff, and a 3D surface. The base
+  VE map is measured automatically on a virtual dyno (in the background, cached in `basemaps/`); wideband
+  auto-tune can refine it.
+- **Calibration Manager**: save / load / duplicate / delete / import / export calibrations (JSON in
+  `calibrations/<engine>/`), version history + restore, notes, compare with other versions, map locks, validation.
+- **Pause / Resume / Reset** in the header (reset = a new engine at rest, cold or warm).
+- **Rotary engines (Wankel, Mazda style)**: choose *Engine type → Rotary (Wankel)*. Set the number of rotors
+  (1–4), generating radius R, eccentricity e, rotor width B, compression, and apex seal wear. The **Ports** tab
+  (replacing Valvetrain) sets intake & exhaust port open/close (eccentric shaft degrees), port area, and porting
+  presets: *stock side port*, *street port*, *bridge port* (brap-brap idle), *peripheral port* (racing).
+  Presets: 13B 2-rotor, 20B 3-rotor, 26B 4-rotor peripheral port, 1-rotor carburetted.
 
-- **Forced induction (tab Boost)**: *Turbocharger* — ukuran kompresor, A/R turbin (lag vs top end),
-  inersia rotor, wastegate (target boost), blow-off valve (tanpa BOV = flutter surge "stu-tu-tu"),
-  anti-lag ALS (letupan saat lepas gas). *Supercharger* — Roots, twin-screw (boost instan + whine
-  khas), atau sentrifugal (boost naik dengan rpm), ukuran blower, rasio pulley, bypass valve.
-  Bersama: intercooler + efisiensi, volume pipa charge, ignition retard per bar, AFR saat boost,
-  ukuran injector. Ada peta kompresor dengan titik operasi realtime. Preset: I4 2.0 turbo,
-  V8 6.2 Roots blower, rotari 13B turbo, I6 big single turbo + anti-lag, V6 supercharger sentrifugal.
+- **Forced induction (Boost tab)**: *Turbocharger* — compressor size, turbine A/R (lag vs top end), rotor
+  inertia, wastegate (target boost), blow-off valve (no BOV = "stu-tu-tu" surge flutter), anti-lag ALS (bangs
+  off throttle). *Supercharger* — Roots, twin-screw (instant boost + characteristic whine), or centrifugal
+  (boost rising with rpm), blower size, pulley ratio, bypass valve. Shared: intercooler + efficiency, charge pipe
+  volume, ignition retard per bar, AFR under boost, injector size. A compressor map shows the real-time operating
+  point. Presets: I4 2.0 turbo, V8 6.2 Roots blower, 13B rotary turbo, I6 big single turbo + anti-lag, V6
+  centrifugal supercharger.
 
-- **Kendaraan & gearbox (tab Vehicle)**: mode berkendara di mana mobil (atau motor untuk mesin
-  1–2 silinder kecil) menjadi beban mesin. Transmisi *manual* (kopling diinjak sendiri — lepas
-  mendadak saat idle = mesin mati, ganti gigi tanpa kopling = hentakan), *manual dengan kopling
-  otomatis*, atau *otomatis* (titik pindah gigi naik dengan bukaan gas, kickdown). Atur 1–8 gigi dan
-  rasionya, final drive, kapasitas kopling, massa, Cd×A, rolling resistance, radius & grip ban, bobot
-  di roda penggerak, tanjakan jalan. Ada speedometer, indikator gigi, lampu clutch slip / wheelspin,
-  dan pencatat 0–100 km/h serta 1/4 mil otomatis.
+- **Vehicle & gearbox (Vehicle tab)**: a driving mode in which a car (or a motorcycle for small 1–2 cylinder
+  engines) is the engine's load. Transmission: *manual* (you work the clutch — dropping it at idle stalls the
+  engine, shifting without the clutch = a jolt), *manual with automatic clutch*, or *automatic* (shift points rise
+  with throttle, kickdown). Set 1–8 gears and their ratios, final drive, clutch capacity, mass, Cd×A, rolling
+  resistance, tyre radius & grip, weight on the driven wheels, road gradient. Includes a speedometer, gear
+  indicator, clutch slip / wheelspin lamps, and automatic 0–100 km/h and 1/4 mile timers.
 
-- **Scope**: selain tekanan silinder, P-V, per-silinder, dan suara, ada tab **Boost** (grafik 20 detik
-  boost/MAP, target wastegate, putaran turbo/blower, bukaan gas, wastegate, AFR) dan tab **Fuel map**
-  (heatmap rpm × MAP gaya software tuning ECU: tabel VE yang dipelajari ECU, target AFR, serta AFR,
-  injector duty dan timing pengapian terukur yang terisi saat mesin melewati sel itu; ada titik operasi
-  dan jejaknya).
+- **Scope**: besides cylinder pressure, P-V, per-cylinder and sound, there is a **Boost** tab (20-second graph of
+  boost/MAP, wastegate target, turbo/blower speed, throttle, wastegate, AFR) and a **Fuel map** tab (rpm × MAP
+  heatmap in the style of ECU tuning software: the VE table learned by the ECU, target AFR, plus measured AFR,
+  injector duty and ignition timing filled in as the engine passes through each cell; with operating point
+  and trail).
 
-Perubahan panjang/diameter pipa "meluncur" halus; perubahan topologi (jumlah silinder/rotor, tipe
-mesin, tipe header, muffler, dsb.) membangun ulang mesin dengan crossfade suara ~60 ms tanpa
-mematikan mesin.
+Changes to pipe length/diameter "glide" smoothly; topology changes (number of cylinders/rotors, engine type,
+header type, muffler, etc.) rebuild the engine with a ~60 ms sound crossfade without stopping the engine.
 
-## Model fisika (ringkas)
+## Physics model (summary)
 
-- Tiap silinder = volume kontrol (massa, energi, fraksi bahan bakar & gas buang), kinematika
-  slider-crank, aliran katup orifice kompresibel, pembakaran **Wiebe** dengan durasi tergantung
-  rpm/λ/residual + variasi siklus-ke-siklus, misfire, perpindahan panas Woschni, indeks knock.
-- Intake & exhaust = **jaringan waveguide digital** (delay line dua arah, rugi frekuensi,
-  junction hamburan N-arah, ujung terbuka yang meradiasikan suara). Suara knalpot = turunan aliran
-  volume di ujung tailpipe (monopol), jadi firing order, bank, panjang header, dan muffler langsung
-  mengubah suara.
-- Gas di tiap pipa punya suhu sendiri (primary paling panas, makin dingin ke tailpipe) yang mengikuti
-  EGT: kecepatan suara dan impedansi ikut berubah, jadi resonansi bergeser dengan beban. Gelombang
-  amplitudo besar bisa dibuat menajam (opsional, waktu tempuh ~ 1 − k·p, digeser pelan supaya tidak
-  berdengung).
-- Bunyi struktur: mode resonansi bak oli, blok, dan kepala silinder (frekuensi ikut ukuran bore) digetarkan
-  kenaikan tekanan pembakaran, letupan, dan dudukan katup. Kabin: low-pass Butterworth orde 4 (~800 Hz)
-  dan dengung mode kabin di 85 Hz / 176 Hz. Ide-ide ini terinspirasi dari ICEsim (Agent00PED, MIT).
-- Crank: inersia, friksi FMEP, starter, idle air control + dashpot (EFI), DFCO, afterfire/letupan.
-- Dyno: absorber PI (hold rpm) atau sweep WOT yang merekam kurva torsi & tenaga (bisa dibandingkan
-  antar run).
+- Each cylinder = a control volume (mass, energy, fuel & burned-gas fractions), slider-crank kinematics,
+  compressible orifice valve flow, **Wiebe** combustion with a duration depending on rpm/λ/residuals + cycle-to-cycle
+  variation, misfire, Woschni heat transfer, knock index.
+- Intake & exhaust = a **digital waveguide network** (bidirectional delay lines, frequency-dependent losses,
+  N-way scattering junctions, open ends that radiate sound). The exhaust sound = the derivative of volume flow
+  at the tailpipe exit (monopole), so firing order, banks, header length and muffler change the sound directly.
+- The gas in each pipe has its own temperature (primaries hottest, cooling towards the tailpipe) that follows
+  EGT: speed of sound and impedance change with it, so resonances shift with load. Large-amplitude waves can be
+  made to steepen (optional, travel time ~ 1 − k·p, shifted slowly so it does not buzz).
+- Structure-borne sound: resonance modes of the oil pan, block and cylinder head (frequencies scale with bore)
+  excited by combustion pressure rise, pops and valve seating. Cabin: 4th-order Butterworth low-pass (~800 Hz)
+  and cabin-mode boom at 85 Hz / 176 Hz. These ideas are inspired by ICEsim (Agent00PED, MIT).
+- Crank: inertia, FMEP friction, starter, idle air control + dashpot (EFI), DFCO, afterfire/pops.
+- Dyno: PI absorber (hold rpm) or WOT sweep recording torque & power curves (comparable between runs).
 
-### Model rotari
+### Rotary model
 
-Tiap rotor punya 3 ruang bakar; satu siklus 4 langkah per ruang = 1080° poros eksentrik, dengan
-volume `V = Vc + Vd/2·(1 − cos(2θ/3))` dan `Vd = 3√3·R·e·B`. Tiap rotor menyala sekali per putaran
-poros (rotor dipasang 360/N° terpisah). Port dibuka/ditutup oleh sisi rotor (bukan katup); ruang
-bakar yang panjang dan tipis membuat pembakaran lebih lambat dan kehilangan panas lebih besar; apex
-seal yang aus membocorkan gas ke ruang tetangga. Displacement ditulis gaya Mazda (13B = 1.3 L),
-tapi mesinnya "bernapas" seperti 2.6 L empat-tak.
+Each rotor has 3 chambers; one 4-stroke cycle per chamber = 1080° of eccentric shaft, with volume
+`V = Vc + Vd/2·(1 − cos(2θ/3))` and `Vd = 3√3·R·e·B`. Each rotor fires once per shaft revolution (rotors phased
+360/N° apart). Ports are opened/closed by the rotor flanks (no valves); the long, thin combustion chamber makes
+combustion slower and heat loss larger; worn apex seals leak gas into the neighbouring chamber. Displacement is
+quoted Mazda style (13B = 1.3 L), but the engine "breathes" like a 2.6 L four-stroke.
 
-### Model forced induction
+### Forced induction model
 
-- Kompresor sentrifugal (turbo & supercharger sentrifugal): peta sederhana per garis kecepatan
-  (PR turun dari batas surge ke choke), efisiensi tergantung titik operasi, suhu keluar dari kompresi
-  adiabatik lalu intercooler. Aliran membalik saat surge.
-- Turbin: orifice antara node manifold buang dan downpipe, daya dari ekspansi gas panas (EGT);
-  poros turbo diintegrasikan (daya turbin − daya kompresor) / inersia → turbo lag alami.
-- Roots / twin-screw: pompa volume tetap per putaran dikurangi kebocoran, digerakkan crank (beban torsi).
-- ECU: pengayaan AFR dan pengurangan timing sesuai boost; knock makin mudah pada tekanan tinggi.
+- Centrifugal compressor (turbo & centrifugal supercharger): a simple map per speed line (PR falling from the
+  surge limit to choke), efficiency depending on the operating point, outlet temperature from adiabatic
+  compression then the intercooler. Flow reverses during surge.
+- Turbine: an orifice between the exhaust manifold node and the downpipe, power from the expansion of hot gas
+  (EGT); the turbo shaft is integrated as (turbine power − compressor power) / inertia → natural turbo lag.
+- Roots / twin-screw: a fixed volume pump per revolution minus leakage, driven by the crank (torque load).
+- ECU: AFR enrichment and timing reduction with boost; knock becomes easier at high pressure.
 
-### Model kendaraan
+### Vehicle model
 
-Kopling = elemen gesek dengan status *lengket* (pegas torsi + redaman, jadi ada hentakan driveline)
-dan *slip* (torsi = kapasitas × bukaan). Gearbox mengalikan putaran roda ke poros input; roda
-penggerak punya inersia sendiri dan ban memakai kurva slip mirip Pacejka (puncak ~18 % slip,
-~75 % grip saat spin), jadi wheelspin muncul alami. Bodi mobil: massa, rolling resistance, drag
-aerodinamis ½ρCdAv², tanjakan, rem. Torsi kopling dikembalikan ke crank (bisa juga mendorong
-mesin: engine braking, dorong-start).
+The clutch = a friction element with a *locked* state (torsional spring + damping, so there is driveline shunt)
+and a *slipping* state (torque = capacity × engagement). The gearbox multiplies wheel speed to the input shaft;
+the driven wheels have their own inertia and the tyres use a Pacejka-like slip curve (peak at ~18 % slip,
+~75 % grip when spinning), so wheelspin happens naturally. Car body: mass, rolling resistance, aerodynamic drag
+½ρCdAv², gradient, brakes. Clutch torque is fed back to the crank (it can also drive the engine: engine braking,
+push starts).
 
-## Alat uji headless
+## License
+
+MIT — see [LICENSE](LICENSE). Third-party libraries fetched at build time keep their own licenses
+(Dear ImGui, ImPlot, ImPlot3D: MIT; miniaudio: public domain / MIT-0).
+
+## Headless test tools
 
 ```bash
-build/Release/sim_tests.exe          # sanity: massa, torsi WOT (I4/V8/single), idle
+build/Release/sim_tests.exe          # sanity: masses, WOT torque (I4/V8/single), idle
 ```
 
 ```bash
-build/Release/sim_tests.exe survey   # semua preset: start, idle, blip, kembali idle
+build/Release/sim_tests.exe survey   # all presets: start, idle, blip, return to idle
 ```
 
 ```bash
-build/Release/sim_tests.exe fuzz 120 # ubah parameter acak live (termasuk piston<->rotari), cek NaN
+build/Release/sim_tests.exe fuzz 120 # random live parameter changes (incl. piston<->rotary), checks for NaN
 ```
 
 ```bash
-build/Release/sim_tests.exe 12       # tabel torsi WOT untuk preset 12 (13B)
+build/Release/sim_tests.exe 12       # WOT torque table for preset 12 (13B)
 ```
 
 ```bash
-build/Release/ecu_test.exe          # sensor (lag, ADC, fault), fallback ECU, closed loop, termal, pompa bensin, laju ECU
+build/Release/ecu_test.exe          # sensors (lag, ADC, faults), ECU fallbacks, closed loop, thermal, fuel pump, ECU rate
 ```
 
 ```bash
-build/Release/cal_test.exe          # file kalibrasi: JSON round trip semua preset, validasi, diff, riwayat versi
+build/Release/cal_test.exe          # calibration files: JSON round trip for all presets, validation, diff, version history
 ```
 
 ```bash
-build/Release/parts_test.exe        # efek fisik tiap komponen (valve float, friksi, coil, busi, DBW, dead time, kerusakan, oli)
+build/Release/parts_test.exe        # physical effect of each component (valve float, friction, coil, plugs, DBW, dead time, damage, oil)
 ```
 
 ```bash
-build/Release/sim_tests.exe parts    # karakteristik part default per preset (rpm aman, valve float, energi percikan)
+build/Release/sim_tests.exe parts    # default part characteristics per preset (safe rpm, valve float, spark energy)
 ```
 
 ```bash
-build/Release/drive_test.exe 0       # berkendara: otomatis, manual+auto clutch, manual, clutch dump
+build/Release/drive_test.exe 0       # driving: automatic, manual + auto clutch, manual, clutch dump
 ```
 
 ```bash
-build/Release/silence_probe.exe      # semua preset harus senyap saat mesin mati (cek dengung palsu)
+build/Release/silence_probe.exe      # every preset must be silent with the engine off (checks for false hum)
 ```
 
 ```bash
-build/Release/render_wav.exe 12 13b.wav   # render siklus berkendara preset ke WAV
+build/Release/render_wav.exe 12 13b.wav   # render a preset's driving cycle to WAV
 ```
 
 ```bash
-python tools/analyze_wav.py 13b.wav 2.6 3.4 900   # level + puncak spektrum (engine order)
+python tools/analyze_wav.py 13b.wav 2.6 3.4 900   # level + spectral peaks (engine orders)
 ```
