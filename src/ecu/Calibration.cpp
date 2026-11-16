@@ -140,7 +140,7 @@ void generateCalibration(EngineParams& p) {
         for (int i = 0; i < 7; ++i) if (std::fabs(x - xs[i]) < 1e-6) return v[i];
         return 0.0; }, p);
     c.accelDecay = 0.3f; c.accelColdMult = 1.5f;
-    c.dfcoExitEnrich = 60.0f; c.dfcoExitDecay = 0.35f;
+    c.dfcoExitEnrich = 60.0f; c.dfcoExitDecay = 1.0f;   // long: after a cut the exhaust is full of air and low-load reversion pulls it back in
     c.asyncTipIn = 1;
     setCurve(c.iatFuel, {-20, 0, 20, 40, 60, 80}, [](double, const EngineParams&) { return 0.0; }, p);
     setCurve(c.iatSpark, {-20, 0, 20, 40, 50, 60, 70, 80}, [](double x, const EngineParams&) { return x <= 40 ? 0.0 : -(x - 40.0) / 10.0; }, p);

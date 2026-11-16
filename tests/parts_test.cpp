@@ -45,24 +45,29 @@ int main() {
     }
     // ---- stiffer springs and high-tension rings cost friction (lower WOT torque at mid rpm)
     {
-        // coast-down: rev to ~4500, switch the ignition off, see how far the speed falls in 0.4 s
-        std::printf("[friction] I4 coast-down from ~4500 rpm, ignition off\n");
+        // coast-down: rev past 4500, switch the ignition off, time the fall from 4400 to 3000 rpm (a fixed band,
+        // so both engines are compared over the same speeds whatever rpm they had when the ignition went off)
+        std::printf("[friction] I4 coast-down 4400 -> 3000 rpm, ignition off\n");
         auto coast = [](EngineParams p) {
             p.ignition = 1; p.starter = 1;
             Simulator sim(p); run(sim, 1.5); p.starter = 0; p.throttle = 0.35f; sim.setParams(p);
             Telemetry t;
             for (int k = 0; k < 400; ++k) { run(sim, 0.01); sim.getTelemetry(t); if (t.rpm > 4500) break; }
             p.ignition = 0; p.throttle = 0; sim.setParams(p);
-            float r0 = t.rpm;
-            run(sim, 0.4); sim.getTelemetry(t);
-            return r0 - t.rpm;
+            double t1 = -1, t2 = -1;
+            for (double tt = 0; tt < 3.0 && t2 < 0; tt += 0.002) {
+                run(sim, 0.002); sim.getTelemetry(t);
+                if (t1 < 0 && t.rpm < 4400) t1 = tt;
+                if (t1 >= 0 && t.rpm < 3000) t2 = tt;
+            }
+            return (float)(t2 - t1);
         };
         EngineParams p = makeCalibratedPreset(0);
         float a = coast(p);
         EngineParams h = p; h.comp.springOpen_N *= 2.0f; h.comp.springSeat_N *= 2.0f; h.comp.ringTension = 1.6f; h.comp.oilPumpCapacity = 1.6f;
         float b = coast(h);
-        std::printf("  rpm lost in 0.4 s: default %.0f, heavy springs + rings + oil pump %.0f\n", a, b);
-        CHECK(b > a * 1.05, "extra friction slows the engine down faster");
+        std::printf("  4400 -> 3000 rpm takes: default %.3f s, heavy springs + rings + oil pump %.3f s\n", a, b);
+        CHECK(a > 0 && b > 0 && b < a * 0.95, "extra friction slows the engine down faster");
     }
     // ---- ignition: a distributor coil with a slow charge can't fire a V8 at high rpm and boost-like pressure
     {

@@ -23,7 +23,8 @@ public:
     double wheelOmega = 0;        // driven wheels rad/s
     double inputOmega = 0;        // gearbox input shaft rad/s
     double engagement = 0;        // clutch 0..1
-    double clutchTorque = 0;
+    double clutchTorque = 0;      // instantaneous (carries every firing pulse)
+    double clutchTorqueAvg = 0;   // averaged over the last engine cycle (what a chassis dyno would show)
     double slip = 0;              // tyre slip ratio
     double driveForce = 0;
     double distance = 0;
@@ -38,6 +39,9 @@ private:
     double ratio(const EngineParams& p, int g) const;
 
     double twist_ = 0;
+    // cycle-average of the clutch torque: one bin per crank degree over 720 / 1080 deg
+    double avgBins_[1080] = {}, avgSum_ = 0, avgPhase_ = 0, avgSeen_ = 0;
+    int avgBin_ = 0;
     double shiftTimer_ = 0, sinceShift_ = 10;
     int pendingGear_ = 0, lastRequest_ = -99;
     double autoEng_ = 0;

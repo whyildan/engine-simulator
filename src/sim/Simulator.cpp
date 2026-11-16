@@ -233,7 +233,7 @@ void Simulator::render(float* out, int frames) {
     t.clutchTq = (float)vehicle_.clutchTorque; t.wheelSlip = (float)vehicle_.slip; t.distance = (float)vehicle_.distance;
     t.t100 = (float)vehicle_.t100; t.tQuarter = (float)vehicle_.tQuarter; t.vQuarter = (float)vehicle_.vQuarter;
     t.runTime = (float)vehicle_.runTime; t.clutchLocked = vehicle_.clutchLocked; t.shifting = vehicle_.shifting;
-    if (t.vehicle) { t.torque = (float)vehicle_.clutchTorque; t.powerKw = (float)(vehicle_.clutchTorque * e.omega() / 1000.0); }
+    if (t.vehicle) { t.torque = (float)vehicle_.clutchTorqueAvg; t.powerKw = (float)(vehicle_.clutchTorqueAvg * e.omega() / 1000.0); }
     t.surging = e.boost.surging; t.bovOpen = e.boost.bovOpen; t.antiLag = e.antiLagActive;
     for (int i = 0; i < e.cylinders(); ++i) {
         t.cylImep[i] = (float)(e.cyl(i).imep * 1e-5);

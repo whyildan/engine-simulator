@@ -139,3 +139,9 @@ target_link_libraries(map_dump PRIVATE enginesim_core)
 
 add_executable(cal_test tests/cal_test.cpp)
 target_link_libraries(cal_test PRIVATE enginesim_core)
+
+add_executable(driveline_probe tests/driveline_probe.cpp)
+target_link_libraries(driveline_probe PRIVATE enginesim_core)
+
+add_executable(ve_settle tests/ve_settle.cpp)
+target_link_libraries(ve_settle PRIVATE enginesim_core)

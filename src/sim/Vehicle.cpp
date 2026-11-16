@@ -12,6 +12,8 @@ static constexpr double kWheelJ = 0.9;       // driven wheels + axles
 void Vehicle::reset() {
     gear = 0; v = 0; wheelOmega = 0; inputOmega = 0; engagement = 0; clutchTorque = 0;
     slip = 0; driveForce = 0; distance = 0; clutchLocked = false; twist_ = 0;
+    clutchTorqueAvg = 0; avgSum_ = avgPhase_ = avgSeen_ = 0; avgBin_ = 0;
+    for (double& b : avgBins_) b = 0;
     shiftTimer_ = 0; sinceShift_ = 10; pendingGear_ = 0; lastRequest_ = -99; autoEng_ = 0;
     runTime = t100 = tQuarter = vQuarter = 0; timing = false;
 }
@@ -100,6 +102,21 @@ double Vehicle::step(double dt, double we, const EngineParams& p, double& pedal)
     }
     if (cap <= 1.0) { clutchLocked = false; T = 0; }
     clutchTorque = T;
+    {   // boxcar over exactly one working cycle (crank angle based, like the engine's own torque average)
+        const int nb = isRotary(p) ? 1080 : 720;
+        const double dDeg = we * dt * 180.0 / kPi;
+        avgPhase_ = std::fmod(avgPhase_ + dDeg, (double)nb);
+        const int bin = clampv((int)avgPhase_, 0, nb - 1);
+        if (bin != avgBin_) {
+            int b = avgBin_ % nb;
+            while (b != bin) { b = (b + 1) % nb; avgSum_ -= avgBins_[b]; avgBins_[b] = 0; }
+            avgBin_ = bin;
+        }
+        avgBins_[bin] += T * dDeg; avgSum_ += T * dDeg;
+        avgSeen_ = std::min((double)nb, avgSeen_ + dDeg);
+        const double tau = 0.05;   // nearly stopped engine: plain smoothing instead
+        clutchTorqueAvg = rpm > 200 && avgSeen_ > 1 ? avgSum_ / avgSeen_ : clutchTorqueAvg + (T - clutchTorqueAvg) * std::min(1.0, dt / tau);
+    }
 
     // ---------------------------------------------------------------- driven wheels & tyre
     const double N = m * kG * clampv((double)p.driveFrac, 0.2, 1.0);

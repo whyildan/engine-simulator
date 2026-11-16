@@ -39,6 +39,7 @@ public:
 
     ActuatorCommands cmd;
     bool holdIac = false;         // calibration run: idle valve held at its nominal opening
+    double veOverride = 0;        // calibration run: VE % used instead of the speed density table (0 = off)
     static constexpr double kIacNominal = 0.35;
     const Calibration& cal() const { return cal_; }
     int learnSeq = 0;            // bumps whenever auto-tune changed a VE table
@@ -66,7 +67,8 @@ private:
     // transients
     double prevTps_ = 0, tpsRate_ = 0, prevMap_ = 101.3, mapRate_ = 0, aeNow_ = 0, sinceCut_ = 100;
     bool wasCut_ = false;
-    double cutStart_ = 0, cutLen_ = 0;
+    bool dfcoArmed_ = true;      // decel cut allowed (re-armed by opening the throttle after a cut ended)
+    double portDry_ = 0;         // 0..1: how dry the port walls are after decel fuel cut (drives the exit enrichment)
     bool fuelling_ = false;
     // auto-tune history (what was commanded, matched to the wideband after the transport delay)
     struct Hist { double t, rpm, map, tps, w, lam, trim; bool ok; };

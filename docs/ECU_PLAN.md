@@ -231,6 +231,18 @@ Tiap komponen dipilih dari katalog (plus opsi "custom") dan punya efek fisik yan
   hapus, import/export, catatan, restore revisi, compare (tabel per tabel + daftar setelan yang beda; juga
   dipakai tombol Diff di editor), lock semua peta, validasi (sumbu, rentang, sel loncat, cakupan rpm, injektor,
   trim). Import toleran: field yang tidak ada mempertahankan nilai sekarang. Tes: `cal_test`.
+- Perbaikan setelah Fase 2:
+  - jitter waktu mulai bakar kadang "membungkus" ke 720° sehingga bahan bakar terbakar seketika saat spark
+    (torsi per siklus naik-turun ±24 Nm, tenaga hilang ~10%); sekarang sudut bakar dihitung bertanda;
+  - base map: VE tiap titik diiterasi (ECU memakai nilai hasil ukur lewat `Ecu::veOverride`) sampai campuran
+    kena target, dan tiap titik ditunggu sampai MAP, udara terperangkap, dan λ stabil. Titik gas tertutup yang
+    tidak menyala tidak dipakai. Sebelumnya VE di rpm rendah gas penuh terukur ~20% terlalu rendah. Mode MAF
+    tidak dipakai karena pada mesin overlap besar banyak udara terukur yang lolos langsung ke knalpot;
+  - DFCO hanya sekali per deselerasi (aktif lagi setelah gas dibuka) dan pengayaan keluar-DFCO mengikuti
+    "kekeringan" dinding port yang kontinu (meluruh 1 s): setelah potong bahan bakar knalpot berisi udara yang
+    tersedot balik di beban rendah;
+  - pengayaan dari laju kenaikan MAP saat gas tertutup (katup idle membuka menangkap rpm yang jatuh);
+  - di mode berkendara, torsi di grafik dyno = torsi kopling dirata-rata per siklus.
 - Diketahui: start dingin (20 °C / −10 °C) pada beberapa preset boost dan 26B masih bisa mati saat kembali dari
   blip; bisa dituning lewat tabel enrichment (akselerasi dingin, keluar DFCO, warm-up).
 

@@ -58,8 +58,16 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
         double ae = curveLookup(cal_.accel, tpsRate_) * 0.01 * (1.0 + (cal_.accelColdMult - 1.0) * cold);
         aeNow_ = std::max(aeNow_, ae);
     }
+    // MAP-rate enrichment: catches air increases the throttle does not show (idle valve opening to catch a
+    // falling idle, a dashpot) - the MAP sensor lags the port, so speed density alone runs lean there
+    if (mapRate_ > 20.0 && s.value[kSnsCKP] > 400.0 && tpsPct < 2.0)
+        aeNow_ = std::max(aeNow_, std::min(0.4, 0.004 * (mapRate_ - 20.0)) * (1.0 + (cal_.accelColdMult - 1.0) * cold));
     accel = aeNow_;
     sinceCut_ += dt;
+    // port wall dryness: builds up during a fuel cut (dry after ~0.6 s), recovers once fuel flows again;
+    // repeated short cuts add up instead of each starting from wet walls
+    if (wasCut_) portDry_ = std::min(1.0, portDry_ + dt / 0.6);
+    else portDry_ *= std::exp(-dt / std::max(0.02, (double)cal_.dfcoExitDecay));
 
     // ---- rev limiter
     if (rpm > p_.revLimit) limiterOn_ = true;
@@ -193,7 +201,7 @@ void Ecu::autoTuneStep(double dt, const SensorReadings& s) {
 double Ecu::airEstimate(const SensorReadings& s, double rpm, double tpsPct) {
     const double mapPa = mapUsed * 1000.0;
     const double airT = s.value[kSnsIAT] + 273.15 + 15.0;
-    const double airSD = tableLookup(cal_.veMap, rpm, mapUsed) * 0.01 * mapPa * vdCyl_ / (kRgas * airT);
+    const double airSD = (veOverride > 0 ? veOverride : tableLookup(cal_.veMap, rpm, mapUsed)) * 0.01 * mapPa * vdCyl_ / (kRgas * airT);
     const double airAN = tableLookup(cal_.veTps, rpm, tpsPct) * 0.01 * 101325.0 * vdCyl_ / (kRgas * airT);
     const LoadMode mode = s.fallback[kSnsMAP] && cal_.loadMode != LoadMode::Maf ? LoadMode::AlphaN : cal_.loadMode;
     switch (mode) {
@@ -226,13 +234,20 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     const double cold = coldFactor(s);
     // deceleration fuel cut-off; resume early when the revs are dropping fast (anticipate ~0.3 s)
     double resume = std::max(1600.0, p_.idleTargetRpm + 1000.0) + 0.3 * std::max(0.0, -rpmRate_);
-    bool dfco = tpsPct < 1.0 && rpm > resume;
-    if (cmd.fuelCut || dfco) { targetAfr = 0; injDuty = 0; fuelling_ = false; evapAcc_[port] = 0; if (!wasCut_) cutStart_ = time_; wasCut_ = true; return 0; }   // film evaporated into the cut cycles
-    if (wasCut_) { wasCut_ = false; sinceCut_ = 0; cutLen_ = time_ - cutStart_; }
+    // one cut per deceleration: once fuel is back it stays on until the throttle has been opened again (the resume
+    // point moves with the decel rate, which itself drops as soon as the engine fires - otherwise the cut chatters)
+    if (tpsPct > 2.0) dfcoArmed_ = true;
+    bool dfco = tpsPct < 1.0 && rpm > resume && (wasCut_ || dfcoArmed_);
+    if (cmd.fuelCut || dfco) {
+        targetAfr = 0; injDuty = 0; fuelling_ = false; evapAcc_[port] = 0;   // film evaporated into the cut cycles
+        wasCut_ = true;
+        return 0;
+    }
+    if (wasCut_) { wasCut_ = false; sinceCut_ = 0; dfcoArmed_ = false; }
     fuelling_ = true;
     // ---- air per cylinder event from the load model
     const double airT = s.value[kSnsIAT] + 273.15 + 15.0;                // port air a bit warmer than the inlet
-    const double airSD = tableLookup(cal_.veMap, rpm, mapUsed) * 0.01 * mapPa * vdCyl_ / (kRgas * airT);
+    const double airSD = (veOverride > 0 ? veOverride : tableLookup(cal_.veMap, rpm, mapUsed)) * 0.01 * mapPa * vdCyl_ / (kRgas * airT);
     const double airAN = tableLookup(cal_.veTps, rpm, tpsPct) * 0.01 * 101325.0 * vdCyl_ / (kRgas * airT);
     double air;
     // a failed MAP sensor: limp home on the throttle-angle (alpha-N) map
@@ -251,7 +266,7 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
         veUsed = air * kRgas * airT / std::max(1.0, mapPa * vdCyl_) * 100.0;
         break;
     }
-    case LoadMode::SpeedDensity: default: air = airSD; veUsed = tableLookup(cal_.veMap, rpm, mapUsed); break;
+    case LoadMode::SpeedDensity: default: air = airSD; veUsed = veOverride > 0 ? veOverride : tableLookup(cal_.veMap, rpm, mapUsed); break;
     }
     airPerCyl = air * 1000.0;
     lastInjT_[port] = time_; lastAir_[port] = air;
@@ -269,7 +284,7 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     // ---- enrichments and corrections
     warmup = cranking ? 0.0 : curveLookup(cal_.warmup, s.value[kSnsECT]) * 0.01;   // cranking AFR already covers it
     // the longer the cut, the drier the port walls: full enrichment after ~0.6 s of cut
-    const double dfcoExit = cal_.dfcoExitEnrich * 0.01 * (1.0 + (cal_.accelColdMult - 1.0) * cold) * smoothstep(0.1, 0.6, cutLen_) * std::exp(-sinceCut_ / std::max(0.02, (double)cal_.dfcoExitDecay));
+    const double dfcoExit = cal_.dfcoExitEnrich * 0.01 * (1.0 + (cal_.accelColdMult - 1.0) * cold) * portDry_;
     fuel *= (1.0 + warmup) * (1.0 + (cranking ? 0.0 : aeNow_ + dfcoExit)) * (1.0 + curveLookup(cal_.iatFuel, s.value[kSnsIAT]) * 0.01) *
             (1.0 + cal_.cylFuel[clampv(port, 0, kCalMaxCyl - 1)] * 0.01);
     if (p_.injection == Injection::Port) {

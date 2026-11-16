@@ -367,9 +367,12 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
         }
     }
     if (c.burning) {
-        double d = wrapPos(phi - c.burnStart, cycle_);
+        // signed angle since the start of the burn: the cycle-to-cycle jitter can put the start a
+        // fraction of a degree after the spark step - that is "not yet", not "720 deg ago"
+        double d = wrapSym(phi - c.burnStart, cycle_);
         double x;
-        if (d >= c.burnDur || d > cycle_ * 0.5) {
+        if (d < 0 && d > -10.0) x = 0.0;
+        else if (d < 0 || d >= c.burnDur) {   // (d < -10: a stale burn more than half a cycle old - finish it)
             x = 1.0; c.burning = false;
             c.burnEnded = true;
         }

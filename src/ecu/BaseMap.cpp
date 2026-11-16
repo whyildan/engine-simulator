@@ -13,7 +13,7 @@
 namespace es {
 
 namespace {
-struct Pt { double map, tps, ve, veAtm; };
+struct Pt { double map, tps, ve, veAtm; bool fired; };   // fired: mixture-corrected (wideband) value
 
 // piecewise-linear interpolation of y over sorted x (clamped at the ends)
 double interp(const std::vector<std::pair<double, double>>& xy, double x) {
@@ -34,6 +34,11 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
     EngineParams p = pIn;
     p.vehicle = 0; p.dynoMode = DynoMode::Off; p.ignition = 1; p.starter = 0; p.coldStart = 0;
     p.cal.autoTune = 0; p.cal.closedLoop = 0;
+    // speed density with the VE of the point under test set directly (Ecu::veOverride), iterated until the
+    // engine runs at the target mixture: measuring on a wrong VE would run it rich or lean, and the mixture
+    // changes the exhaust temperature, the wave tuning in the pipes and so the very air being measured.
+    // (MAF fuelling is no shortcut: on big-overlap engines much of the metered air blows straight through.)
+    p.cal.loadMode = LoadMode::SpeedDensity;
     defaultSensorConfig(p.sensors);
     const double ambT = p.ambientTemp_C + 273.15;
     const double ecuT = ambT + 15.0;                    // the ECU's charge temperature (IAT + 15 K)
@@ -56,15 +61,28 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
                 prog->fraction.store((float)(ri * nT + ti) / (nR * nT));
                 if (prog->cancel.load()) return false;
             }
+          double est = 0, ve = 0, map = 0, veAtm = 0;
+          bool fired = false;
+          for (int pass = 0; pass < 4; ++pass) {
+            e.ecu.veOverride = est * 100.0;            // 0 on the first pass: the generic table
             double sMap = 0, sVe = 0, sLam = 0, sVeEcu = 0, sTgt = 0; int n = 0, nl = 0;
-            // settle until the manifold pressure has stopped moving (plenums empty slowly at low rpm)
-            const int chunk = (int)(0.05 * fs);
-            double prevMap = -1;
-            for (double t = 0; t < 1.5; t += 0.05) {
-                for (int k = 0; k < chunk; ++k) { e.setCrank(omega, e.theta()); e.step(dt, thr[ti], 0.0); }
-                double m = e.intake.map();
-                if (t >= settle && prevMap > 0 && std::fabs(m - prevMap) < 250.0) break;   // < 0.25 kPa per 50 ms
-                prevMap = m;
+            // settle until the point is steady: manifold pressure (plenums empty slowly at low rpm), trapped air
+            // and mixture. After a big throttle step the port fuel film takes ~1 s to reach its new balance;
+            // until then the mixture is off, which changes the exhaust and so the air being measured.
+            const int chunk = (int)(0.1 * fs);
+            double prevMap = -1, prevVe = -1, prevLam = -1;
+            for (double t = 0; t < 3.0; t += 0.1) {
+                double cMap = 0, cVe = 0, cLam = 0;
+                for (int k = 0; k < chunk; ++k) {
+                    e.setCrank(omega, e.theta()); e.step(dt, thr[ti], 0.0);
+                    double v = 0, l = 0;
+                    for (int c = 0; c < e.cylinders(); ++c) { v += e.cyl(c).ve; l += std::min(3.0, e.cyl(c).lambda); }
+                    cMap += e.intake.map(); cVe += v / e.cylinders(); cLam += l / e.cylinders();
+                }
+                cMap /= chunk; cVe /= chunk; cLam /= chunk;
+                if (t >= settle && prevMap > 0 && std::fabs(cMap - prevMap) < 500.0 &&        // < 0.5 kPa per 0.1 s
+                    std::fabs(cVe - prevVe) < 0.004 + 0.004 * cVe && std::fabs(cLam - prevLam) < 0.008) break;
+                prevMap = cMap; prevVe = cVe; prevLam = cLam;
             }
             const int steps = (int)(window * fs);
             for (int k = 0; k < steps; ++k) {
@@ -79,20 +97,26 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
                     sLam += lam / e.cylinders(); sVeEcu += e.ecu.veUsed; sTgt += e.ecu.targetAfr / 14.7; ++nl;
                 }
             }
-            double map = sMap / n, veAtm = sVe / n;     // trapped air relative to an atmospheric cylinder
-            double ve = veAtm * (kPatm / map) * (ecuT / ambT);
+            map = sMap / n; veAtm = sVe / n;            // trapped air relative to an atmospheric cylinder
+            ve = veAtm * (kPatm / map) * (ecuT / ambT);
             // like a calibrator with a wideband: scale the VE the ECU used by measured / target lambda, so the
             // map also covers fuel effects (port wetting, reversion standoff); air-based value if not firing
+            fired = false;
             if (nl > n / 2) {
                 double lamM = sLam / nl, lamT = sTgt / nl, veE = sVeEcu / nl * 0.01;
                 if (lamM > 0.5 && lamM < 2.5 && lamT > 0.5) {
                     double veLam = veE * lamM / lamT;
-                    if (veLam > 0.3 * ve && veLam < 2.5 * ve) ve = veLam;
+                    if (veLam > 0.3 * ve && veLam < 2.5 * ve) { ve = veLam; fired = true; }
                 }
             }
+            if (std::getenv("BASEMAP_DBG")) std::fprintf(stderr, "basemap pass %d rpm %5.0f thr %.2f map %6.1f veAtm %6.3f ve %6.3f | iat %.1f egt %.0f lamM %.3f lamT %.3f veE %.3f nl %d\n", pass, rpms[ri], thr[ti], map / 1000.0, veAtm, ve, e.thermal.iatC, e.egtAvg, nl ? sLam / nl : 0.0, nl ? sTgt / nl : 0.0, nl ? sVeEcu / nl * 0.01 : 0.0, nl);
+            const bool converged = est > 0 && std::fabs(ve - est) < 0.015 * est;
+            est = ve;
+            if (converged || nl <= n / 2) break;       // not firing: the air-based value needs no iteration
+          }
+          e.ecu.veOverride = 0;
             veAtm = ve * map / kPatm / (ecuT / ambT);
-            pts[ri].push_back({map / 1000.0, thr[ti] * 100.0, ve * 100.0, veAtm * (ecuT / ambT) * 100.0});
-            if (std::getenv("BASEMAP_DBG")) std::fprintf(stderr, "basemap rpm %5.0f thr %.2f map %6.1f veAtm %6.3f ve %6.3f\n", rpms[ri], thr[ti], map / 1000.0, veAtm, ve);
+            pts[ri].push_back({map / 1000.0, thr[ti] * 100.0, ve * 100.0, veAtm * (ecuT / ambT) * 100.0, fired});
         }
     }
     // resample onto the table axes: rows by MAP (or TPS), columns by rpm
@@ -101,7 +125,13 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
         std::vector<std::vector<double>> col(nR, std::vector<double>(t.ny));
         for (int ri = 0; ri < nR; ++ri) {
             std::vector<std::pair<double, double>> xy;
-            for (const Pt& q : pts[ri]) xy.push_back({which == 0 ? q.map : q.tps, which == 0 ? q.ve : q.veAtm});
+            // points where the engine did not fire (closed throttle at high rpm: deep vacuum, no mixture to read)
+            // give only an air-based value that is unreliable at very low MAP - leave them out when the column has
+            // enough firing points, the table then holds the lowest firing value below it
+            int nFired = 0;
+            for (const Pt& q : pts[ri]) nFired += q.fired;
+            for (const Pt& q : pts[ri])
+                if (q.fired || nFired < 2) xy.push_back({which == 0 ? q.map : q.tps, which == 0 ? q.ve : q.veAtm});
             std::sort(xy.begin(), xy.end());
             // MAP is not monotonic in rare cases (boost lag): keep the first sample per MAP band
             std::vector<std::pair<double, double>> clean;
@@ -123,7 +153,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
 // ------------------------------------------------------------------ on-disk cache
 // Keyed by everything that defines the engine (driver inputs, sound, dyno, vehicle and the VE maps
 // themselves are left out). Bump kBaseMapVersion when the physics changes.
-static constexpr uint32_t kBaseMapVersion = 1;
+static constexpr uint32_t kBaseMapVersion = 6;   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points
 static std::string g_cacheDir;
 void setBaseMapCacheDir(const std::string& dir) { g_cacheDir = dir; }
 

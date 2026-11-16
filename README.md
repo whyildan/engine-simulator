@@ -5,6 +5,15 @@ An internal-combustion engine simulator with per-cylinder physics, sound **gener
 **live inside the application while the engine is running** (no config files). Both **piston** and
 **Wankel rotary** engines are supported.
 
+![Virtual dyno: WOT sweep of the I6 3.0 preset](docs/images/dyno.png)
+
+| | |
+|---|---|
+| ![VE map editor with 3D surface](docs/images/ve-map-3d.png) | ![Live dashboard with gauges and cylinder pressure scope](docs/images/dashboard.png) |
+| *Fuel Tuning — VE map editor with operating point and 3D surface* | *Live Dashboard — gauges, readouts, cylinder pressure scope* |
+| ![Engine setup with animated cylinders](docs/images/engine-setup.png) | |
+| *Engine Setup — geometry, firing order, animated engine view* | |
+
 ## Build (Windows, MSVC 2019 + CMake)
 
 If CMake is not on your PATH, use the one bundled with Visual Studio:

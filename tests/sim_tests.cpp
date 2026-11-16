@@ -235,7 +235,15 @@ static void survey() {
         else runSeconds(sim, 0.6);
         sim.getTelemetry(t);
         float blip = t.rpm;
-        p.throttle = 0; sim.setParams(p); runSeconds(sim, 4.0); sim.getTelemetry(t);
+        p.throttle = 0; sim.setParams(p);
+        if (std::getenv("RETTRACE"))   // return-to-idle after the blip
+            for (int k = 0; k < 80; ++k) {
+                runSeconds(sim, 0.05); sim.getTelemetry(t);
+                std::printf("  ret+%.2f rpm %5.0f map %5.1f tgt %5.2f duty %.3f lam %.2f %.2f mis %d iac %.2f ve %.1f\n", 0.05 * (k + 1), t.rpm,
+                            t.mapKPa, t.targetAfr, t.injDuty, t.cylLambda[0], t.cylLambda[1], t.misfires, t.iac, t.ecuVe);
+            }
+        else runSeconds(sim, 4.0);
+        sim.getTelemetry(t);
         std::printf("%-36s crank %.2fs idle %5.0f rpm map %5.1f afr %5.2f | blip %5.0f -> back %5.0f rpm afr %5.2f load %.2f %s\n",
             p.name, crank, idleRpm, idleMap, idleAfr, blip, t.rpm, t.afr, t.simLoad, (idleRpm < 450 || t.rpm < 450) ? "  <-- STALL" : "");
     }
