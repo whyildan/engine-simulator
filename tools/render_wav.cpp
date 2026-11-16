@@ -1,6 +1,8 @@
 // Headless renderer: runs a preset through a scripted drive cycle and writes a WAV file.
 // usage: render_wav <presetIndex|-1 for list> <out.wav> [seconds-scale]
 #include "sim/Simulator.h"
+#include "ecu/BaseMap.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,7 +32,10 @@ int main(int argc, char** argv) {
         return 0;
     }
     int idx = std::atoi(argv[1]);
-    EngineParams p = makePreset(idx);
+    // idle=SECONDS: start the engine (calibrated preset, like the app) and record only the warm idle
+    double idleSecs = 0;
+    for (int i = 3; i < argc; ++i) if (std::strncmp(argv[i], "idle=", 5) == 0) idleSecs = std::atof(argv[i] + 5);
+    EngineParams p = idleSecs > 0 ? makeCalibratedPreset(idx) : makePreset(idx);
     // key=value options (e.g. ir=0 rasp=1.2 imp=0) can follow the positional ones
     for (int i = 3; i < argc; ++i) {
         const char* eq = std::strchr(argv[i], '=');
@@ -47,6 +52,7 @@ int main(int argc, char** argv) {
         else if (k == "pmix") p.pressureMix = (float)v;
         else if (k == "smooth") p.smoothHz = (float)v;
         else if (k == "listener") p.listener = (ListenerPos)(int)v;
+        else if (k == "porting") { applyRotaryPorting(p, (int)v); }
         argv[i] = (char*)"";
     }
     if (argc > 3 && *argv[3]) p.listener = (ListenerPos)std::atoi(argv[3]);
@@ -62,6 +68,27 @@ int main(int argc, char** argv) {
     const int rate = Simulator::kOutRate;
     const int block = 480; // 10 ms
     std::vector<float> all, buf(block * 2);
+    if (idleSecs > 0) {
+        Telemetry tel;
+        p.ignition = 1; p.starter = 1; sim.setParams(p);
+        double caught = 0;
+        for (int k = 0; k < 600 && caught < 0.15; ++k) {
+            sim.render(buf.data(), block); sim.getTelemetry(tel);
+            caught = tel.running && tel.rpm > starterReleaseRpm(p, tel.snsValue[kSnsECT]) ? caught + 0.01 : 0.0;
+        }
+        p.starter = 0; sim.setParams(p);
+        for (int k = 0; k < 300; ++k) sim.render(buf.data(), block);   // 3 s to settle
+        double rmin = 1e9, rmax = 0;
+        for (double t = 0; t < idleSecs; t += 0.01) {
+            sim.render(buf.data(), block);
+            all.insert(all.end(), buf.begin(), buf.end());
+            sim.getTelemetry(tel);
+            rmin = std::min(rmin, (double)tel.rpm); rmax = std::max(rmax, (double)tel.rpm);
+        }
+        writeWav(argv[2], all, rate);
+        std::printf("wrote %s (%s idle, %.0f..%.0f rpm, misfires %d, afterfires %d)\n", argv[2], p.name, rmin, rmax, tel.misfires, tel.afterfires);
+        return 0;
+    }
 
     struct Step { double t; float throttle; int ign; int starter; };
     const Step script[] = {

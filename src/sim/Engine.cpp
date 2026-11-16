@@ -156,6 +156,11 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     t.v[kSnsCKP] = rpm;
     t.v[kSnsCMP] = 1.0;
     t.v[kSnsKnock] = knockMax;
+    for (int i = 0; i < (int)cyls_.size(); ++i) {
+        const int port = clampv(portOf_[i], 0, kMaxCyl - 1);
+        t.knockCyl[port] = std::max(t.knockCyl[port], cyls_[i].knock);
+        t.knockSeq[port] += cyls_[i].cycles;
+    }
     t.v[kSnsEGT] = egtAvg - 273.15;
     t.v[kSnsOilP] = oilBar;
     t.v[kSnsOilT] = thermal.oilC;
@@ -326,10 +331,11 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     }
 
     // ---- spark
-    const double sparkAt = wrapPos(-(advance_ + ecu.cylSpark(port)) + 0.5 * imp * sprCyl_[0][i], cycle_);
+    const double sparkAt = wrapPos(-(advance_ + ecu.cylSpark(port) - ecu.cmd.cylRetard[clampv(port, 0, kMaxCyl - 1)]) + 0.5 * imp * sprCyl_[0][i], cycle_);
     if (crossed(phiPrev, phi, sparkAt) && !c.burning) {
         c.knockCycle = 0;
-        if (spark) {
+        // soft limiter: the ECU drops a share of the sparks
+        if (spark && !(ecu.cmd.cutFraction > 0 && rng_.uniform() < ecu.cmd.cutFraction)) {
             double air = std::max(0.0, c.m - c.mf - c.mb);
             // only the vaporised fuel takes part (cold: part of it is still liquid on the walls)
             const double vapF = 1.0 - 0.25 * thermal.coldFactor();
@@ -348,13 +354,20 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             }
             pMis = std::max(pMis, clampv(fouling, 0.0, 1.0) * 0.6);   // fouled plug
             if (lam < 0.62) pMis = clampv((0.62 - lam) / 0.15, 0.0, 1.0);
+            // dilution: burned gas in the charge (residual, exhaust reverted through a big overlap) - past ~35 % the
+            // flame kernel starts to fail. A misfired charge leaves fresh mixture behind, so the next one fires
+            // harder: the lumpy idle of big-overlap engines (bridge / peripheral ported rotaries).
+            c.dilution = resid;
             if (resid > 0.35) pMis = std::max(pMis, clampv((resid - 0.35) / 0.25, 0.0, 1.0));
             if (c.mf < 1e-9) pMis = 1;
             if (rng_.uniform() < pMis) {
                 c.misfired = true; ++misfires;
+                c.burnEta = 0;
             } else {
                 c.misfired = false;
-                c.fuelBurn = std::min(c.mf * (1.0 - 0.25 * thermal.coldFactor()), air / kStoich);   // cold: poor vaporisation
+                const double full = std::min(c.mf * (1.0 - 0.25 * thermal.coldFactor()), air / kStoich);   // cold: poor vaporisation
+                c.burnEta = 1.0;
+                c.fuelBurn = full;
                 c.qTotal = c.fuelBurn * kLHV * 0.92 * (1.0 + 0.015 * imp * sprCyl_[1][i]); // efficiency spread
                 c.burnDur = burnDuration(c, rpm, lam) * (1.0 - 0.06 * clampv(((double)p_.comp.plugGap_mm - 0.8) / 0.3, -1.0, 1.5)) *
                             (1.0 + 0.03 * imp * sprCyl_[2][i]) *
@@ -387,6 +400,8 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             // fuel left over after a rich burn ends up as CO/HC products, not as fuel
             // for the next cycle (no rich run-away through the residual gas)
             c.burnEnded = false;
+            // fuel left over after a rich burn ends up as CO/HC products, not as fuel
+            // for the next cycle (no rich run-away through the residual gas)
             double left = std::max(0.0, c.mf + dmf);
             dmf -= left * 0.9;
             dmb += left * 0.9;
@@ -430,6 +445,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
         c.pmaxCycle = c.pmax;
         c.pmax = 0;
         c.knock = clampv((c.knockCycle - 940.0) / 110.0, 0.0, 5.0);
+        ++c.cycles;
         c.knockEvent = c.knock > 1.0;
         c.knockCycle = 0;
     }
@@ -458,6 +474,7 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     bool spark = p_.ignition && !cmd.sparkCut && !cmd.syncLost;
     advance_ = cmd.sparkAdvance;
     antiLagActive = cmd.antiLag;
+    if (cmd.throttleTarget >= 0) pedal = cmd.throttleTarget;   // drive-by-wire: the ECU positions the throttle
     pedal = std::max(pedal, cmd.throttleCrack);
 
     // ---- hardware components: valve float, spark energy, plug temperature, health
@@ -470,6 +487,7 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
 
     fireTimer_ += dt;
     running_ = rpm > 300 && fireTimer_ < 0.3;
+    boost.setWgDuty(ecu.cmd.wgDuty);
     double scTorque = isBoosted(p_) ? boost.step(dt, omega_, egtAvg, intake, exhaust) : 0.0;
     intake.stepAir(dt, pedal, rpm, p_.ignition && !fuelCut);
 

@@ -244,6 +244,7 @@ static const char* kNames[] = {
     "V6 3.5 centrifugal supercharger",
     "I5 2.5 EFI (five cylinder)",
     "Flat-6 3.6 EFI (boxer six)",
+    "Rotary 2-rotor 1.3L bridge port (brap idle)",
 };
 
 int presetCount() { return (int)(sizeof(kNames) / sizeof(kNames[0])); }
@@ -387,10 +388,13 @@ EngineParams makePreset(int idx) {
         applyLayoutDefaults(p);
         p.rotorRadius_mm = 105; p.eccentricity_mm = 15; p.rotorWidth_mm = 80; p.compression = 9.4f;
         p.flywheel = 0.15f; p.apexLeak = 0.05f;
+        // rotary sound: the rasp of the abrupt exhaust port opening matters more than the low pressure pulse -
+        // with the default (pressure-heavy) mix the lumpy idle of a ported rotary is buried under a steady rumble
+        p.pressureMix = 0.1f; p.exhaustPunch = 0.15f;
         p.baseAdvance = 5; p.mechAdvance = 20; p.mechAdvanceRpm = 5000; p.vacuumAdvance = 6;
         p.revLimit = 8500; p.limiter = Limiter::FuelCut; p.injectionAngle = 450;
         p.throttleBore_mm = 60; p.plenum_L = 3.0f; p.runnerLen_mm = 420; p.runnerDia_mm = 44;
-        p.injector_ccmin = 550; p.idleTargetRpm = 950;
+        p.injector_ccmin = 550; p.idleTargetRpm = 1000;
         p.header = HeaderType::Collector; p.primaryDia_mm = 50; p.collectorDia_mm = 60; p.pipeDia_mm = 60;
         for (int i = 0; i < kMaxCyl; ++i) p.primaryLen_mm[i] = 600;
         p.cat = 1; p.resonator = 1; p.muffler = Muffler::Chambered;
@@ -407,6 +411,7 @@ EngineParams makePreset(int idx) {
             p.cat = 0; p.resonator = 0; p.muffler = Muffler::None; p.primaryDia_mm = 55; p.collectorDia_mm = 90;
             p.pipeDia_mm = 90; p.midpipeLen_mm = 600; p.tailpipeLen_mm = 400; p.compression = 10.0f;
             p.limiter = Limiter::IgnitionCut; p.mechAdvanceRpm = 6500;
+            p.afrCruise = 12.5f;   // race peripheral port: heavy overlap + residual, it only idles cleanly rich
         } else if (idx == 15) {
             p.fuelSystem = FuelSystem::Carburetor; p.carbBarrels = 1; p.venturi_mm = 30; p.throttleBore_mm = 36;
             p.idleScrew = 4.5f; p.plenum_L = 0.6f; p.flywheel = 0.10f; p.cat = 0; p.resonator = 0;
@@ -438,8 +443,9 @@ EngineParams makePreset(int idx) {
         p = makePreset(12);
         applyInductionDefaults(p, Induction::Turbo);
         p.compFlow_gs = 300; p.turbineAR = 0.7f; p.turboInertia = 0.14f; p.wastegateBar = 0.9f;
-        p.compression = 9.0f; p.injector_ccmin = 1150; p.cat = 0; p.resonator = 0; p.muffler = Muffler::StraightThrough;
+        p.compression = 9.0f; p.injector_ccmin = 950; p.cat = 0; p.resonator = 0; p.muffler = Muffler::StraightThrough;
         p.pipeDia_mm = 76; p.revLimit = 8200; p.sweepEndRpm = 8000;
+        p.idleTargetRpm = 1100;   // big injectors + low compression: a little more idle margin
         break;
     case 19: // big single I6
         p = makePreset(2);
@@ -467,6 +473,20 @@ EngineParams makePreset(int idx) {
         p.primaryDia_mm = 42; p.collectorDia_mm = 57; p.pipeDia_mm = 60; p.crossover = Crossover::HPipe;
         p.revLimit = 7800; p.flywheel = 0.18f; p.throttleBore_mm = 76; p.plenum_L = 5.0f; p.injector_ccmin = 380; p.idleTargetRpm = 900;
         p.muffler = Muffler::StraightThrough;
+        break;
+    case 23: // bridge-ported 13B: a second intake port above the apex-seal path -> huge overlap. At idle the
+             // exhaust floods back into the intake, the diluted charges burn partly or not at all and the
+             // unburned charge pops in the hot exhaust: the lumpy "brap brap" idle
+        p = makePreset(12);
+        applyRotaryPorting(p, 2);
+        std::snprintf(p.name, sizeof(p.name), "%s", "Rotary 2-rotor 1.3L bridge port (brap idle)");
+        p.idleTargetRpm = 1450; p.afrCruise = 14.0f; p.injector_ccmin = 720; p.flywheel = 0.16f;
+        p.throttleBore_mm = 65; p.plenum_L = 3.0f; p.revLimit = 9000;
+        p.header = HeaderType::Collector; p.primaryDia_mm = 55; p.collectorDia_mm = 65; p.pipeDia_mm = 65;
+        for (int i = 0; i < kMaxCyl; ++i) p.primaryLen_mm[i] = 350;
+        p.cat = 0; p.resonator = 0; p.muffler = Muffler::StraightThrough;
+        p.limiter = Limiter::IgnitionCut;
+        p.sweepStartRpm = 2000; p.sweepEndRpm = p.revLimit - 200;
         break;
     case 20: // centrifugal supercharged V6
         p = makePreset(3);

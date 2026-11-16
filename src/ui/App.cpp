@@ -180,10 +180,18 @@ void App::frame(float dt) {
         if (std::memcmp(&p_.cal.veMap, &sent_.cal.veMap, sizeof(Table2D)) == 0) { p_.cal.veMap.v[0][0] = 0; std::memcpy(p_.cal.veMap.v, tel_.calVeMap.v, sizeof(tel_.calVeMap.v)); sent_.cal.veMap = p_.cal.veMap; }
         if (std::memcmp(&p_.cal.veTps, &sent_.cal.veTps, sizeof(Table2D)) == 0) { std::memcpy(p_.cal.veTps.v, tel_.calVeTps.v, sizeof(tel_.calVeTps.v)); sent_.cal.veTps = p_.cal.veTps; }
     }
+    // learned long-term fuel trims, the same way
+    if (tel_.ltftSeq != ltftSeen_ && tel_.calLtft.nx > 0) {
+        ltftSeen_ = tel_.ltftSeq;
+        if (std::memcmp(&p_.cal.ltft, &sent_.cal.ltft, sizeof(Table2D)) == 0 && tel_.calLtft.nx == p_.cal.ltft.nx && tel_.calLtft.ny == p_.cal.ltft.ny) {
+            std::memcpy(p_.cal.ltft.v, tel_.calLtft.v, sizeof(tel_.calLtft.v)); sent_.cal.ltft = p_.cal.ltft;
+        }
+    }
     pullDyno();
     recordScope(dt);
     recordOpTrail(dt);
     pollBaseMap();
+    baseMapFollowEngine(dt);
 
     // auto start: crank until the engine runs on its own
     if (autoStart_) {

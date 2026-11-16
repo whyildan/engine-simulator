@@ -158,12 +158,17 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         double aT = std::max(0.2f, p_.turbineAR) * 1.0e-3 * std::sqrt(std::max(0.3, equivalentDisplacementL(p_) / 2.0));
         // spring + diaphragm wastegate: proportional over ~0.3 bar with a damped actuator, plus a
         // slow integral trim (boost controller) so it settles on the target instead of hunting
-        wgTrim_ = clampv(wgTrim_ + (boostBar - p_.wastegateBar) * 0.8 * dt, -0.5, 0.8);
+        // ECU control: a solenoid bleeds the actuator line, so it only sees boost x (1 - 0.9 duty); the ECU's
+        // PID replaces the slow trim of the plain pneumatic controller
+        const bool ecuWg = wgDuty_ >= 0.0;
+        const double actBar = ecuWg ? boostBar * (1.0 - 0.9 * clampv(wgDuty_, 0.0, 1.0)) : boostBar;
+        if (ecuWg) wgTrim_ = 0;
+        else wgTrim_ = clampv(wgTrim_ + (boostBar - p_.wastegateBar) * 0.8 * dt, -0.5, 0.8);
         // rate term damps the turbo / wastegate loop (opens early while boost is still rising)
         double rate = (boostBar - prevBoost_) / dt;
         prevBoost_ = boostBar;
         boostRate_ += (rate - boostRate_) * std::min(1.0, dt / 0.03);
-        double wgTarget = clampv((boostBar - p_.wastegateBar + 0.08) / 0.3 + wgTrim_ + 0.12 * boostRate_, 0.0, 1.0);
+        double wgTarget = clampv((actBar - p_.wastegateBar + 0.08) / 0.3 + wgTrim_ + 0.12 * boostRate_ * (ecuWg ? 0.0 : 1.0), 0.0, 1.0);
         wgPos_ += (wgTarget - wgPos_) * std::min(1.0, dt / 0.12);
         wastegate = wgPos_;
         double aWg = wgPos_ * aT * 1.3;

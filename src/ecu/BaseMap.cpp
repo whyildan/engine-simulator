@@ -7,6 +7,7 @@
 #include <string>
 #include <cstdint>
 #include <cstring>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 
@@ -34,6 +35,12 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
     EngineParams p = pIn;
     p.vehicle = 0; p.dynoMode = DynoMode::Off; p.ignition = 1; p.starter = 0; p.coldStart = 0;
     p.cal.autoTune = 0; p.cal.closedLoop = 0;
+    // the calibration rig measures the bare engine: no knock retard, trims, soft limiter or protection actions
+    p.cal.knockControl = 0; p.cal.ltftLearn = 0; p.cal.softLimitBand = 0;
+    // ... and no transient fuel: sensor noise would trigger acceleration enrichment at the steady test points
+    for (int i = 0; i < p.cal.accel.n; ++i) p.cal.accel.v[i] = 0;
+    p.cal.dfcoExitEnrich = 0; p.cal.asyncTipIn = 0;
+    for (ProtRule& r : p.cal.prot) r.enabled = 0;
     // speed density with the VE of the point under test set directly (Ecu::veOverride), iterated until the
     // engine runs at the target mixture: measuring on a wrong VE would run it rich or lean, and the mixture
     // changes the exhaust temperature, the wave tuning in the pipes and so the very air being measured.
@@ -153,10 +160,12 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
 // ------------------------------------------------------------------ on-disk cache
 // Keyed by everything that defines the engine (driver inputs, sound, dyno, vehicle and the VE maps
 // themselves are left out). Bump kBaseMapVersion when the physics changes.
-static constexpr uint32_t kBaseMapVersion = 6;   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points
+static constexpr uint32_t kBaseMapVersion = 8;   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
 static std::string g_cacheDir;
 void setBaseMapCacheDir(const std::string& dir) { g_cacheDir = dir; }
 
+static uint64_t engineKey(const EngineParams& in);
+uint64_t baseMapKey(const EngineParams& p) { return engineKey(p); }
 static uint64_t engineKey(const EngineParams& in) {
     EngineParams p = in;
     std::memset(p.name, 0, sizeof(p.name));
@@ -169,6 +178,8 @@ static uint64_t engineKey(const EngineParams& in) {
     p.coldStart = 0;
     std::memset(&p.cal.veMap.v, 0, sizeof(p.cal.veMap.v)); std::memset(&p.cal.veTps.v, 0, sizeof(p.cal.veTps.v));
     p.cal.veMap.locked = p.cal.veTps.locked = 0; p.cal.autoTune = 0; p.cal.closedLoop = 0;
+    // Phase 3 control settings (trims, knock, idle, boost control, protection) do not change the measured air
+    std::memset(reinterpret_cast<char*>(&p.cal) + offsetof(Calibration, stftGain), 0, sizeof(Calibration) - offsetof(Calibration, stftGain));
     uint64_t h = 1469598103934665603ull ^ kBaseMapVersion;
     const unsigned char* b = reinterpret_cast<const unsigned char*>(&p);
     for (size_t i = 0; i < sizeof(EngineParams); ++i) { h ^= b[i]; h *= 1099511628211ull; }

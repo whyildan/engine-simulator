@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(enginesim C CXX)
 
+# static MSVC runtime: the released exe runs without installing the Visual C++ redistributable
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -96,6 +99,7 @@ add_executable(enginesim WIN32
   src/ui/TableEditor.cpp
   src/ui/Tuning.cpp
   src/ui/CalManager.cpp
+  src/ui/Control.cpp
   src/ui/Widgets.cpp
 )
 target_include_directories(enginesim PRIVATE src ${miniaudio_SOURCE_DIR})
@@ -145,3 +149,12 @@ target_link_libraries(driveline_probe PRIVATE enginesim_core)
 
 add_executable(ve_settle tests/ve_settle.cpp)
 target_link_libraries(ve_settle PRIVATE enginesim_core)
+
+add_executable(control_test tests/control_test.cpp)
+target_link_libraries(control_test PRIVATE enginesim_core)
+
+add_executable(rotary_idle tests/rotary_idle.cpp)
+target_link_libraries(rotary_idle PRIVATE enginesim_core)
+
+add_executable(idle_hold tests/idle_hold.cpp)
+target_link_libraries(idle_hold PRIVATE enginesim_core)

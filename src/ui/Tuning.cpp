@@ -21,6 +21,7 @@ void App::startBaseMap(bool force) {
             if (!p_.cal.veMap.locked) std::memcpy(p_.cal.veMap.v, c.veMap.v, sizeof(c.veMap.v));
             if (!p_.cal.veTps.locked) std::memcpy(p_.cal.veTps.v, c.veTps.v, sizeof(c.veTps.v));
             baseMapInfo_ = "measured base map (from cache)";
+            bmKeyApplied_ = airPathKey(p_); bmVeApplied_ = p_.cal.veMap; bmTpsApplied_ = p_.cal.veTps; bmStale_ = false;
             return;
         }
     }
@@ -45,13 +46,39 @@ void App::pollBaseMap() {
     if (bmThread_.joinable()) bmThread_.join();
     bmRunning_ = false;
     // only take it if the tuner did not edit the VE maps meanwhile and it is still the same engine
-    bool same = StructuralKey::of(bmFor_) == StructuralKey::of(p_);
+    bool same = airPathKey(bmFor_) == airPathKey(p_);
     if (same && std::memcmp(&p_.cal.veMap.v, &bmVeBefore_.v, sizeof(bmVeBefore_.v)) == 0 && !p_.cal.veMap.locked)
         std::memcpy(p_.cal.veMap.v, bmResult_.veMap.v, sizeof(bmResult_.veMap.v));
     if (same && std::memcmp(&p_.cal.veTps.v, &bmTpsBefore_.v, sizeof(bmTpsBefore_.v)) == 0 && !p_.cal.veTps.locked)
         std::memcpy(p_.cal.veTps.v, bmResult_.veTps.v, sizeof(bmResult_.veTps.v));
     if (same && calMeta_.name.empty()) calSaved_ = p_.cal;   // an unsaved base calibration is not "modified" by its own base map
     baseMapInfo_ = same ? "measured base map applied" : "base map discarded (engine changed meanwhile)";
+    if (same) { bmKeyApplied_ = airPathKey(p_); bmVeApplied_ = p_.cal.veMap; bmTpsApplied_ = p_.cal.veTps; bmStale_ = false; }
+}
+
+// the hardware that decides the trapped air (ports, cams, pipes, displacement ...), not the calibration
+uint64_t App::airPathKey(const EngineParams& in) {
+    EngineParams p = in;
+    std::memset(&p.cal, 0, sizeof(p.cal));
+    return baseMapKey(p);
+}
+
+// engine hardware edited (e.g. rotary porting, cam, runners): once the edits have settled, measure a new base
+// map - unless the tuner has worked on the VE maps since the last one (then only say that it is out of date)
+void App::baseMapFollowEngine(float dt) {
+    const uint64_t k = airPathKey(p_);
+    if (k != bmKeySeen_) { bmKeySeen_ = k; bmKeyStable_ = 0; return; }
+    bmKeyStable_ += dt;
+    if (bmKeyApplied_ == 0 || bmKeyStable_ < 1.0f) return;
+    if (k == bmKeyApplied_) { bmStale_ = false; return; }
+    if (bmRunning_) {
+        if (airPathKey(bmFor_) != k) startBaseMap();   // measuring an engine that is no longer this one
+        return;
+    }
+    const bool untouched = std::memcmp(p_.cal.veMap.v, bmVeApplied_.v, sizeof(bmVeApplied_.v)) == 0 &&
+                           std::memcmp(p_.cal.veTps.v, bmTpsApplied_.v, sizeof(bmTpsApplied_.v)) == 0;
+    if (untouched) { baseMapInfo_ = "engine hardware changed: measuring a new base map"; startBaseMap(); }
+    else bmStale_ = true;
 }
 
 // operating point trail (what the ECU looks up), sampled ~30 times a second
@@ -116,6 +143,8 @@ void App::sectionFuelTuning() {
                 if (ImGui::Button("Cancel")) stopBaseMap();
             } else if (ImGui::Button("Measure base map (virtual dyno)")) startBaseMap(true);
             if (!baseMapInfo_.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", baseMapInfo_.c_str()); }
+            if (bmStale_) ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "The engine hardware changed since this base map was measured, and the VE maps "
+                                                                         "have been edited / learned since - press Measure to update them (replaces the VE maps).");
             if (ImGui::Button("Reset all maps to the generic base calibration")) {
                 Calibration keep = c;
                 generateCalibration(p_);
@@ -210,6 +239,7 @@ void App::sectionFuelTuning() {
             label("Fitted injector dead time", b);
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Closed loop")) { tabFuelTrims(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Fuel system")) { panelFuelIntake(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Measured")) { panelFuelMap(); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
@@ -245,6 +275,7 @@ void App::sectionIgnitionTuning() {
             ImGui::PopItemWidth();
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Knock control")) { tabKnock(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Limiter & base curve")) {
             panelIgnition();
             if (ImGui::Button("Rebuild ignition map from this curve")) {

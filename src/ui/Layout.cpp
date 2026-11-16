@@ -105,10 +105,14 @@ void App::headerBar() {
     Lamp("Float", std::max(tel_.floatIn, tel_.floatEx) > 0.1f, col(1.0f, 0.6f, 0.2f)); ImGui::SameLine();
     Lamp("Oil", tel_.running && tel_.snsValue[kSnsOilP] < 0.7f, col(1.0f, 0.25f, 0.2f)); ImGui::SameLine();
     { int nf = 0; for (int k = 0; k < kSensorCount; ++k) nf += tel_.snsFallback[k] ? 1 : 0;
-      Lamp("CEL", nf > 0 || tel_.syncLost, col(1.0f, 0.65f, 0.1f)); ImGui::SameLine(); }
+      int np = 0; for (int k = 0; k < kProtCount; ++k) np += tel_.protState[k] == 2 ? 1 : 0;
+      Lamp("CEL", nf > 0 || tel_.syncLost || np > 0, col(1.0f, 0.65f, 0.1f)); ImGui::SameLine(); }
+    if (tel_.shutdown) { ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "SHUTDOWN"); ImGui::SameLine(); }
+    else if (tel_.limp) { ImGui::TextColored(ImVec4(1, 0.55f, 0.2f, 1), "LIMP"); ImGui::SameLine(); }
     std::snprintf(b, sizeof(b), "sim %3.0f%%", tel_.simLoad * 100);
     ImGui::TextColored(tel_.simLoad > 0.9f ? ImVec4(1, 0.4f, 0.3f, 1) : dim, "%s", b);
     if (bmRunning_) { ImGui::SameLine(); ImGui::TextColored(ImVec4(0.5f, 0.8f, 1, 1), "base map %.0f%%", bmProg_.fraction.load() * 100); }
+    else if (bmStale_) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "VE map out of date"); }
     if (tel_.paused) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "PAUSED"); }
     if (tel_.failure) {
         ImGui::SameLine();
@@ -143,7 +147,7 @@ void App::navBar() {
 bool App::sectionImplemented(int s) const {
     switch (s) {
     case kEngineSetup: case kEcuSetup: case kFuelTuning: case kIgnitionTuning: case kBoostControl: case kSensorConfig:
-    case kLiveDashboard: case kVirtualDyno: case kCalibrationManager:
+    case kLiveDashboard: case kVirtualDyno: case kCalibrationManager: case kEngineControl: case kEngineProtection:
         return true;
     default: return false;
     }
@@ -204,31 +208,19 @@ void App::workArea() {
     case kIgnitionTuning: sectionIgnitionTuning(); break;
     case kBoostControl: {
         beginSplit("##boost_cfg", 0.50f);
-        panelBoost();
+        if (ImGui::BeginTabBar("boosttabs")) {
+            if (ImGui::BeginTabItem("Hardware")) { panelBoost(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("ECU boost control")) { tabBoostControl(); ImGui::EndTabItem(); }
+            ImGui::EndTabBar();
+        }
         splitNext("##boost_graph");
         panelBoostGraph();
         endSplit();
         break;
     }
-    case kEngineControl: {
-        static const char* items[] = {
-            "Idle control tables (target vs coolant temperature, PID), drive-by-wire pedal map",
-            "Soft / hard rev limiter, launch control, two-step / three-step, flat shift",
-            "VVT / VTEC control, torque management, gear-based control"};
-        plannedSection("Phase 3 / 5", items, 3,
-                       "Rev limiter (ignition / fuel cut) is in Ignition Tuning; idle target rpm in Fuel Tuning; "
-                       "anti-lag in Boost Control; cam advance (VVT) in Engine Setup > Valvetrain.");
-        break;
-    }
+    case kEngineControl: sectionEngineControl(); break;
     case kSensorConfig: sectionSensors(); break;
-    case kEngineProtection: {
-        static const char* items[] = {
-            "Over-rev, overboost, coolant / oil temperature, oil / fuel pressure, lean, knock, EGT, sensor failure",
-            "Actions: ignition retard, boost reduction, throttle / fuel limit, limp mode, shutdown",
-            "Thresholds, activation delays, recovery and severity"};
-        plannedSection("Phase 3", items, 3, nullptr);
-        break;
-    }
+    case kEngineProtection: sectionProtection(); break;
     case kLiveDashboard: {
         beginSplit("##dash", 0.55f);
         panelDashboard();

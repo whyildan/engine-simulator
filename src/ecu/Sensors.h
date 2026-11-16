@@ -11,6 +11,9 @@ namespace es {
 
 struct SensorTruth {
     double v[kSensorCount] = {};   // physical truth in each sensor's unit (O2 / wideband: lambda)
+    // knock per cylinder (port) from the crank-angle window, and its cycle counter (one value per combustion)
+    double knockCyl[kMaxCyl] = {};
+    int knockSeq[kMaxCyl] = {};
 };
 
 enum SensorStatus : int { kStatusOk = 0, kStatusLow = 1, kStatusHigh = 2, kStatusNoSignal = 3 };
@@ -21,6 +24,8 @@ struct SensorReadings {
     double volts[kSensorCount] = {};     // signal at the ECU pin (analog sensors)
     int status[kSensorCount] = {};
     bool fallback[kSensorCount] = {};
+    double knockCyl[kMaxCyl] = {};       // windowed knock intensity per cylinder (0 when the knock sensor failed)
+    int knockSeq[kMaxCyl] = {};
     bool ok(int id) const { return !fallback[id]; }
 };
 

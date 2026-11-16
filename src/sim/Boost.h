@@ -32,11 +32,14 @@ public:
     double pr = 1;              // compressor pressure ratio
     double compFlow = 0;        // kg/s through the compressor (negative in surge)
     double wastegate = 0;       // 0..1
+    // ECU boost control: wastegate solenoid duty 0..1, -1 = none (the spring alone holds its pressure)
+    void setWgDuty(double d) { wgDuty_ = d; }
     double chargeT = 300;       // K, after the intercooler
     double powerKw = 0;         // compressor power (turbo: also the turbine power at balance)
     bool surging = false, bovOpen = false;
 
 private:
+    double wgDuty_ = -1;
     double compressor(double n, double prc, double& eta) const;  // centrifugal map -> kg/s
 
     EngineParams p_{};

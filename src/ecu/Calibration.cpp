@@ -14,6 +14,8 @@ const TableInfo kTables[kCalTableCount] = {
     {"ve_tps",   "VE (alpha-N)",       "rpm", "TPS %",   "%",      1, 160, 0.5f},
     {"lambda",   "Target lambda",      "rpm", "MAP kPa", "lambda", 0.6f, 1.5f, 0.005f},
     {"ignition", "Ignition advance",   "rpm", "MAP kPa", "deg",    -20, 60, 0.5f},
+    {"ltft",     "Long-term fuel trim", "rpm", "MAP kPa", "%",     -40, 40, 0.5f},
+    {"boost_target", "Boost target",   "rpm", "TPS %",   "bar",    0, 4, 0.05f},
 };
 const TableInfo kCurves[kCalCurveCount] = {
     {"crank_afr", "Cranking AFR",           "coolant C",  "", "AFR", 6, 16, 0.1f},
@@ -23,20 +25,44 @@ const TableInfo kCurves[kCalCurveCount] = {
     {"iat_spark", "IAT spark correction",   "intake C",   "", "deg", -20, 10, 0.5f},
     {"ect_spark", "ECT spark correction",   "coolant C",  "", "deg", -20, 15, 0.5f},
     {"dead_time", "Injector dead time",     "battery V",  "", "ms",  0, 5, 0.01f},
+    {"idle_target", "Idle target",          "coolant C",  "", "rpm", 300, 3500, 10},
+    {"dbw_map",   "Throttle (DBW) map",     "pedal %",    "", "%",   0, 100, 1},
+    {"boost_gear", "Boost by gear",         "gear",       "", "%",   0, 200, 1},
 };
+const ProtInfo kProts[kProtCount] = {
+    {"over_rev",   "Over-rev",               "rpm",   true,  0, 20000},
+    {"overboost",  "Overboost",              "bar",   true,  0, 5},
+    {"coolant",    "High coolant temperature", "C",   true,  60, 150},
+    {"oil_temp",   "High oil temperature",   "C",     true,  60, 180},
+    {"oil_press",  "Low oil pressure",       "bar",   false, 0, 6},
+    {"fuel_press", "Low fuel pressure",      "bar",   false, 0, 8},
+    {"lean",       "Lean at load",           "lambda", true, 0.8f, 2},
+    {"knock",      "Excessive knock",        "deg",   true,  0, 30},
+    {"egt",        "High EGT",               "C",     true,  500, 1300},
+    {"sensor",     "Sensor failure",         "sensors", true, 0, 10},
+};
+const char* kActNames[kActCount] = {"Warning only", "Ignition retard", "Boost reduction", "Throttle limit", "Fuel limit (rpm cap)",
+                                    "Limp mode", "Engine shutdown"};
 } // namespace
 
 const TableInfo& calTableInfo(int id) { return kTables[clampv(id, 0, kCalTableCount - 1)]; }
 const TableInfo& calCurveInfo(int id) { return kCurves[clampv(id, 0, kCalCurveCount - 1)]; }
+const ProtInfo& protInfo(int id) { return kProts[clampv(id, 0, kProtCount - 1)]; }
+const char* protActionName(int a) { return kActNames[clampv(a, 0, kActCount - 1)]; }
 
 Table2D& calTable(Calibration& c, int id) {
-    switch (id) { case kCalVeTps: return c.veTps; case kCalLambda: return c.lambda; case kCalIgnition: return c.ignition; default: return c.veMap; }
+    switch (id) {
+    case kCalVeTps: return c.veTps; case kCalLambda: return c.lambda; case kCalIgnition: return c.ignition;
+    case kCalLtft: return c.ltft; case kCalBoostTarget: return c.boostTarget;
+    default: return c.veMap;
+    }
 }
 const Table2D& calTable(const Calibration& c, int id) { return calTable(const_cast<Calibration&>(c), id); }
 Curve1D& calCurve(Calibration& c, int id) {
     switch (id) {
     case kCalWarmup: return c.warmup; case kCalAccel: return c.accel; case kCalIatFuel: return c.iatFuel;
     case kCalIatSpark: return c.iatSpark; case kCalEctSpark: return c.ectSpark; case kCalDeadTime: return c.deadTime;
+    case kCalIdleTarget: return c.idleTarget; case kCalDbwMap: return c.dbwMap; case kCalBoostGear: return c.boostGear;
     default: return c.crankAfr;
     }
 }
@@ -151,6 +177,66 @@ void generateCalibration(EngineParams& p) {
     for (int i = 0; i < kCalMaxCyl; ++i) { c.cylFuel[i] = 0; c.cylSpark[i] = 0; }
     c.autoTune = p.veLearning ? 1 : 0;
     c.closedLoop = p.veLearning ? 1 : 0;
+
+    // ---- closed-loop lambda
+    c.stftGain = 0.5f; c.stftLimit = 25; c.ltftLearn = 1; c.ltftRate = 0.15f; c.ltftLimit = 25;
+    c.clMinEct = 60; c.clDelay = 2.0f; c.clMaxMap = 90;
+    {   // learned trim: 8 x 8 cells over the same rpm / MAP span as the VE map, all 0 %
+        Table2D& t = c.ltft;
+        t = Table2D{};
+        t.nx = 8; t.ny = 8; t.locked = 0;
+        for (int i = 0; i < 8; ++i) {
+            t.x[i] = (float)(std::round((500.0 + (top - 500.0) * i / 7.0) / 50.0) * 50.0);
+            t.y[i] = (float)std::round(20.0 + (mapTop - 20.0) * i / 7.0);
+        }
+        for (int r = 0; r < kTabMax; ++r) for (int k = 0; k < kTabMax; ++k) t.v[r][k] = 0;
+    }
+    // ---- knock control
+    c.knockControl = 1; c.knockThreshold = 1.0f; c.knockRetardStep = 1.5f; c.knockMaxRetard = 10; c.knockRecover = 1.0f;
+    c.knockMinRpm = 1200;
+    // ---- idle / throttle / limiter (the gains reproduce the previous fixed idle controller)
+    {
+        const double idle = p.idleTargetRpm;
+        setCurve(c.idleTarget, {-30, -10, 0, 10, 20, 40, 60, 80, 100}, [](double x, const EngineParams& pp) {
+            return std::round((pp.idleTargetRpm + 300.0 * (1.0 - smoothstep(15.0, 75.0, x))) / 10.0) * 10.0; }, p);
+        (void)idle;
+    }
+    c.idleKp = 0.0007f; c.idleKi = 0.0002f; c.idleKd = 0.00012f;
+    c.idleSparkGain = 0.04f; c.idleSparkMin = -8; c.idleSparkMax = 10;
+    setCurve(c.dbwMap, {0, 10, 20, 30, 40, 50, 60, 70, 80, 100}, [](double x, const EngineParams&) { return x; }, p);
+    c.softLimitBand = 200; c.softLimitRetard = 8; c.softLimitCut = 0.3f;
+    // ---- boost control: off by default (wastegate spring); the target table starts at the spring pressure
+    c.boostControl = 0;
+    {
+        Table2D& t = c.boostTarget;
+        t = Table2D{};
+        static const float tps[6] = {0, 20, 40, 60, 80, 100};
+        t.nx = 10; t.ny = 6; t.locked = 0;
+        const double spring = p.induction == Induction::Turbo ? p.wastegateBar : 0.5;
+        for (int i = 0; i < 10; ++i) t.x[i] = (float)(std::round((1000.0 + (top - 1000.0) * i / 9.0) / 50.0) * 50.0);
+        for (int r = 0; r < 6; ++r) {
+            t.y[r] = tps[r];
+            for (int k = 0; k < 10; ++k)
+                t.v[r][k] = (float)(std::round(spring * smoothstep(30.0, 90.0, tps[r]) * 20.0) / 20.0);
+        }
+    }
+    setCurve(c.boostGear, {0, 1, 2, 3, 4, 5, 6, 7, 8}, [](double, const EngineParams&) { return 100.0; }, p);
+    c.boostKp = 0.6f; c.boostKi = 1.5f; c.boostKd = 0.03f; c.wgDutyMax = 0.9f;
+    c.overboostMargin = 0.3f; c.overboostTime = 0.5f;
+    c.boostCutBar = p.induction == Induction::Turbo ? std::max(0.5f, p.wastegateBar * 1.8f + 0.3f) : 3.0f;
+    // ---- protection rules: {enabled, warn, limit, delay s, recover, action}
+    const bool turbo = p.induction == Induction::Turbo, efiFuel = p.fuelSystem == FuelSystem::EFI;
+    c.prot[kProtOverRev]   = {1, p.revLimit + 200.0f, p.revLimit + 600.0f, 0.2f, 300, kActWarn};
+    c.prot[kProtOverboost] = {boosted ? 1 : 0, (float)maxBoost + 0.2f, (float)maxBoost + 0.45f, 0.5f, 0.2f, kActBoostReduce};
+    c.prot[kProtCoolant]   = {1, 105, 115, 3.0f, 8, kActLimp};
+    c.prot[kProtOilTemp]   = {1, 130, 145, 3.0f, 10, kActLimp};
+    c.prot[kProtOilPress]  = {1, 1.0f, 0.5f, 1.0f, 0.3f, kActLimp};      // at 3000 rpm; scaled down towards idle
+    c.prot[kProtFuelPress] = {efiFuel ? 1 : 0, 2.0f, 1.5f, 1.0f, 0.3f, kActLimp};
+    c.prot[kProtLean]      = {efiFuel ? 1 : 0, 1.0f, 1.08f, 0.8f, 0.05f, turbo ? kActBoostReduce : kActThrottleLimit};
+    c.prot[kProtKnock]     = {1, 6, 9, 1.5f, 2, turbo ? kActBoostReduce : kActThrottleLimit};
+    c.prot[kProtEgt]       = {1, 950, 1050, 2.0f, 50, kActWarn};
+    c.prot[kProtSensor]    = {1, 1, 1, 0.5f, 0.5f, kActWarn};
+    c.limpThrottle = 35; c.limpRpm = 3500; c.protRetard = 5;
 }
 
 } // namespace es

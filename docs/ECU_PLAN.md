@@ -246,13 +246,47 @@ Tiap komponen dipilih dari katalog (plus opsi "custom") dan punya efek fisik yan
 - Diketahui: start dingin (20 °C / −10 °C) pada beberapa preset boost dan 26B masih bisa mati saat kembali dari
   blip; bisa dituning lewat tabel enrichment (akselerasi dingin, keluar DFCO, warm-up).
 
-### Fase 3 – Kontrol lanjutan
+### Fase 3 – Kontrol lanjutan ✅ selesai
 - Lambda closed-loop: STFT dan LTFT (sel LTFT per wilayah beban), batas koreksi, kondisi learning (ECT, delay setelah transien, rentang beban), dan **Auto Tune VE** dari wideband.
 - Kontrol knock: threshold dan window sensor knock, retard per silinder, laju pemulihan.
 - Idle: target rpm vs ECT, PID idle, idle ignition control. DBW: peta pedal ke throttle.
 - Boost: target per rpm/gigi/TPS, PID ke duty solenoid, overboost cut, boost cut.
 - Proteksi dan limp mode: semua kondisi di §9, dengan threshold, delay, pemulihan, dan tingkat keparahan.
 - Soft limiter (pemotongan sebagian) dan hard limiter.
+
+**Catatan hasil Fase 3:**
+- **Fuel trim** (`Ecu::fuelTrimStep`): STFT mengintegrasikan error wideband (gain, batas ±%), hanya saat syarat
+  terpenuhi (ECT minimum, jeda setelah start/transien, MAP maksimum, target lebih kurus dari AFR 13.5), dan meluruh
+  ke 0 di loop terbuka. LTFT = tabel 8 × 8 (rpm × MAP) yang mengambil alih koreksi STFT per sel, berlaku juga di
+  loop terbuka, bisa dikunci/dihapus, ikut tersimpan di file kalibrasi. Auto-tune VE tetap opsi tersendiri.
+- **Knock control** (`Ecu::knockStep`): window sudut engkol membagi sinyal knock per silinder (per rotor untuk
+  rotari) per siklus pembakaran. Silinder di atas threshold di-retard satu langkah, semua pulih dengan laju
+  pemulihan. Sensor knock rusak → retard pengaman setengah dari maksimum.
+- **Idle / DBW**: target idle = kurva vs ECT, gain PID katup idle dan kontrol timing idle bisa diatur (default =
+  kontroler lama). Drive-by-wire: peta pedal → throttle; sensor pedal rusak → throttle idle.
+- **Soft limiter**: pada pita sebelum hard limit, timing di-retard dan sebagian percikan dipotong (acak).
+- **Boost control** (`Ecu::boostStep`): target bar dari rpm × TPS × kurva per gigi; feed-forward dari tekanan
+  pegas wastegate + PID pada sensor MAP → duty solenoid. Fisik: solenoid membuang tekanan aktuator, sehingga
+  aktuator hanya melihat boost × (1 − 0.9·duty). Overboost cut (melewati target + margin terlalu lama) dan boost
+  cut (batas absolut) berupa fuel cut.
+- **Proteksi** (`Ecu::protectionStep`): 10 aturan (over-rev, overboost, coolant, oli, tekanan oli diskalakan
+  dengan rpm, tekanan bahan bakar, kurus saat beban, knock berlebih, EGT, kegagalan sensor), masing-masing
+  dengan warn, limit, delay, recovery, dan aksi: peringatan, retard, kurangi boost, batas throttle (DBW; untuk
+  throttle kabel menjadi batas rpm), batas bahan bakar (batas rpm), limp mode, shutdown (terkunci sampai mesin
+  berhenti). Lampu CEL dan teks LIMP/SHUTDOWN di header.
+- UI: Fuel Tuning › Closed loop, Ignition Tuning › Knock control, Engine Control (Idle, Throttle, Rev limiter),
+  Boost Control › ECU boost control, Engine Protection. Tes: `control_test`.
+- Ikut diperbaiki: pengayaan laju-MAP kini memakai laju MAP yang difilter lambat (0.15 s), dan laju cepat hanya
+  saat rpm sedang jatuh. Sebelumnya denyut MAP saat idle memicunya terus sehingga idle selalu sedikit kaya dan
+  closed loop terganggu. Transfer STFT → LTFT kini mempertahankan koreksi penuh di titik operasi. Preset 26B
+  memakai AFR cruise 12.5 (peripheral port dengan residu besar hanya idle bersih saat kaya).
+- Rig base map kini tanpa pengayaan transien (akselerasi, keluar-DFCO, asinkron, laju-MAP) — derau sensor
+  memicunya di titik ukur yang stabil dan membiaskan VE. Base map diukur ulang otomatis saat jalur udara mesin
+  berubah (mis. porting rotari), selama peta VE belum diedit.
+- Rotari: preset baru 13B bridge port (idle "brap brap"). Brap muncul dari fisika (overlap besar → gas buang
+  balik → muatan encer misfire → muatan segar berikutnya meledak keras → letupan di knalpot); preset rotari
+  memakai mix suara lebih serak (pulse pressure 0.1, punch 0.15) agar denyut tak rata itu tidak tertutup
+  dentum rendah. 13B stock idle 1000 rpm (950 bisa mati setelah idle lama). Tes `idle_hold`.
 
 ### Fase 4 – Monitoring
 - Dashboard yang bisa diatur: gauge analog/digital per channel, tata letak tersimpan, alarm dan indikator status sensor.

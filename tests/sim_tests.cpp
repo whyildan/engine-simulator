@@ -122,8 +122,22 @@ static void fuzz(int seconds) {
     int bad = 0, changes = 0;
     auto U = [&](float lo, float hi) { return (float)(lo + (hi - lo) * rng.uniform()); };
     for (int step = 0; step < seconds * 4; ++step) {
-        int what = (int)(rng.uniform() * 18);
+        int what = (int)(rng.uniform() * 19);
         switch (what) {
+        case 18: {   // Phase 3 controls: trims, knock control, soft limiter, idle / DBW, boost control, protection
+            Calibration& c = p.cal;
+            c.closedLoop = rng.uniform() < 0.5; c.autoTune = rng.uniform() < 0.3; c.ltftLearn = rng.uniform() < 0.7;
+            c.stftGain = U(0.05f, 3); c.ltftRate = U(0.01f, 1); c.clDelay = U(0, 5);
+            c.knockControl = rng.uniform() < 0.8; c.knockThreshold = U(0.1f, 3); c.knockRetardStep = U(0.2f, 5); c.knockRecover = U(0.1f, 10);
+            c.softLimitBand = rng.uniform() < 0.3 ? 0 : U(0, 800); c.softLimitCut = U(0, 1); c.softLimitRetard = U(0, 20);
+            c.idleKp = U(0, 0.003f); c.idleKi = U(0, 0.001f); c.idleKd = U(0, 0.0005f);
+            for (int i = 0; i < c.dbwMap.n; ++i) c.dbwMap.v[i] = U(0, 100);
+            c.boostControl = rng.uniform() < 0.5; c.boostKp = U(0, 3); c.boostKi = U(0, 10); c.boostCutBar = U(0.2f, 3);
+            for (int r = 0; r < c.boostTarget.ny; ++r) for (int k = 0; k < c.boostTarget.nx; ++k) c.boostTarget.v[r][k] = U(0, 2.5f);
+            for (ProtRule& pr : c.prot) { pr.enabled = rng.uniform() < 0.6; pr.action = (int)(rng.uniform() * kActCount); pr.delay = U(0, 2); }
+            c.limpRpm = U(1500, 6000); c.limpThrottle = U(5, 100);
+            break;
+        }
         case 17: {   // ECU rate, cold start, fuel supply, sensor faults / noise / lag
             p.ecuRateHz = U(100, 5000); p.coldStart = rng.uniform() < 0.3; p.ambientTemp_C = U(-25, 45);
             p.comp.fuelPressure_bar = U(1.5f, 6); p.comp.fuelRegulator = (FuelRegulator)(int)(rng.uniform() * 2); p.comp.fuelPumpLph = U(20, 400);
@@ -207,6 +221,10 @@ static void survey() {
         if (std::getenv("HEAT")) p.comp.plugHeatRange = std::atoi(std::getenv("HEAT"));
         if (std::getenv("SPRING")) { float s = (float)std::atof(std::getenv("SPRING")); p.comp.springOpen_N *= s; p.comp.springSeat_N *= s; }
         if (std::getenv("ONLY") && std::atoi(std::getenv("ONLY")) != i) continue;
+        // diagnostics: Phase 3 controls off
+        if (std::getenv("NOKNOCK")) p.cal.knockControl = 0;
+        if (std::getenv("NOPROT")) for (ProtRule& r : p.cal.prot) r.enabled = 0;
+        if (std::getenv("NOSOFT")) p.cal.softLimitBand = 0;
         p.ignition = 1; p.starter = 1;
         Simulator sim(p);
         double crank = 0;

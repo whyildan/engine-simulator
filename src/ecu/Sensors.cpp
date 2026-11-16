@@ -100,6 +100,12 @@ void SensorLayer::update(double dt, const SensorTruth& t, const EngineParams& p)
         r.fallback[i] = status != kStatusOk;
         r.value[i] = r.fallback[i] ? d.fallback : m;
     }
+    // knock window: the same sensor, attributed to the cylinder whose combustion it follows
+    const double knockOffset = r.measured[kSnsKnock] - t.v[kSnsKnock];
+    for (int i = 0; i < kMaxCyl; ++i) {
+        r.knockCyl[i] = r.fallback[kSnsKnock] ? 0.0 : std::max(0.0, t.knockCyl[i] + knockOffset);
+        r.knockSeq[i] = t.knockSeq[i];
+    }
     init_ = true;
 }
 

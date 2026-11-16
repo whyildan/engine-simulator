@@ -1,0 +1,271 @@
+// Phase 3 UI: closed-loop fuel trims, knock control, Engine Control (idle, drive-by-wire, rev limiter),
+// ECU boost control and Engine Protection.
+#include "ui/App.h"
+#include "ui/Widgets.h"
+#include "imgui.h"
+#include "implot.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+namespace es {
+using namespace ui;
+
+static void rowLabel(const char* k, const char* v) {
+    ImGui::TextDisabled("%s", k);
+    ImGui::SameLine(ImGui::GetFontSize() * 15.0f);
+    ImGui::TextUnformatted(v);
+}
+
+static void statusChip(int state) {
+    static const char* txt[3] = {"OK", "WARNING", "ACTIVE"};
+    static const ImVec4 col[3] = {ImVec4(0.45f, 0.85f, 0.45f, 1), ImVec4(1, 0.8f, 0.3f, 1), ImVec4(1, 0.35f, 0.3f, 1)};
+    const int s = std::clamp(state, 0, 2);
+    ImGui::TextColored(col[s], "%s", txt[s]);
+}
+
+// ------------------------------------------------------------------ Fuel Tuning > Closed loop
+void App::tabFuelTrims() {
+    Calibration& c = p_.cal;
+    const Calibration* ref = hasRef_ ? &refCal_ : nullptr;
+    ImGui::PushItemWidth(-260);
+    ImGui::SeparatorText("Status");
+    char b[160];
+    std::snprintf(b, sizeof(b), "%s", c.autoTune ? "auto-tune is on: it is the closed loop (STFT held at 0)" :
+                                      tel_.closedLoop ? "CLOSED LOOP" : "open loop");
+    rowLabel("Mode", b);
+    std::snprintf(b, sizeof(b), "STFT %+.1f %%   LTFT %+.1f %%   total %+.1f %%", tel_.ecuStft, tel_.ecuLtft, (tel_.ecuTrim - 1) * 100);
+    rowLabel("Trims now", b);
+    ImGui::SeparatorText("Closed loop (short-term trim)");
+    bool cl = c.closedLoop != 0;
+    if (ImGui::Checkbox("Closed loop enabled", &cl)) c.closedLoop = cl;
+    Help("The short-term fuel trim (STFT) integrates the wideband error while the conditions below hold\n"
+         "(warm, settled after start / transients, part load with a target leaner than AFR 13.5).\n"
+         "Outside them it fades back to 0 %%. Auto-tune (Setup tab) replaces it when enabled.");
+    ImGui::SliderFloat("STFT gain", &c.stftGain, 0.05f, 3.0f, "%.2f /s");
+    Help("How fast the STFT follows the lambda error: 0.5 = half of the error corrected per second.");
+    ImGui::SliderFloat("STFT limit", &c.stftLimit, 2, 40, "+-%.0f %%");
+    ImGui::SeparatorText("Learning conditions");
+    ImGui::SliderFloat("Min coolant temperature", &c.clMinEct, 0, 100, "%.0f C");
+    ImGui::SliderFloat("Delay after start / transient", &c.clDelay, 0, 10, "%.1f s");
+    ImGui::SliderFloat("Max MAP (open loop above)", &c.clMaxMap, 40, 250, "%.0f kPa");
+    ImGui::SeparatorText("Long-term trim");
+    bool lt = c.ltftLearn != 0;
+    if (ImGui::Checkbox("Learn and apply long-term trim", &lt)) c.ltftLearn = lt;
+    Help("What the STFT keeps correcting in a load cell is moved into the LTFT table, so the correction is\n"
+         "already there next time - also in open loop. Large LTFT values mean the VE map (or the injector\n"
+         "data) is off in that area: fix the map and clear the table.");
+    ImGui::SliderFloat("LTFT learning rate", &c.ltftRate, 0.01f, 1.0f, "%.2f /s");
+    ImGui::SliderFloat("LTFT limit", &c.ltftLimit, 2, 40, "+-%.0f %%");
+    if (ImGui::Button("Clear long-term trims")) for (auto& row : c.ltft.v) for (float& v : row) v = 0;
+    ImGui::PopItemWidth();
+    ImGui::SeparatorText("Long-term trim table (% over rpm x MAP)");
+    OpPoint op; op.x = tel_.ecuLoadX; op.y = tel_.ecuLoadY; op.valid = tel_.running;
+    tabEd_[kCalLtft].draw("ltft", c.ltft, calTableInfo(kCalLtft), op, &trailMap_, ref ? &ref->ltft : nullptr, refName_.c_str());
+}
+
+// ------------------------------------------------------------------ Ignition Tuning > Knock control
+void App::tabKnock() {
+    Calibration& c = p_.cal;
+    ImGui::PushItemWidth(-260);
+    bool on = c.knockControl != 0;
+    if (ImGui::Checkbox("Knock control enabled", &on)) c.knockControl = on;
+    Help("The knock sensor signal is windowed by crank angle, so each combustion's knock is attributed to\n"
+         "its cylinder. A cylinder that knocks above the threshold is retarded one step; all cylinders creep\n"
+         "back to the map at the recovery rate. A failed knock sensor gives a fixed safety retard (half the max).");
+    ImGui::SliderFloat("Knock threshold", &c.knockThreshold, 0.2f, 4.0f, "%.2f index");
+    ImGui::SliderFloat("Retard per knock event", &c.knockRetardStep, 0.25f, 5.0f, "%.2f deg");
+    ImGui::SliderFloat("Max knock retard", &c.knockMaxRetard, 1, 20, "%.0f deg");
+    ImGui::SliderFloat("Recovery rate", &c.knockRecover, 0.1f, 10.0f, "%.1f deg/s");
+    ImGui::SliderFloat("Active above", &c.knockMinRpm, 0, 4000, "%.0f rpm");
+    ImGui::PopItemWidth();
+    ImGui::SeparatorText("Live");
+    ImGui::Text("Knock sensor %.2f   events %d", tel_.snsValue[kSnsKnock], tel_.knockEvents);
+    const int n = std::clamp((int)(isRotary(p_) ? p_.cylinders : p_.cylinders), 1, kMaxCyl);
+    if (ImPlot::BeginPlot("##kr", ImVec2(-1, ImGui::GetFontSize() * 12), ImPlotFlags_NoLegend | ImPlotFlags_NoMenus)) {
+        ImPlot::SetupAxes(isRotary(p_) ? "rotor" : "cylinder", "retard deg", ImPlotAxisFlags_AutoFit, ImPlotAxisFlags_None);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, std::max(2.0f, c.knockMaxRetard), ImPlotCond_Always);
+        float xs[kMaxCyl], ys[kMaxCyl];
+        for (int i = 0; i < n; ++i) { xs[i] = (float)(i + 1); ys[i] = tel_.knockRetard[i]; }
+        ImPlot::SetNextFillStyle(ImVec4(1, 0.45f, 0.25f, 0.9f));
+        ImPlot::PlotBars("retard", xs, ys, n, 0.6);
+        ImPlot::EndPlot();
+    }
+}
+
+// ------------------------------------------------------------------ Engine Control
+void App::sectionEngineControl() {
+    Calibration& c = p_.cal;
+    const Calibration* ref = hasRef_ ? &refCal_ : nullptr;
+    const bool efi = p_.fuelSystem == FuelSystem::EFI;
+    if (ImGui::BeginTabBar("ctltabs")) {
+        if (ImGui::BeginTabItem("Idle")) {
+            if (!efi) ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "Carburettor: idle speed is set by the idle screw (Fuel system); only idle spark control applies.");
+            char b[128];
+            std::snprintf(b, sizeof(b), "target %.0f rpm   now %.0f rpm   idle valve %.0f %%", tel_.idleTarget, tel_.rpm, tel_.iac);
+            rowLabel("Idle", b);
+            ImGui::SeparatorText("Idle target over coolant temperature");
+            curveEd_[kCalIdleTarget].drawCurve("idlet", c.idleTarget, calCurveInfo(kCalIdleTarget), tel_.snsValue[kSnsECT], true, ref ? &ref->idleTarget : nullptr);
+            ImGui::PushItemWidth(-260);
+            ImGui::SeparatorText("Idle valve PID");
+            ImGui::SliderFloat("P gain", &c.idleKp, 0, 0.003f, "%.5f /rpm");
+            Help("Valve opening per rpm of error (full strength below the target, 43 %% above it - the stall side matters more).");
+            ImGui::SliderFloat("I gain", &c.idleKi, 0, 0.001f, "%.5f /rpm s");
+            ImGui::SliderFloat("D gain", &c.idleKd, 0, 0.0005f, "%.5f /(rpm/s)");
+            Help("Damps on the rpm rate: opens the valve while the revs are falling towards the target.");
+            ImGui::SeparatorText("Idle spark control");
+            ImGui::SliderFloat("Spark gain", &c.idleSparkGain, 0, 0.15f, "%.3f deg/rpm");
+            Help("Fast idle control through timing: advance when the revs sag, retard when they flare.");
+            ImGui::SliderFloat("Max retard", &c.idleSparkMin, -20, 0, "%.0f deg");
+            ImGui::SliderFloat("Max advance", &c.idleSparkMax, 0, 20, "%.0f deg");
+            ImGui::PopItemWidth();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Throttle (DBW)")) {
+            const bool dbw = p_.comp.throttleType == ThrottleType::DriveByWire;
+            if (!dbw) ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "Cable throttle: the pedal moves the butterfly directly - this map is not used (Engine Setup > Components > Throttle).");
+            char b[128];
+            std::snprintf(b, sizeof(b), "pedal %.0f %%   throttle %.0f %%%s", tel_.snsValue[kSnsAPP], tel_.throttle * 100,
+                          tel_.throttleLimited ? "   LIMITED (protection)" : "");
+            rowLabel("Now", b);
+            ImGui::SeparatorText("Pedal -> throttle map");
+            curveEd_[kCalDbwMap].drawCurve("dbw", c.dbwMap, calCurveInfo(kCalDbwMap), tel_.snsValue[kSnsAPP], dbw, ref ? &ref->dbwMap : nullptr);
+            Help("Throttle opening the ECU asks for at each pedal position. A progressive map (less throttle at\n"
+                 "small pedal) makes a sensitive engine easier to drive. The throttle motor response time is a\n"
+                 "hardware property (Components). A failed pedal sensor leaves the throttle at idle.");
+            ImGui::PushItemWidth(-260);
+            if (dbw) ImGui::SliderFloat("Throttle motor response", &p_.comp.dbwResponse_ms, 5, 200, "%.0f ms");
+            ImGui::PopItemWidth();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Rev limiter")) {
+            ImGui::PushItemWidth(-260);
+            ImGui::SliderFloat("Hard limit", &p_.revLimit, 1500, 12000, "%.0f rpm");
+            int lim = (int)p_.limiter;
+            if (ImGui::Combo("Hard cut", &lim, "Ignition cut\0Fuel cut\0")) p_.limiter = (Limiter)lim;
+            ImGui::SeparatorText("Soft limiter");
+            ImGui::SliderFloat("Soft band", &c.softLimitBand, 0, 1000, "%.0f rpm below the limit");
+            Help("Across this band before the hard limit the ECU retards the timing and drops a growing share of\n"
+                 "sparks, so the revs level off instead of bouncing on the hard cut. 0 = off.");
+            ImGui::SliderFloat("Retard at the limit", &c.softLimitRetard, 0, 25, "%.0f deg");
+            ImGui::SliderFloat("Sparks cut at the limit", &c.softLimitCut, 0, 1, "%.2f");
+            ImGui::PopItemWidth();
+            char b[96];
+            std::snprintf(b, sizeof(b), "%s   cut %.0f %%", tel_.limiter ? "LIMITER ON" : "-", tel_.cutFraction * 100);
+            rowLabel("Now", b);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Planned")) {
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.35f, 1), "Planned for Phase 5 (motorsport):");
+            ImGui::BulletText("Launch control, two-step / three-step, flat shift");
+            ImGui::BulletText("Traction control, rolling anti-lag, transbrake");
+            ImGui::BulletText("VVT / VTEC control, torque management, gear-based control");
+            ImGui::TextDisabled("Anti-lag is in Boost Control; cam advance (VVT) in Engine Setup > Valvetrain.");
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+}
+
+// ------------------------------------------------------------------ Boost Control > ECU boost control
+void App::tabBoostControl() {
+    Calibration& c = p_.cal;
+    const Calibration* ref = hasRef_ ? &refCal_ : nullptr;
+    const bool turbo = p_.induction == Induction::Turbo;
+    if (!turbo) {
+        ImGui::TextWrapped("ECU boost control drives a turbo wastegate. %s",
+                           isBoosted(p_) ? "A supercharger's boost follows the pulley ratio and the bypass valve (Hardware tab)." :
+                                           "This engine is naturally aspirated.");
+        ImGui::PushItemWidth(-260);
+        if (isBoosted(p_)) ImGui::SliderFloat("Boost cut", &c.boostCutBar, 0.2f, 4, "%.2f bar");
+        ImGui::PopItemWidth();
+        return;
+    }
+    char b[160];
+    std::snprintf(b, sizeof(b), "target %.2f   actual %.2f bar   duty %s   wastegate %.0f %%%s%s", tel_.boostTargetBar, tel_.ecuBoostBar,
+                  tel_.wgDuty >= 0 ? (std::to_string((int)std::lround(tel_.wgDuty * 100)) + " %").c_str() : "-", tel_.wastegatePos * 100,
+                  tel_.overboostCut ? "   OVERBOOST CUT" : "", tel_.boostCut ? "   BOOST CUT" : "");
+    rowLabel("Now", b);
+    bool on = c.boostControl != 0;
+    if (ImGui::Checkbox("ECU boost control (wastegate solenoid)", &on)) c.boostControl = on;
+    Help("Off: the wastegate spring alone sets the boost (Hardware > wastegate spring).\n"
+         "On: a solenoid bleeds the actuator line - the actuator sees less pressure, so the gate opens later and\n"
+         "boost rises above the spring. The ECU runs a PID on the MAP sensor towards the target table, with a\n"
+         "feed-forward duty from the spring pressure. It can only add boost: below the spring it is at 0 % duty.");
+    ImGui::PushItemWidth(-260);
+    ImGui::SliderFloat("P gain", &c.boostKp, 0, 3, "%.2f duty/bar");
+    ImGui::SliderFloat("I gain", &c.boostKi, 0, 10, "%.2f duty/bar s");
+    ImGui::SliderFloat("D gain", &c.boostKd, 0, 0.3f, "%.3f duty/(bar/s)");
+    ImGui::SliderFloat("Max duty", &c.wgDutyMax, 0.1f, 1, "%.2f");
+    ImGui::SeparatorText("Overboost protection");
+    ImGui::SliderFloat("Overboost margin", &c.overboostMargin, 0.05f, 1, "%.2f bar above target");
+    ImGui::SliderFloat("for longer than", &c.overboostTime, 0.05f, 3, "%.2f s");
+    Help("Fuel cut until the boost is back down to the target.");
+    ImGui::SliderFloat("Boost cut", &c.boostCutBar, 0.2f, 4, "%.2f bar");
+    Help("Instant fuel cut above this boost, with or without ECU boost control.");
+    ImGui::PopItemWidth();
+    ImGui::SeparatorText("Target boost (bar) over rpm x throttle");
+    OpPoint op; op.x = tel_.rpm; op.y = tel_.ecuTps; op.valid = tel_.running;
+    tabEd_[kCalBoostTarget].draw("bst", c.boostTarget, calTableInfo(kCalBoostTarget), op, nullptr, ref ? &ref->boostTarget : nullptr, refName_.c_str());
+    ImGui::SeparatorText("Boost by gear (% of the table, 0 = neutral)");
+    curveEd_[kCalBoostGear].drawCurve("bgear", c.boostGear, calCurveInfo(kCalBoostGear), (float)tel_.gear, tel_.vehicle, ref ? &ref->boostGear : nullptr);
+}
+
+// ------------------------------------------------------------------ Engine Protection
+void App::sectionProtection() {
+    Calibration& c = p_.cal;
+    if (tel_.shutdown) {
+        ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "ENGINE SHUTDOWN by protection - fuel and spark cut until the engine has stopped.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear now")) sim_->requestClearProtection();
+    } else if (tel_.limp) ImGui::TextColored(ImVec4(1, 0.55f, 0.2f, 1), "LIMP MODE: throttle / rpm limited, boost to the spring, timing retarded.");
+    else ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1), "No protection action active.");
+    ImGui::TextDisabled("Each rule watches one sensor value. Past the limit for longer than the delay, its action engages; it clears "
+                        "once the value is back past the limit by the recovery margin. Oil pressure limits are for 3000 rpm and scale down to 25 %% at idle.");
+    const ImGuiTableFlags fl = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingFixedFit;
+    if (ImGui::BeginTable("##prot", 9, fl)) {
+        const float em = ImGui::GetFontSize();
+        ImGui::TableSetupColumn("On");
+        ImGui::TableSetupColumn("Condition", ImGuiTableColumnFlags_WidthFixed, em * 13);
+        ImGui::TableSetupColumn("Now", ImGuiTableColumnFlags_WidthFixed, em * 6);
+        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, em * 5);
+        ImGui::TableSetupColumn("Warning", ImGuiTableColumnFlags_WidthFixed, em * 6);
+        ImGui::TableSetupColumn("Limit", ImGuiTableColumnFlags_WidthFixed, em * 6);
+        ImGui::TableSetupColumn("Delay s", ImGuiTableColumnFlags_WidthFixed, em * 5);
+        ImGui::TableSetupColumn("Recover", ImGuiTableColumnFlags_WidthFixed, em * 5);
+        ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        std::string actions;
+        for (int a = 0; a < kActCount; ++a) { actions += protActionName(a); actions.push_back('\0'); }
+        for (int i = 0; i < kProtCount; ++i) {
+            ProtRule& r = c.prot[i];
+            const ProtInfo& in = protInfo(i);
+            ImGui::PushID(i);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); bool en = r.enabled != 0; if (ImGui::Checkbox("##en", &en)) r.enabled = en;
+            ImGui::TableNextColumn(); ImGui::Text("%s %s", in.name, in.high ? "(>)" : "(<)");
+            ImGui::TableNextColumn(); ImGui::Text("%.4g %s", tel_.protValue[i], in.unit);
+            ImGui::TableNextColumn(); if (r.enabled) statusChip(tel_.protState[i]); else ImGui::TextDisabled("off");
+            ImGui::TableNextColumn(); ImGui::SetNextItemWidth(-1); ImGui::DragFloat("##w", &r.warn, (in.hi - in.lo) * 0.002f, in.lo, in.hi, "%.4g");
+            ImGui::TableNextColumn(); ImGui::SetNextItemWidth(-1); ImGui::DragFloat("##l", &r.limit, (in.hi - in.lo) * 0.002f, in.lo, in.hi, "%.4g");
+            ImGui::TableNextColumn(); ImGui::SetNextItemWidth(-1); ImGui::DragFloat("##d", &r.delay, 0.02f, 0, 30, "%.2f");
+            ImGui::TableNextColumn(); ImGui::SetNextItemWidth(-1); ImGui::DragFloat("##r", &r.recover, (in.hi - in.lo) * 0.001f, 0, in.hi, "%.4g");
+            ImGui::TableNextColumn(); ImGui::SetNextItemWidth(-1);
+            int a = r.action;
+            if (ImGui::Combo("##a", &a, actions.c_str())) r.action = a;
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::SeparatorText("Actions");
+    ImGui::PushItemWidth(-260);
+    ImGui::SliderFloat("Throttle limit / limp throttle", &c.limpThrottle, 5, 100, "%.0f %%");
+    Help("Drive-by-wire only. With a cable throttle a throttle limitation becomes an rpm cap (fuel cut).");
+    ImGui::SliderFloat("Fuel limit / limp rpm cap", &c.limpRpm, 1500, 8000, "%.0f rpm");
+    ImGui::SliderFloat("Ignition retard / limp retard", &c.protRetard, 0, 20, "%.0f deg");
+    ImGui::PopItemWidth();
+    ImGui::TextDisabled("Boost reduction: boost control back to the wastegate spring (anti-lag off). "
+                        "Limp mode = throttle limit + rpm cap + boost reduction + retard. Shutdown: fuel and spark cut until the engine stops.");
+}
+
+} // namespace es

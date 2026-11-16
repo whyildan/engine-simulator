@@ -25,6 +25,18 @@ struct Curve1D {
 
 enum class LoadMode : int32_t { SpeedDensity = 0, AlphaN = 1, Maf = 2, Hybrid = 3 };
 
+// engine protection (Phase 3): one rule per monitored condition
+enum ProtId : int { kProtOverRev, kProtOverboost, kProtCoolant, kProtOilTemp, kProtOilPress, kProtFuelPress, kProtLean,
+                    kProtKnock, kProtEgt, kProtSensor, kProtCount };
+enum ProtAction : int { kActWarn, kActRetard, kActBoostReduce, kActThrottleLimit, kActFuelLimit, kActLimp, kActShutdown, kActCount };
+struct ProtRule {
+    int32_t enabled;
+    float warn, limit;   // thresholds in the condition's unit (high or low depending on the condition)
+    float delay;         // s beyond the limit before the action engages
+    float recover;       // hysteresis: the value must come back this far past the limit to clear
+    int32_t action;      // ProtAction
+};
+
 struct Calibration {
     LoadMode loadMode;
     float hybridTpsLo, hybridTpsHi;  // hybrid: speed density below lo, alpha-N above hi (TPS %)
@@ -54,11 +66,56 @@ struct Calibration {
     float cylSpark[kCalMaxCyl];  // per-cylinder spark trim deg
     int32_t autoTune;    // learn the active VE table from the wideband
     int32_t closedLoop;  // short-term fuel trim on the wideband at part load
+
+    // ---- closed-loop lambda (STFT / LTFT)
+    float stftGain;      // per s (fraction of the lambda error integrated per second)
+    float stftLimit;     // +- %
+    int32_t ltftLearn;   // move the short-term trim into the long-term table
+    float ltftRate;      // fraction of the STFT moved into the LTFT cell per second
+    float ltftLimit;     // +- %
+    float clMinEct;      // C: closed loop / learning only above this coolant temperature
+    float clDelay;       // s after start / a transient before closed loop resumes
+    float clMaxMap;      // kPa: above this the engine runs open loop (power)
+    Table2D ltft;        // learned long-term trim % over rpm x MAP
+
+    // ---- knock control
+    int32_t knockControl;
+    float knockThreshold;   // knock sensor index that counts as a knock event
+    float knockRetardStep;  // deg per knock event (per cylinder, via the crank-angle window)
+    float knockMaxRetard;   // deg
+    float knockRecover;     // deg per second back towards the map
+    float knockMinRpm;
+
+    // ---- idle / throttle / limiter
+    Curve1D idleTarget;  // rpm over coolant C
+    float idleKp, idleKi, idleKd;          // idle valve PID (fraction per rpm of error / rpm s / rpm per s)
+    float idleSparkGain, idleSparkMin, idleSparkMax;   // idle spark control deg per rpm of error, limits
+    Curve1D dbwMap;      // drive-by-wire: throttle % over pedal %
+    float softLimitBand; // rpm below the hard limiter where the soft limiter starts (0 = off)
+    float softLimitRetard;  // deg of retard at the hard limit
+    float softLimitCut;     // fraction of sparks cut at the hard limit (0..1)
+
+    // ---- boost control (turbo)
+    int32_t boostControl;   // 0: wastegate spring only, 1: ECU closed loop on a solenoid
+    Table2D boostTarget;    // bar gauge over rpm x TPS
+    Curve1D boostGear;      // % of the target over gear (0 = neutral)
+    float boostKp, boostKi, boostKd;   // duty per bar of error / bar s / bar per s
+    float wgDutyMax;        // 0..1
+    float overboostMargin;  // bar above target ...
+    float overboostTime;    // ... for this long -> fuel cut until back at target
+    float boostCutBar;      // bar gauge: instant fuel cut above this
+
+    // ---- protection
+    ProtRule prot[kProtCount];
+    float limpThrottle;     // % max throttle in limp mode / throttle limitation
+    float limpRpm;          // rpm cap in limp mode / fuel limitation
+    float protRetard;       // deg of retard for the retard action / limp mode
 };
 
 // table identities (UI / files)
-enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalTableCount };
-enum CalCurveId : int { kCalCrankAfr, kCalWarmup, kCalAccel, kCalIatFuel, kCalIatSpark, kCalEctSpark, kCalDeadTime, kCalCurveCount };
+enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalLtft, kCalBoostTarget, kCalTableCount };
+enum CalCurveId : int { kCalCrankAfr, kCalWarmup, kCalAccel, kCalIatFuel, kCalIatSpark, kCalEctSpark, kCalDeadTime,
+                        kCalIdleTarget, kCalDbwMap, kCalBoostGear, kCalCurveCount };
 struct TableInfo { const char* key; const char* name; const char* xName; const char* yName; const char* unit; float lo, hi; float step; };
 const TableInfo& calTableInfo(int id);
 const TableInfo& calCurveInfo(int id);
@@ -72,5 +129,10 @@ struct CellWeights { int ix0, ix1, iy0, iy1; float wx, wy; };   // bilinear: (1-
 CellWeights tableWeights(const Table2D& t, double x, double y);
 double tableLookup(const Table2D& t, double x, double y);
 double curveLookup(const Curve1D& c, double x);
+
+// protection metadata (UI / files / validation)
+struct ProtInfo { const char* key; const char* name; const char* unit; bool high; float lo, hi; };
+const ProtInfo& protInfo(int id);
+const char* protActionName(int a);
 
 } // namespace es

@@ -112,6 +112,8 @@ int main() {
         for (int tiny = 0; tiny < 2; ++tiny) {
             EngineParams p = makeCalibratedPreset(0);
             if (tiny) p.comp.fuelPumpLph = 22;
+            // this checks the physics: no protection may step in (low fuel pressure / lean would limit the throttle)
+            p.cal.prot[kProtFuelPress].enabled = 0; p.cal.prot[kProtLean].enabled = 0;
             Simulator sim(p); startIdle(sim, p, 1.0);
             p.throttle = 1; p.dynoMode = DynoMode::Hold; p.dynoHoldRpm = 6000; sim.setParams(p); run(sim, 3.0);
             Telemetry t = tel(sim);

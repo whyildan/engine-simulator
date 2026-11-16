@@ -49,6 +49,18 @@ struct Telemetry {
     // ECU calibration as the ECU holds it (auto-tune learns into the VE maps) + operating point
     Table2D calVeMap{}, calVeTps{};
     int learnSeq = 0;
+    // Phase 3: trims, knock control, boost control, idle / throttle, protection
+    Table2D calLtft{};
+    int ltftSeq = -1;
+    float ecuStft = 0, ecuLtft = 0;
+    float knockRetard[kMaxCyl] = {};
+    int knockEvents = 0;
+    float boostTargetBar = 0, ecuBoostBar = 0, wgDuty = -1;
+    bool overboostCut = false, boostCut = false;
+    float idleTarget = 0, throttleTarget = -1, cutFraction = 0, wastegatePos = 0;
+    int protState[kProtCount] = {};
+    float protValue[kProtCount] = {};
+    bool limp = false, shutdown = false, throttleLimited = false;
     float ecuVe = 0, ecuLoadX = 0, ecuLoadY = 0, ecuTps = 0, ecuAccel = 0, ecuAirMg = 0;
     bool tuning = false;
     float throttle = 0;
@@ -81,6 +93,9 @@ public:
     void setPaused(bool on) { paused_.store(on); }
     bool paused() const { return paused_.load(); }
     void requestReset() { resetReq_.fetch_add(1); }
+    // tests / tools only (same thread as render): the running engine
+    const Engine* engineForTests() const { return eng_.get(); }
+    void requestClearProtection() { protClearReq_.fetch_add(1); }   // e.g. un-latch an engine shutdown
     int activeIR() const { return irActive_; }
 
 private:
@@ -118,6 +133,8 @@ private:
     std::atomic<bool> paused_{false};
     std::atomic<int> resetReq_{0};
     int resetSeen_ = 0;
+    std::atomic<int> protClearReq_{0};
+    int protClearSeen_ = 0;
     std::thread thread_;
     std::atomic<bool> run_{false};
     float lastL_ = 0, lastR_ = 0;

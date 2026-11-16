@@ -1,243 +1,229 @@
-# EngineSim — real-time engine simulator (C++)
+<div align="center">
 
-An internal-combustion engine simulator with per-cylinder physics, sound **generated from the physics**
-(pressure waves in the exhaust and intake), a dyno, and an ECU tuning platform. Everything is configured
-**live inside the application while the engine is running** (no config files). Both **piston** and
-**Wankel rotary** engines are supported.
+# EngineSim
+
+**A real-time internal-combustion engine simulator — with sound that comes out of the physics and a full ECU tuning platform.**
+
+[![Release](https://img.shields.io/github/v/release/whyildan/engine-simulator?sort=semver)](https://github.com/whyildan/engine-simulator/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
+![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C)
 
 ![Virtual dyno: WOT sweep of the I6 3.0 preset](docs/images/dyno.png)
 
+</div>
+
+EngineSim simulates every cylinder (or every rotor face) of an engine in real time: gas exchange, combustion,
+heat, friction and the pressure waves in the intake and exhaust. The sound you hear is **not sampled** — it is
+the exhaust flow of the simulated engine, radiated from the tailpipe. Change the firing order, the header
+lengths or the rotary porting and the engine *sounds* different because it *is* different.
+
+On top sits an ECU that only sees virtual sensors and runs on editable calibration maps, like real tuning
+software: VE / lambda / ignition tables, closed-loop fuel trims, knock control, boost control, engine
+protection, a virtual dyno and a calibration manager. Everything is changed **live, while the engine runs**.
+
+## Highlights
+
 | | |
 |---|---|
-| ![VE map editor with 3D surface](docs/images/ve-map-3d.png) | ![Live dashboard with gauges and cylinder pressure scope](docs/images/dashboard.png) |
-| *Fuel Tuning — VE map editor with operating point and 3D surface* | *Live Dashboard — gauges, readouts, cylinder pressure scope* |
-| ![Engine setup with animated cylinders](docs/images/engine-setup.png) | |
-| *Engine Setup — geometry, firing order, animated engine view* | |
+| 🔊 **Physics-based sound** | Waveguide intake / exhaust network, per-pipe gas temperature, impulse-response convolution, mechanical noise, afterfire pops. |
+| ⚙️ **Any layout** | Inline, V, boxer, 1–16 cylinders, odd-fire / big-bang, custom firing orders — and **Wankel rotaries** with 1–4 rotors and four porting styles. |
+| 🌀 **The rotary "brap"** | A bridge-ported 13B idles lumpy because exhaust floods back through the port overlap and the diluted charges misfire — modelled, not faked. |
+| 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control. |
+| 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
+| 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; Roots, twin-screw and centrifugal superchargers. |
+| 📈 **Virtual dyno** | WOT sweeps and steady-state holds, run comparison, live torque / power trace. |
+| 🚗 **Drive it** | Car or motorcycle as the load: manual / auto-clutch / automatic gearbox, clutch, tyre slip, 0–100 and 1/4-mile timers. |
+| 🧪 **Virtual sensors** | Lag, noise, 10-bit ADC, transport delay, faults (open / short / stuck / noisy) and the ECU's fallbacks. |
+| 💾 **Calibration manager** | JSON calibrations per engine, version history, compare, locks, validation. |
 
-## Build (Windows, MSVC 2019 + CMake)
+| | |
+|---|---|
+| ![VE map editor with 3D surface](docs/images/ve-map-3d.png) | ![Live dashboard](docs/images/dashboard.png) |
+| *Fuel Tuning — VE map with operating point and 3D surface* | *Live Dashboard — gauges, readouts, cylinder pressure scope* |
+| ![Engine setup](docs/images/engine-setup.png) | ![Engine protection](docs/images/protection.png) |
+| *Engine Setup — geometry, firing order, animated engine* | *Engine Protection — rules, live state, actions* |
 
-If CMake is not on your PATH, use the one bundled with Visual Studio:
+## Getting started
+
+**Download:** grab `EngineSim-<version>-win64.zip` from the [Releases](https://github.com/whyildan/engine-simulator/releases)
+page, unzip it anywhere and run `enginesim.exe` (Windows 10/11 x64, any DirectX 11 GPU). The release page also
+has short audio samples.
+
+Then: pick a preset in the header, press **START ENGINE** (or hold `S`), and use `W` / `Space` for throttle.
+The first start of each engine measures its base fuel map on a virtual dyno in the background (a few seconds,
+cached afterwards in `basemaps/` next to the exe).
 
 ```bash
-"/c/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe" -S . -B build -G "Visual Studio 16 2019" -A x64
+enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in the Virtual Dyno section
 ```
 
-```bash
-"/c/Program Files (x86)/Microsoft Visual Studio/2019/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe" --build build --config Release
-```
-
-Dependencies (Dear ImGui 1.90.9-docking, ImPlot 0.16, ImPlot3D 0.2, miniaudio 0.11.21) are downloaded
-automatically through FetchContent on the first configure.
-
-Run `build/Release/enginesim.exe`, or start directly with a given preset:
-`build/Release/enginesim.exe --preset 12` (13B rotary).
-
-## Controls
+### Controls
 
 | Key | Action |
 |---|---|
-| `S` (hold) | starter / crank (switches the ignition on automatically) |
-| `I` | ignition on/off |
-| `W` / `↑` (hold) | throttle (opens gradually, release = closes) |
-| `Space` (hold) | full throttle (WOT) |
-| `1`…`9`, `0` | fixed throttle 10 %…90 %, 100 % |
-| `↓` | release throttle |
-| `D` | run a dyno sweep |
-| `L` | change listener position (tailpipe / engine bay / cabin) |
-| `V` | driving mode on/off (car as the load) |
-| `E` / `Q` | shift up / down (automatic: `E` = D, `Q` = N) |
-| `N` | neutral |
-| `C` (hold) | clutch pedal down (released slowly, ~0.4 s) |
-| `B` / `↓` (hold) | brake |
+| `S` (hold) | starter (switches the ignition on) |
+| `I` | ignition on / off |
+| `W` / `↑` (hold) | throttle (opens gradually) · `Space` (hold) full throttle |
+| `1`…`9`, `0` | fixed throttle 10 %…90 %, 100 % · `↓` release |
+| `D` | dyno sweep |
+| `L` | listener: tailpipe / engine bay / cabin |
+| `V` | driving mode (car as the load) |
+| `E` / `Q` | shift up / down · `N` neutral · `C` (hold) clutch · `B` brake |
 
-The **START ENGINE** button cranks until the engine runs on its own.
+### Presets
 
-### Layout
+| # | Engine | # | Engine |
+|---|---|---|---|
+| 0 | I4 2.0 EFI (hatchback) | 12 | Rotary 13B 2-rotor |
+| 1 | I3 1.0 EFI | 13 | Rotary 20B 3-rotor (street port) |
+| 2 | I6 3.0 EFI | 14 | Rotary 26B 4-rotor (peripheral port race) |
+| 3 | V6 3.5 EFI | 15 | Rotary 1-rotor carb |
+| 4 | V8 5.7 crossplane carb | 16 | I4 2.0 turbo (hot hatch) |
+| 5 | V8 4.5 flatplane EFI | 17 | V8 6.2 Roots blower |
+| 6 | V10 5.2 EFI | 18 | Rotary 13B turbo |
+| 7 | V12 6.0 EFI | 19 | I6 3.0 big single turbo + anti-lag |
+| 8 | Flat-4 2.5 boxer (unequal headers) | 20 | V6 3.5 centrifugal supercharger |
+| 9 | V-twin 1.6 45° carb | 21 | I5 2.5 EFI |
+| 10 | Single 0.5 thumper carb | 22 | Flat-6 3.6 boxer |
+| 11 | I4 1.6 ITB race | 23 | **Rotary 13B bridge port (brap idle)** |
 
-The header at the top is always visible: ignition, START ENGINE, crank, throttle, preset selection, and the
-main readouts (RPM, MAP, AFR, timing, boost, EGT, torque, gear). On the left is a 12-section navigation in the
-style of ECU software: Engine Setup, ECU Setup, Fuel Tuning, Ignition Tuning, Boost Control, Engine Control,
-Sensor Configuration, Engine Protection, Live Dashboard, Data Logging, Virtual Dyno, Calibration Manager.
-Dimmed sections are not built yet and only describe what is planned (see [docs/ECU_PLAN.md](docs/ECU_PLAN.md)).
-`build/Release/enginesim.exe --section 11` opens a given section directly (1–12).
+## Building from source
 
-## What can be configured (all in real time)
-
-- **Engine**: Piston / Rotary engine type; Inline / V / Boxer layout, 1–16 cylinders, bank angle, bore, stroke,
-  conrod length, compression, flywheel inertia, **firing order** (reorder with arrows), even firing or
-  **free per-cylinder phasing** (odd-fire V-twin, big-bang), and the left/right exhaust bank split.
-- **Valvetrain**: number and diameter of valves, cam duration, lift, centerline/LSA, cam advance (VVT),
-  valve lash, plus a valve lift + overlap graph.
-- **Ignition**: base / mechanical / vacuum advance, rev limiter (ignition cut = pops, fuel cut).
-- **Fuel & Intake**: **EFI** (port / throttle-body, injector size, target AFR, tuned vs untuned ECU, idle target)
-  or a **carburettor** (barrels, venturi, main jet, idle mixture, idle screw, accelerator pump, choke);
-  throttle body, ITBs, plenum volume, runner length/diameter, air filter.
-- **Exhaust**: log manifold / N-into-1 header / tri-Y 4-2-1, primary length (equal or different per cylinder —
-  "boxer rumble"), diameter, collector, crossover (true dual / H-pipe / X-pipe / Y), catalytic converter,
-  resonator, muffler (straight / glasspack / chambered / turbo), tailpipe.
-- **Sound style** (Audio tab): *Smooth* (default, engine-sim style: the main signal is the exhaust pulse
-  pressure, band-limited by a 4th-order *Smoothing* low-pass, with subtle air noise, then shaped by an impulse
-  response) or *Raw* (the original model: tailpipe flow radiation only, no extra layers, no IR, identical
-  cylinders). *Pulse pressure mix* sets the share of pulse pressure (round, full) vs flow radiation (brighter).
-- **Audio**: listener position, volume, physics oversampling, *Rasp* (jet turbulence noise at the tailpipe,
-  strength ∝ gas velocity², frequency following Strouhal 0.3·v/D), *Punch* (low-frequency pulse pressure
-  component), *Wave steepening* (optional, off by default: high-pressure pulses travel faster and sharpen —
-  adds bite but also roughness), and *Environment* (open road / garage / dyno cell / tunnel, feedback-delay-network
-  reverb) + reverb amount. The air-noise idea and the pressure/derivative mix are inspired by
-  [engine-sim](https://github.com/ange-yaghi/engine-sim), but derived from the simulated flow.
-- **Impulse response (convolution)**: the exhaust sound is passed through an IR with a partitioned FFT
-  convolution (256-sample latency). Choices: *Auto* (matches the muffler / bike), *Raw pipe*, *Sport*,
-  *Stock muffler*, *Race*, *Motorcycle* (procedural: dense early reflections, a decaying tail, a muffler body
-  resonance), or **Load WAV...** for your own IR (PCM 16/24/32-bit / float, resampled automatically).
-  IRs from engine-sim's `ir_lib` (MIT license) can be used — keep their license notice.
-- **Imperfection** (Engine tab): small differences between cylinders (port flow, injector, timing, combustion,
-  primary length; zero on average) + cycle-to-cycle variation, so the sound is not sterile like a perfect engine.
-- **Components (Engine Setup → Components)**: every part has a physical effect.
-  - *Piston / connecting rod / crankshaft*: material and mass set the extra inertia and the **safe rpm limit**
-    (inertia forces vs the weakest part's strength); piston ring tension adds friction.
-  - *Lifters + valve springs*: moving mass vs spring force sets the **valve float** rpm. Above it the valves
-    close late and bounce: torque drops, misfires. Stiffer springs = more friction.
-  - *Throttle body*: cable or drive-by-wire (motor response time); *injectors* (flow rate + dead time).
-  - *Coil* (distributor / wasted spark / coil-on-plug, energy, charge time) and *spark plugs* (heat range, gap):
-    too little spark energy = misfire. Plug too hot = pre-ignition/knock, too cold + rich = fouling.
-  - *Oil / water pump*: oil pressure vs rpm (Oil lamp in the header) and drive power (friction).
-  - **Allow mechanical failure** option: overloaded parts, heavy knock, or valves hitting pistons accumulate
-    damage until the engine fails and seizes (*Repair engine* button).
-  - *Size parts to this engine* picks parts that are safe for the current rev limiter. Raising the limiter
-    without changing parts can cause valve float or a failure.
-- **Separate ECU + virtual sensors**: the ECU (*ECU Setup*) only reads sensors (TPS, pedal, MAP, MAF, IAT, ECT,
-  narrowband O2, wideband, CKP, CMP, knock, EGT, oil pressure & temperature, fuel pressure, speed, gear,
-  battery). The ECU loop rate is adjustable (100–5000 Hz). *Sensor Configuration* shows the true value vs what
-  the ECU reads, signal voltage and status, and lets you set noise, lag and faults (open, short, stuck, noisy).
-  The ECU detects out-of-range signals and uses fallbacks (MAP failure → estimate from throttle opening, CKP lost
-  → engine stops, CMP lost → batch fire). A *stuck* sensor goes undetected, just like the real thing.
-- **Thermal model**: coolant, oil and intake air temperatures; thermostat, radiator (vehicle speed + fan), water
-  pump. Cold oil = more friction; cold port walls = more fuel film and some fuel not evaporating. **Cold start**
-  option (ECU Setup): the ECU uses cranking/warm-up enrichment and fast idle; carburettors use an automatic choke
-  + fast-idle cam.
-- **Fuel supply & electrics**: rail pressure from pump + regulator (manifold-referenced or returnless); an
-  undersized pump = falling pressure = lean mixture; battery voltage (drops while cranking, alternator when
-  running) affects injector dead time.
-- **ECU calibration (tables)**: *Fuel Tuning* and *Ignition Tuning* hold the VE maps (speed density and
-  alpha-N), target lambda, ignition, enrichment / correction curves, injector data, per-cylinder trims, and the
-  load mode (SD / alpha-N / MAF / hybrid). Table editor: colour-coded grid with operating point + trail,
-  keyboard (arrows, digits, +/−, Ctrl+C/V/Z/Y), interpolation, smoothing, lock, diff, and a 3D surface. The base
-  VE map is measured automatically on a virtual dyno (in the background, cached in `basemaps/`); wideband
-  auto-tune can refine it.
-- **Calibration Manager**: save / load / duplicate / delete / import / export calibrations (JSON in
-  `calibrations/<engine>/`), version history + restore, notes, compare with other versions, map locks, validation.
-- **Pause / Resume / Reset** in the header (reset = a new engine at rest, cold or warm).
-- **Rotary engines (Wankel, Mazda style)**: choose *Engine type → Rotary (Wankel)*. Set the number of rotors
-  (1–4), generating radius R, eccentricity e, rotor width B, compression, and apex seal wear. The **Ports** tab
-  (replacing Valvetrain) sets intake & exhaust port open/close (eccentric shaft degrees), port area, and porting
-  presets: *stock side port*, *street port*, *bridge port* (brap-brap idle), *peripheral port* (racing).
-  Presets: 13B 2-rotor, 20B 3-rotor, 26B 4-rotor peripheral port, 1-rotor carburetted.
-
-- **Forced induction (Boost tab)**: *Turbocharger* — compressor size, turbine A/R (lag vs top end), rotor
-  inertia, wastegate (target boost), blow-off valve (no BOV = "stu-tu-tu" surge flutter), anti-lag ALS (bangs
-  off throttle). *Supercharger* — Roots, twin-screw (instant boost + characteristic whine), or centrifugal
-  (boost rising with rpm), blower size, pulley ratio, bypass valve. Shared: intercooler + efficiency, charge pipe
-  volume, ignition retard per bar, AFR under boost, injector size. A compressor map shows the real-time operating
-  point. Presets: I4 2.0 turbo, V8 6.2 Roots blower, 13B rotary turbo, I6 big single turbo + anti-lag, V6
-  centrifugal supercharger.
-
-- **Vehicle & gearbox (Vehicle tab)**: a driving mode in which a car (or a motorcycle for small 1–2 cylinder
-  engines) is the engine's load. Transmission: *manual* (you work the clutch — dropping it at idle stalls the
-  engine, shifting without the clutch = a jolt), *manual with automatic clutch*, or *automatic* (shift points rise
-  with throttle, kickdown). Set 1–8 gears and their ratios, final drive, clutch capacity, mass, Cd×A, rolling
-  resistance, tyre radius & grip, weight on the driven wheels, road gradient. Includes a speedometer, gear
-  indicator, clutch slip / wheelspin lamps, and automatic 0–100 km/h and 1/4 mile timers.
-
-- **Scope**: besides cylinder pressure, P-V, per-cylinder and sound, there is a **Boost** tab (20-second graph of
-  boost/MAP, wastegate target, turbo/blower speed, throttle, wastegate, AFR) and a **Fuel map** tab (rpm × MAP
-  heatmap in the style of ECU tuning software: the VE table learned by the ECU, target AFR, plus measured AFR,
-  injector duty and ignition timing filled in as the engine passes through each cell; with operating point
-  and trail).
-
-Changes to pipe length/diameter "glide" smoothly; topology changes (number of cylinders/rotors, engine type,
-header type, muffler, etc.) rebuild the engine with a ~60 ms sound crossfade without stopping the engine.
-
-## Physics model (summary)
-
-- Each cylinder = a control volume (mass, energy, fuel & burned-gas fractions), slider-crank kinematics,
-  compressible orifice valve flow, **Wiebe** combustion with a duration depending on rpm/λ/residuals + cycle-to-cycle
-  variation, misfire, Woschni heat transfer, knock index.
-- Intake & exhaust = a **digital waveguide network** (bidirectional delay lines, frequency-dependent losses,
-  N-way scattering junctions, open ends that radiate sound). The exhaust sound = the derivative of volume flow
-  at the tailpipe exit (monopole), so firing order, banks, header length and muffler change the sound directly.
-- The gas in each pipe has its own temperature (primaries hottest, cooling towards the tailpipe) that follows
-  EGT: speed of sound and impedance change with it, so resonances shift with load. Large-amplitude waves can be
-  made to steepen (optional, travel time ~ 1 − k·p, shifted slowly so it does not buzz).
-- Structure-borne sound: resonance modes of the oil pan, block and cylinder head (frequencies scale with bore)
-  excited by combustion pressure rise, pops and valve seating. Cabin: 4th-order Butterworth low-pass (~800 Hz)
-  and cabin-mode boom at 85 Hz / 176 Hz. These ideas are inspired by ICEsim (Agent00PED, MIT).
-- Crank: inertia, FMEP friction, starter, idle air control + dashpot (EFI), DFCO, afterfire/pops.
-- Dyno: PI absorber (hold rpm) or WOT sweep recording torque & power curves (comparable between runs).
-
-### Rotary model
-
-Each rotor has 3 chambers; one 4-stroke cycle per chamber = 1080° of eccentric shaft, with volume
-`V = Vc + Vd/2·(1 − cos(2θ/3))` and `Vd = 3√3·R·e·B`. Each rotor fires once per shaft revolution (rotors phased
-360/N° apart). Ports are opened/closed by the rotor flanks (no valves); the long, thin combustion chamber makes
-combustion slower and heat loss larger; worn apex seals leak gas into the neighbouring chamber. Displacement is
-quoted Mazda style (13B = 1.3 L), but the engine "breathes" like a 2.6 L four-stroke.
-
-### Forced induction model
-
-- Centrifugal compressor (turbo & centrifugal supercharger): a simple map per speed line (PR falling from the
-  surge limit to choke), efficiency depending on the operating point, outlet temperature from adiabatic
-  compression then the intercooler. Flow reverses during surge.
-- Turbine: an orifice between the exhaust manifold node and the downpipe, power from the expansion of hot gas
-  (EGT); the turbo shaft is integrated as (turbine power − compressor power) / inertia → natural turbo lag.
-- Roots / twin-screw: a fixed volume pump per revolution minus leakage, driven by the crank (torque load).
-- ECU: AFR enrichment and timing reduction with boost; knock becomes easier at high pressure.
-
-### Vehicle model
-
-The clutch = a friction element with a *locked* state (torsional spring + damping, so there is driveline shunt)
-and a *slipping* state (torque = capacity × engagement). The gearbox multiplies wheel speed to the input shaft;
-the driven wheels have their own inertia and the tyres use a Pacejka-like slip curve (peak at ~18 % slip,
-~75 % grip when spinning), so wheelspin happens naturally. Car body: mass, rolling resistance, aerodynamic drag
-½ρCdAv², gradient, brakes. Clutch torque is fed back to the crank (it can also drive the engine: engine braking,
-push starts).
-
-## License
-
-MIT — see [LICENSE](LICENSE). Third-party libraries fetched at build time keep their own licenses
-(Dear ImGui, ImPlot, ImPlot3D: MIT; miniaudio: public domain / MIT-0).
-
-## Headless test tools
+Requirements: Windows, Visual Studio 2019 or newer (MSVC, C++17), CMake ≥ 3.16. Dependencies — Dear ImGui
+1.90.9-docking, ImPlot 0.16, ImPlot3D 0.2, miniaudio 0.11.21 — are fetched automatically on the first configure.
 
 ```bash
-build/Release/sim_tests.exe          # sanity: masses, WOT torque (I4/V8/single), idle
+cmake -S . -B build -G "Visual Studio 16 2019" -A x64
 ```
 
 ```bash
-build/Release/sim_tests.exe survey   # all presets: start, idle, blip, return to idle
+cmake --build build --config Release
+```
+
+If CMake is not on your PATH, use the one bundled with Visual Studio
+(`…/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe`). The app is `build/Release/enginesim.exe`.
+
+## The application
+
+A fixed header (ignition, START ENGINE, throttle, preset, RPM / MAP / AFR / timing / boost / EGT readouts and
+warning lamps) and a 12-section navigation in the style of ECU software:
+
+1. **Engine Setup** — geometry, valvetrain / rotary ports, exhaust, vehicle, sound, components
+2. **ECU Setup** — loop rate, cold start, simulation pause / reset
+3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, base map
+4. **Ignition Tuning** — ignition map, corrections, knock control, per-cylinder trims
+5. **Boost Control** — turbo / supercharger hardware, ECU boost control
+6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter
+7. **Sensor Configuration** — true vs measured values, noise, lag, fault injection
+8. **Engine Protection** — protection rules, limp mode, shutdown
+9. **Live Dashboard** — gauges, readouts, scopes (pressure, P-V, boost, fuel map, sound)
+10. **Data Logging** — *planned*
+11. **Virtual Dyno** — sweeps, holds, run comparison
+12. **Calibration Manager** — files, versions, compare, validation
+
+<details>
+<summary><b>Everything you can configure (all live)</b></summary>
+
+- **Engine**: piston / rotary; inline / V / boxer; 1–16 cylinders, bank angle, bore, stroke, rod, compression,
+  flywheel, **firing order**, even firing or **free per-cylinder phasing** (odd-fire V-twin, big-bang), exhaust
+  bank split.
+- **Valvetrain**: valves and diameters, cam duration, lift, centerline / LSA, cam advance (VVT), lash, with a
+  valve lift / overlap graph.
+- **Fuel & intake**: EFI (port / throttle body, injector size and dead time) or a carburettor (barrels, venturi,
+  jets, idle screw, accelerator pump, choke); throttle body or ITBs, plenum, runners, air filter.
+- **Exhaust**: log manifold / N-into-1 / tri-Y headers, per-cylinder primary lengths ("boxer rumble"),
+  collector, true dual / H / X / Y crossover, cat, resonator, muffler type, tailpipe.
+- **Sound**: *Smooth* (engine-sim style: exhaust pulse pressure + band limit + air noise + impulse response) or
+  *Raw* (pure tailpipe flow radiation); pulse pressure mix, rasp (jet noise), punch, optional wave steepening,
+  environment reverb (open road, garage, dyno cell, tunnel), impulse responses (built-in or **your own WAV**),
+  listener position (tailpipe / engine bay / cabin), *imperfection* (cylinder-to-cylinder and cycle-to-cycle
+  spread).
+- **Components** — every part has a physical effect: piston / rod / crank material and mass (inertia, safe rpm),
+  ring tension (friction), lifters and springs (**valve float**), throttle type, injectors, coils and plugs
+  (misfire, pre-ignition, fouling), oil and water pumps. Optional **mechanical failure** when parts are
+  overloaded, the engine knocks hard or valves hit pistons.
+- **Separate ECU + virtual sensors**: TPS, pedal, MAP, MAF, IAT, ECT, narrowband O2, wideband, CKP, CMP, knock,
+  EGT, oil pressure / temperature, fuel pressure, speed, gear, battery — with lag, noise, ADC, faults and
+  out-of-range fallbacks (MAP failure → alpha-N limp, CMP lost → batch fire, CKP lost → engine stops).
+- **Thermal, fuel supply, electrics**: coolant / oil / intake temperatures, thermostat, radiator and fan;
+  rail pressure from pump + regulator; battery and alternator (injector dead time follows the voltage).
+- **ECU calibration**: VE maps (speed density and alpha-N), target lambda, ignition, cranking / warm-up /
+  after-start / acceleration / DFCO-exit enrichments, IAT / ECT corrections, injector data, per-cylinder trims,
+  load mode SD / alpha-N / MAF / hybrid. The base VE map is **measured on a virtual motoring dyno** for every
+  engine (and again when you change its air path); wideband auto-tune refines it.
+- **ECU control loops**: STFT + learned LTFT table (learning conditions, limits), per-cylinder knock control via
+  a crank-angle knock window, idle target over coolant temperature with PID and idle spark control,
+  drive-by-wire pedal map, soft limiter (retard + partial spark cut), ECU boost control (target over rpm ×
+  throttle × gear, feed-forward + PID to a wastegate solenoid, overboost cut, boost cut).
+- **Engine protection**: over-rev, overboost, coolant / oil temperature, oil / fuel pressure, lean at load,
+  excessive knock, EGT, sensor failure — each with warning, limit, delay, recovery and an action (warning,
+  retard, boost reduction, throttle limit, fuel limit, limp mode, shutdown).
+- **Rotaries**: 1–4 rotors, R / e / B, compression, apex seal wear, port timing and area, porting presets
+  (stock side port, street port, **bridge port**, peripheral port).
+- **Forced induction**: turbo (compressor size, turbine A/R, inertia, wastegate, BOV, anti-lag) or supercharger
+  (Roots, twin-screw, centrifugal; size, pulley, bypass), intercooler, live compressor map.
+- **Vehicle**: gears and ratios, final drive, clutch, mass, Cd·A, rolling resistance, tyres and grip, gradient.
+
+Pipe length / diameter changes glide smoothly; topology changes (cylinders, engine type, header type …)
+rebuild the engine with a short sound crossfade, without stopping it.
+
+</details>
+
+<details>
+<summary><b>How it works — the physics</b></summary>
+
+- **Cylinders**: control volumes (mass, energy, fuel and burned-gas fractions), slider-crank kinematics,
+  compressible orifice flow through the valves, **Wiebe** combustion whose duration depends on rpm, λ and
+  residual gas, cycle-to-cycle variation, misfire (lean, rich, dilution, weak spark, fouled plug), Woschni heat
+  transfer, end-gas knock index.
+- **Intake & exhaust**: a **digital waveguide network** — bidirectional delay lines with frequency-dependent
+  losses, N-way scattering junctions, gas composition carried along each pipe, and open ends that radiate. Each
+  pipe has its own gas temperature following the EGT, so resonances move with load.
+- **Sound**: the tailpipe flow radiates as a monopole; the *Smooth* chain adds the exhaust pulse pressure and
+  band-limits it, then an impulse response supplies the muffler / body timbre. Structure-borne noise comes from
+  block and head resonance modes excited by combustion, valve seating and pops; the cabin listener hears it
+  through a low-pass and cabin booms.
+- **Rotary**: three chambers per rotor, 1080° cycle, `V = Vc + Vd/2·(1 − cos(2θ/3))`, `Vd = 3√3·R·e·B`, ports
+  opened by the rotor flanks, slow long-chamber combustion, apex seal leakage. A big port overlap lets exhaust
+  revert into the intake at idle; the diluted charges misfire, the next one fires on fresh charge and the
+  unburned mixture pops in the exhaust — the "brap brap" of a ported rotary.
+- **Forced induction**: centrifugal compressor maps with surge and choke, turbine power from the exhaust energy,
+  shaft dynamics (natural lag), positive-displacement blowers with leakage, intercooler.
+- **ECU**: a separate controller at its own loop rate (100–5000 Hz) that only reads the sensor layer;
+  injection by crank angle, X-tau wall-film compensation, asynchronous tip-in fuel.
+- **Vehicle**: friction clutch with stick / slip, gearbox, wheel inertia, Pacejka-like tyre slip curve,
+  aerodynamic drag, gradient, brakes — clutch torque feeds back into the crank (engine braking, push starts).
+
+More detail on the ECU platform and its roadmap: [docs/ECU_PLAN.md](docs/ECU_PLAN.md).
+
+</details>
+
+<details>
+<summary><b>Headless test & analysis tools</b></summary>
+
+```bash
+build/Release/sim_tests.exe survey   # every preset: start, idle, blip, return to idle
 ```
 
 ```bash
-build/Release/sim_tests.exe fuzz 120 # random live parameter changes (incl. piston<->rotary), checks for NaN
+build/Release/sim_tests.exe fuzz 300 # random live parameter changes, checks for NaN / runaway states
 ```
 
 ```bash
-build/Release/sim_tests.exe 12       # WOT torque table for preset 12 (13B)
+build/Release/control_test.exe      # fuel trims, knock control, soft limiter, idle / DBW, boost control, protection
 ```
 
 ```bash
-build/Release/ecu_test.exe          # sensors (lag, ADC, faults), ECU fallbacks, closed loop, thermal, fuel pump, ECU rate
+build/Release/ecu_test.exe          # sensors, ECU fallbacks, closed loop, thermal, fuel pump, ECU rate
 ```
 
 ```bash
-build/Release/cal_test.exe          # calibration files: JSON round trip for all presets, validation, diff, version history
+build/Release/cal_test.exe          # calibration files: JSON round trip, validation, diff, version history
 ```
 
 ```bash
-build/Release/parts_test.exe        # physical effect of each component (valve float, friction, coil, plugs, DBW, dead time, damage, oil)
-```
-
-```bash
-build/Release/sim_tests.exe parts    # default part characteristics per preset (safe rpm, valve float, spark energy)
+build/Release/parts_test.exe        # physical effect of each component
 ```
 
 ```bash
@@ -245,13 +231,41 @@ build/Release/drive_test.exe 0       # driving: automatic, manual + auto clutch,
 ```
 
 ```bash
-build/Release/silence_probe.exe      # every preset must be silent with the engine off (checks for false hum)
+build/Release/idle_hold.exe 30       # every preset idles 30 s on its own - reports any stall
 ```
 
 ```bash
-build/Release/render_wav.exe 12 13b.wav   # render a preset's driving cycle to WAV
+build/Release/silence_probe.exe      # every preset must be silent with the engine off
 ```
 
 ```bash
-python tools/analyze_wav.py 13b.wav 2.6 3.4 900   # level + spectral peaks (engine orders)
+build/Release/render_wav.exe 23 brap.wav idle=8   # record 8 s of warm idle to WAV
 ```
+
+```bash
+python tools/analyze_wav.py brap.wav 0 8 900       # level + spectral peaks (engine orders)
+```
+
+</details>
+
+## Roadmap
+
+- [x] Phase 1 — ECU-style UI, component catalogue, separate ECU with virtual sensors, thermal model
+- [x] Phase 2 — calibration tables, table editor, measured base maps, calibration manager
+- [x] Phase 3 — closed-loop trims, knock control, idle / DBW, ECU boost control, engine protection
+- [ ] Phase 4 — configurable dashboard, data logging with CSV export, dyno export
+- [ ] Phase 5 — launch control, 2-step / 3-step, flat shift, traction control, nitrous
+- [ ] Phase 6 — loadable compressor / turbine maps, refined thermal and dyno models
+
+## Acknowledgements
+
+The *Smooth* sound chain (pulse pressure + air noise + impulse response) is inspired by
+[engine-sim](https://github.com/ange-yaghi/engine-sim) by Ange Yaghi; the per-pipe temperature zones,
+structure-borne modes and cabin model by [ICEsim](https://github.com/Agent00PED/ice-simulator). Both MIT.
+Built with [Dear ImGui](https://github.com/ocornut/imgui), [ImPlot](https://github.com/epezent/implot),
+[ImPlot3D](https://github.com/brenocq/implot3d) and [miniaudio](https://github.com/mackron/miniaudio).
+
+## License
+
+MIT — see [LICENSE](LICENSE). Third-party libraries keep their own licenses (Dear ImGui, ImPlot, ImPlot3D: MIT;
+miniaudio: public domain / MIT-0).

@@ -6,6 +6,7 @@
 #include "sim/EngineParams.h"
 #include <atomic>
 #include <string>
+#include <cstdint>
 
 namespace es {
 
@@ -21,6 +22,8 @@ bool measureBaseMap(const EngineParams& p, Calibration& out, BaseMapProgress* pr
 void setBaseMapCacheDir(const std::string& dir);
 bool loadCachedBaseMap(const EngineParams& p, Calibration& out);
 void saveCachedBaseMap(const EngineParams& p, const Calibration& c);
+// identity of everything the measured air depends on (changes -> the base map needs measuring again)
+uint64_t baseMapKey(const EngineParams& p);
 
 // preset with a measured base map (computed once per preset index per process, then cached)
 EngineParams makeCalibratedPreset(int idx);

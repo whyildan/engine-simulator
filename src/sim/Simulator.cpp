@@ -114,6 +114,10 @@ void Simulator::render(float* out, int frames) {
         vehicle_.reset();
         { int rc = dyno_.runCounter; dyno_ = Dyno(); dyno_.runCounter = rc; }
     }
+    if (protClearReq_.load() != protClearSeen_) {
+        protClearSeen_ = protClearReq_.load();
+        if (eng_) eng_->ecu.clearProtection();
+    }
     if (paused_.load()) {
         for (int f = 0; f < frames * 2; ++f) out[f] = 0.f;
         std::lock_guard<std::mutex> lk(telMx_);
@@ -224,6 +228,16 @@ void Simulator::render(float* out, int frames) {
     t.boostBar = (float)e.boost.boostBar; t.shaftRpm = (float)e.boost.shaftRpm; t.speedFrac = (float)e.boost.speedFrac;
     t.pr = (float)e.boost.pr; t.compFlow = (float)(e.boost.compFlow * 1000.0); t.wastegate = (float)e.boost.wastegate;
     t.chargeT = (float)(e.boost.chargeT - 273.15); t.fiPowerKw = (float)e.boost.powerKw;
+    if (t.ltftSeq != e.ecu.ltftSeq || t.calLtft.nx == 0) { t.calLtft = e.ecu.cal().ltft; t.ltftSeq = e.ecu.ltftSeq; }
+    t.ecuStft = (float)e.ecu.stft; t.ecuLtft = (float)e.ecu.ltftNow;
+    for (int i = 0; i < kMaxCyl; ++i) t.knockRetard[i] = (float)e.ecu.cmd.cylRetard[i];
+    t.knockEvents = e.ecu.knockEvents;
+    t.boostTargetBar = (float)e.ecu.boostTargetBar; t.ecuBoostBar = (float)e.ecu.boostBar; t.wgDuty = (float)e.ecu.cmd.wgDuty;
+    t.overboostCut = e.ecu.overboostCut; t.boostCut = e.ecu.boostCut;
+    t.idleTarget = (float)e.ecu.idleTargetNow; t.throttleTarget = (float)e.ecu.cmd.throttleTarget; t.cutFraction = (float)e.ecu.cmd.cutFraction;
+    t.wastegatePos = (float)e.boost.wastegate;
+    for (int i = 0; i < kProtCount; ++i) { t.protState[i] = e.ecu.protState[i]; t.protValue[i] = (float)e.ecu.protValue[i]; }
+    t.limp = e.ecu.limp; t.shutdown = e.ecu.shutdown; t.throttleLimited = e.ecu.throttleLimited;
     if (t.learnSeq != e.ecu.learnSeq || t.calVeMap.nx == 0) { t.calVeMap = e.ecu.cal().veMap; t.calVeTps = e.ecu.cal().veTps; t.learnSeq = e.ecu.learnSeq; }
     t.ecuVe = (float)e.ecu.veUsed; t.ecuLoadX = (float)e.ecu.loadX; t.ecuLoadY = (float)e.ecu.loadY; t.ecuTps = (float)e.ecu.tpsUsed;
     t.ecuAccel = (float)e.ecu.accel; t.ecuAirMg = (float)(e.ecu.airPerCyl * 1000.0); t.tuning = e.ecu.tuning;

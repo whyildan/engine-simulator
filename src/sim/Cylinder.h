@@ -109,10 +109,13 @@ struct Cylinder {
     double work = 0, imep = 0;            // J, Pa
     double trappedAir = 0, trappedFuel = 0, lambda = 1, ve = 0;
     double knock = 0, knockCycle = 0;
+    int cycles = 0;               // completed working cycles (the knock window counts per cycle)
     double egt = 800;
     double afterfireFuel = 0;             // unburned fuel sitting in the primary
     double popPending = 0;                // afterfire pressure still to be released (Pa)
     bool misfired = false;
+    double dilution = 0;                  // burned gas share of the charge at the spark (residual + reverted exhaust)
+    double burnEta = 1;                   // 1 fired, 0 misfired (diagnostics)
     bool valveSeatEvent = false;          // set on the step a valve closes (mechanical click)
     bool knockEvent = false;
 

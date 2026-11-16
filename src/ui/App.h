@@ -44,6 +44,12 @@ private:
     void sectionEcuSetup();
     void sectionFuelTuning();
     void sectionIgnitionTuning();
+    // Phase 3 (Control.cpp)
+    void tabFuelTrims();
+    void tabKnock();
+    void tabBoostControl();
+    void sectionEngineControl();
+    void sectionProtection();
     // calibration manager (CalManager.cpp)
     void sectionCalibrationManager();
     void calRefresh();
@@ -78,6 +84,13 @@ private:
     EngineParams bmFor_{};
     Calibration bmResult_{};
     Table2D bmVeBefore_{}, bmTpsBefore_{};
+    // the engine the current VE maps were measured for, and the maps as measured (untouched by the tuner?)
+    uint64_t bmKeyApplied_ = 0, bmKeySeen_ = 0;
+    Table2D bmVeApplied_{}, bmTpsApplied_{};
+    float bmKeyStable_ = 0;
+    bool bmStale_ = false;
+    void baseMapFollowEngine(float dt);
+    static uint64_t airPathKey(const EngineParams& p);
     std::string baseMapInfo_;
     void sectionSensors();
     int section_ = kLiveDashboard;
@@ -116,7 +129,7 @@ private:
     bool firstFrame_ = true;
     bool equalPrimaries_ = true;
     bool showDemo_ = false;
-    int learnSeen_ = -1;
+    int learnSeen_ = -1, ltftSeen_ = -2;
     float scopeZoom_ = 1;
     std::vector<float> fftMag_;
     std::vector<float> mapTrailX_, mapTrailY_;

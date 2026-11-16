@@ -164,7 +164,31 @@ const ScalarDef kScalars[] = {
     {"injector_flow", &Calibration::injFlow, nullptr},
     {"async_tip_in", nullptr, &Calibration::asyncTipIn},   {"auto_tune", nullptr, &Calibration::autoTune},
     {"closed_loop", nullptr, &Calibration::closedLoop},
+    // closed-loop lambda
+    {"stft_gain", &Calibration::stftGain, nullptr}, {"stft_limit", &Calibration::stftLimit, nullptr},
+    {"ltft_learn", nullptr, &Calibration::ltftLearn}, {"ltft_rate", &Calibration::ltftRate, nullptr},
+    {"ltft_limit", &Calibration::ltftLimit, nullptr}, {"cl_min_ect", &Calibration::clMinEct, nullptr},
+    {"cl_delay", &Calibration::clDelay, nullptr}, {"cl_max_map", &Calibration::clMaxMap, nullptr},
+    // knock control
+    {"knock_control", nullptr, &Calibration::knockControl}, {"knock_threshold", &Calibration::knockThreshold, nullptr},
+    {"knock_retard_step", &Calibration::knockRetardStep, nullptr}, {"knock_max_retard", &Calibration::knockMaxRetard, nullptr},
+    {"knock_recover", &Calibration::knockRecover, nullptr}, {"knock_min_rpm", &Calibration::knockMinRpm, nullptr},
+    // idle / throttle / limiter
+    {"idle_kp", &Calibration::idleKp, nullptr}, {"idle_ki", &Calibration::idleKi, nullptr}, {"idle_kd", &Calibration::idleKd, nullptr},
+    {"idle_spark_gain", &Calibration::idleSparkGain, nullptr}, {"idle_spark_min", &Calibration::idleSparkMin, nullptr},
+    {"idle_spark_max", &Calibration::idleSparkMax, nullptr},
+    {"soft_limit_band", &Calibration::softLimitBand, nullptr}, {"soft_limit_retard", &Calibration::softLimitRetard, nullptr},
+    {"soft_limit_cut", &Calibration::softLimitCut, nullptr},
+    // boost control
+    {"boost_control", nullptr, &Calibration::boostControl}, {"boost_kp", &Calibration::boostKp, nullptr},
+    {"boost_ki", &Calibration::boostKi, nullptr}, {"boost_kd", &Calibration::boostKd, nullptr},
+    {"wg_duty_max", &Calibration::wgDutyMax, nullptr}, {"overboost_margin", &Calibration::overboostMargin, nullptr},
+    {"overboost_time", &Calibration::overboostTime, nullptr}, {"boost_cut_bar", &Calibration::boostCutBar, nullptr},
+    // protection actions
+    {"limp_throttle", &Calibration::limpThrottle, nullptr}, {"limp_rpm", &Calibration::limpRpm, nullptr},
+    {"prot_retard", &Calibration::protRetard, nullptr},
 };
+const char* kActKeys[kActCount] = {"warn", "retard", "boost_reduce", "throttle_limit", "fuel_limit", "limp", "shutdown"};
 const char* kLoadModeNames[] = {"speed_density", "alpha_n", "maf", "hybrid"};
 
 bool readArr(const JVal* j, float* out, int maxN, int& n) {
@@ -208,6 +232,15 @@ std::string calibrationToJson(const Calibration& c, const CalMeta& m) {
     for (const ScalarDef& s : kScalars) o += "  \"" + std::string(s.key) + "\": " + num(s.f ? (double)(c.*(s.f)) : (double)(c.*(s.i))) + ",\n";
     o += "  \"cyl_fuel_trim\": " + arr(c.cylFuel, kCalMaxCyl) + ",\n";
     o += "  \"cyl_spark_trim\": " + arr(c.cylSpark, kCalMaxCyl) + ",\n";
+    o += "  \"protection\": {\n";
+    for (int i = 0; i < kProtCount; ++i) {
+        const ProtRule& r = c.prot[i];
+        o += "    \"" + std::string(protInfo(i).key) + "\": { \"enabled\": " + (r.enabled ? "true" : "false") +
+             ", \"warn\": " + num(r.warn) + ", \"limit\": " + num(r.limit) + ", \"delay\": " + num(r.delay) +
+             ", \"recover\": " + num(r.recover) + ", \"action\": \"" + kActKeys[std::clamp((int)r.action, 0, kActCount - 1)] + "\" }" +
+             (i + 1 < kProtCount ? ",\n" : "\n");
+    }
+    o += "  },\n";
     o += "  \"tables\": {\n";
     for (int i = 0; i < kCalTableCount; ++i)
         o += "    \"" + std::string(calTableInfo(i).key) + "\": " + tableJson(calTable(c, i), "    ") + (i + 1 < kCalTableCount ? ",\n" : "\n");
@@ -242,6 +275,19 @@ bool calibrationFromJson(const std::string& text, Calibration& c, CalMeta& m, st
     int k = 0;
     readArr(root.get("cyl_fuel_trim"), n.cylFuel, kCalMaxCyl, k);
     readArr(root.get("cyl_spark_trim"), n.cylSpark, kCalMaxCyl, k);
+    if (const JVal* pr = root.get("protection"))
+        for (int i = 0; i < kProtCount; ++i) {
+            const JVal* r = pr->get(protInfo(i).key);
+            if (!r || r->kind != JVal::Obj) continue;
+            ProtRule& d = n.prot[i];
+            if (const JVal* v = r->get("enabled")) d.enabled = v->b || v->num != 0;
+            if (const JVal* v = r->get("warn")) d.warn = (float)v->num;
+            if (const JVal* v = r->get("limit")) d.limit = (float)v->num;
+            if (const JVal* v = r->get("delay")) d.delay = (float)v->num;
+            if (const JVal* v = r->get("recover")) d.recover = (float)v->num;
+            if (const JVal* v = r->get("action"))
+                for (int a = 0; a < kActCount; ++a) if (v->str == kActKeys[a]) d.action = a;
+        }
     if (const JVal* t = root.get("tables"))
         for (int i = 0; i < kCalTableCount; ++i) readTable(t->get(calTableInfo(i).key), calTable(n, i));
     if (const JVal* t = root.get("curves"))
@@ -307,6 +353,24 @@ std::vector<CalIssue> validateCalibration(const Calibration& c, const EnginePara
     if (c.powerLambda < 0.65f || c.powerLambda > 1.0f) add(1, "Power enrichment lambda %.2f is unusual (0.78-0.9 typical)", c.powerLambda);
     if (c.hybridTpsHi <= c.hybridTpsLo && c.loadMode == LoadMode::Hybrid) add(2, "Hybrid load: TPS hi must be above TPS lo");
     if (c.powerTpsHi <= c.powerTpsLo) add(1, "Power enrichment: TPS hi must be above TPS lo");
+    if (c.stftLimit < 0 || c.stftLimit > 50 || c.ltftLimit < 0 || c.ltftLimit > 50) add(1, "Fuel trim limits beyond +-50 %% hide real problems");
+    if (c.knockControl && c.knockThreshold <= 0.2f) add(1, "Knock threshold %.2f is below the sensor noise floor - constant false retard", c.knockThreshold);
+    if (c.softLimitBand < 0 || c.softLimitBand > 2000) add(1, "Soft limiter band %.0f rpm is unusual (0-500 typical)", c.softLimitBand);
+    if (c.boostControl) {
+        if (p.induction != Induction::Turbo) add(1, "Boost control is on but the engine has no turbo - it does nothing");
+        float hi = 0;
+        for (int r = 0; r < c.boostTarget.ny; ++r) for (int q = 0; q < c.boostTarget.nx; ++q) hi = std::max(hi, c.boostTarget.v[r][q]);
+        if (hi >= c.boostCutBar) add(2, "Boost target %.2f bar reaches the boost cut (%.2f bar)", hi, c.boostCutBar);
+        if (p.induction == Induction::Turbo && hi < p.wastegateBar - 0.05f)
+            add(0, "Boost target %.2f bar is below the wastegate spring (%.2f bar): the ECU cannot hold it lower", hi, p.wastegateBar);
+    }
+    for (int i = 0; i < kProtCount; ++i) {
+        const ProtRule& r = c.prot[i];
+        if (!r.enabled) continue;
+        const ProtInfo& in = protInfo(i);
+        if (in.high ? r.warn > r.limit : r.warn < r.limit) add(1, "Protection '%s': warning %.4g is past the limit %.4g", in.name, r.warn, r.limit);
+        if (r.delay < 0 || r.recover < 0) add(2, "Protection '%s': negative delay / recovery", in.name);
+    }
     if (c.loadMode == LoadMode::Maf) add(0, "MAF load mode: fuel = measured air flow; VE maps are used only as a fallback");
     if (c.autoTune && (c.veMap.locked || c.veTps.locked)) add(0, "Auto-tune is on but a VE map is locked - the locked map is not learned");
     const int ncyl = std::clamp((int)p.cylinders, 1, kCalMaxCyl);
@@ -360,6 +424,12 @@ int diffScalars(const Calibration& a, const Calibration& b, std::vector<std::str
         double va = s.f ? (double)(a.*(s.f)) : (double)(a.*(s.i));
         double vb = s.f ? (double)(b.*(s.f)) : (double)(b.*(s.i));
         if (std::fabs(va - vb) > 1e-6) note(std::string(s.key) + ": " + num(va) + " -> " + num(vb));
+    }
+    for (int i = 0; i < kProtCount; ++i) {
+        const ProtRule &x = a.prot[i], &y = b.prot[i];
+        if (x.enabled != y.enabled || x.warn != y.warn || x.limit != y.limit || x.delay != y.delay || x.recover != y.recover || x.action != y.action)
+            note(std::string("protection ") + protInfo(i).key + ": " + (x.enabled ? "" : "(off) ") + num(x.limit) + " " + protActionName(x.action) +
+                 " -> " + (y.enabled ? "" : "(off) ") + num(y.limit) + " " + protActionName(y.action));
     }
     for (int i = 0; i < kCalMaxCyl; ++i) {
         if (a.cylFuel[i] != b.cylFuel[i]) note("cyl " + std::to_string(i + 1) + " fuel trim: " + num(a.cylFuel[i]) + " -> " + num(b.cylFuel[i]));
