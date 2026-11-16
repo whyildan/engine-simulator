@@ -5,3 +5,5 @@ calibrations/
 *.wav
 *.tmp
 .vs/
+build_p4/
+dashboard.cfg

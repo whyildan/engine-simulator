@@ -43,9 +43,9 @@ public:
     double cylSpark(int port) const { return port >= 0 && port < kCalMaxCyl ? cal_.cylSpark[port] : 0.0; }
 
     ActuatorCommands cmd;
+    static constexpr double kIacNominal = 0.35;
     bool holdIac = false;         // calibration run: idle valve held at its nominal opening
     double veOverride = 0;        // calibration run: VE % used instead of the speed density table (0 = off)
-    static constexpr double kIacNominal = 0.35;
     const Calibration& cal() const { return cal_; }
     int learnSeq = 0;            // bumps whenever auto-tune changed a VE table
     // diagnostics / telemetry

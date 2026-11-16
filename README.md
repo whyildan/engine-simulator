@@ -32,7 +32,9 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
 | 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; Roots, twin-screw and centrifugal superchargers. |
-| 📈 **Virtual dyno** | WOT sweeps and steady-state holds, run comparison, live torque / power trace. |
+| 📈 **Virtual dyno** | WOT sweeps and steady-state holds, before / after comparison with deltas, metric or imperial units, CSV export. |
+| 🗂️ **Data logging** | 43 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
+| 🎛️ **Custom dashboard** | Your own grid of gauges, digital readouts and bars with warning / alarm thresholds and a sensor status strip. |
 | 🚗 **Drive it** | Car or motorcycle as the load: manual / auto-clutch / automatic gearbox, clutch, tyre slip, 0–100 and 1/4-mile timers. |
 | 🧪 **Virtual sensors** | Lag, noise, 10-bit ADC, transport delay, faults (open / short / stuck / noisy) and the ECU's fallbacks. |
 | 💾 **Calibration manager** | JSON calibrations per engine, version history, compare, locks, validation. |
@@ -67,6 +69,7 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 | `W` / `↑` (hold) | throttle (opens gradually) · `Space` (hold) full throttle |
 | `1`…`9`, `0` | fixed throttle 10 %…90 %, 100 % · `↓` release |
 | `D` | dyno sweep |
+| `R` | data log: start / stop recording · `M` marker |
 | `L` | listener: tailpipe / engine bay / cabin |
 | `V` | driving mode (car as the load) |
 | `E` / `Q` | shift up / down · `N` neutral · `C` (hold) clutch · `B` brake |
@@ -117,9 +120,10 @@ warning lamps) and a 12-section navigation in the style of ECU software:
 6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter
 7. **Sensor Configuration** — true vs measured values, noise, lag, fault injection
 8. **Engine Protection** — protection rules, limp mode, shutdown
-9. **Live Dashboard** — gauges, readouts, scopes (pressure, P-V, boost, fuel map, sound)
-10. **Data Logging** — *planned*
-11. **Virtual Dyno** — sweeps, holds, run comparison
+9. **Live Dashboard** — gauges, readouts, scopes (pressure, P-V, boost, fuel map, sound) and a configurable
+   *Custom* dashboard (layout saved to `dashboard.cfg` next to the exe)
+10. **Data Logging** — record channels, markers, graphs vs time / rpm, CSV export / import, session compare
+11. **Virtual Dyno** — sweeps, holds, before / after comparison, Nm / kW or lb-ft / hp, CSV export
 12. **Calibration Manager** — files, versions, compare, validation
 
 <details>
@@ -156,6 +160,11 @@ warning lamps) and a 12-section navigation in the style of ECU software:
   a crank-angle knock window, idle target over coolant temperature with PID and idle spark control,
   drive-by-wire pedal map, soft limiter (retard + partial spark cut), ECU boost control (target over rpm ×
   throttle × gear, feed-forward + PID to a wastegate solenoid, overboost cut, boost cut).
+- **Data logging & dashboard**: pick channels and a rate (10 / 20 / 50 / 100 Hz of simulated time), add markers
+  (automatic ones on protection actions, limp mode and gear changes), up to 6 stacked graph panels with linked
+  zoom / pan over time or rpm, overlay a second session, export the channels you choose to CSV (with engine,
+  calibration name and revision in the header) and load CSV logs back. Custom dashboard widgets show any log
+  channel as a gauge, digital readout or bar with low / high warning and alarm thresholds.
 - **Engine protection**: over-rev, overboost, coolant / oil temperature, oil / fuel pressure, lean at load,
   excessive knock, EGT, sensor failure — each with warning, limit, delay, recovery and an action (warning,
   retard, boost reduction, throttle limit, fuel limit, limp mode, shutdown).
@@ -176,7 +185,9 @@ rebuild the engine with a short sound crossfade, without stopping it.
 - **Cylinders**: control volumes (mass, energy, fuel and burned-gas fractions), slider-crank kinematics,
   compressible orifice flow through the valves, **Wiebe** combustion whose duration depends on rpm, λ and
   residual gas, cycle-to-cycle variation, misfire (lean, rich, dilution, weak spark, fouled plug), Woschni heat
-  transfer, end-gas knock index.
+  transfer, end-gas knock index. The EGT sensor sees the gas after the exhaust port, which loses heat to the
+  port wall (Dittus–Boelter convection, pulsating-flow factor) — so a low-flow idle reads well below the
+  in-cylinder exit temperature.
 - **Intake & exhaust**: a **digital waveguide network** — bidirectional delay lines with frequency-dependent
   losses, N-way scattering junctions, gas composition carried along each pipe, and open ends that radiate. Each
   pipe has its own gas temperature following the EGT, so resonances move with load.
@@ -227,6 +238,18 @@ build/Release/parts_test.exe        # physical effect of each component
 ```
 
 ```bash
+build/Release/log_test.exe          # data logging: sampling, markers, CSV round trip
+```
+
+```bash
+build/Release/basemap_warm.exe 14   # measure every preset's base map in parallel (fills the cache)
+```
+
+```bash
+build/Release/egt_probe.exe         # EGT / spark / AFR per preset at idle, part load and WOT
+```
+
+```bash
 build/Release/drive_test.exe 0       # driving: automatic, manual + auto clutch, manual, clutch dump
 ```
 
@@ -253,7 +276,7 @@ python tools/analyze_wav.py brap.wav 0 8 900       # level + spectral peaks (eng
 - [x] Phase 1 — ECU-style UI, component catalogue, separate ECU with virtual sensors, thermal model
 - [x] Phase 2 — calibration tables, table editor, measured base maps, calibration manager
 - [x] Phase 3 — closed-loop trims, knock control, idle / DBW, ECU boost control, engine protection
-- [ ] Phase 4 — configurable dashboard, data logging with CSV export, dyno export
+- [x] Phase 4 — configurable dashboard, data logging with CSV export, dyno export
 - [ ] Phase 5 — launch control, 2-step / 3-step, flat shift, traction control, nitrous
 - [ ] Phase 6 — loadable compressor / turbine maps, refined thermal and dyno models
 

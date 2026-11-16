@@ -126,6 +126,8 @@ void App::keyboard(float dt) {
     if (sDown) { p_.starter = 1; starterKey = true; }
     else if (starterKey) { p_.starter = 0; starterKey = false; }
     if (ImGui::IsKeyPressed(ImGuiKey_D, false)) { p_.dynoMode = DynoMode::Sweep; p_.sweepRequest++; }
+    if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { if (logRec_ >= 0) logStop(); else logStart(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_M, false)) logMarker("marker");
     if (ImGui::IsKeyPressed(ImGuiKey_L, false)) { p_.listener = (ListenerPos)(((int)p_.listener + 1) % 3); }
 }
 
@@ -158,6 +160,10 @@ void App::pullDyno() {
             std::strncat(buf, b2, sizeof(buf) - std::strlen(buf) - 1);
         }
         r.label = buf;
+        r.engine = p_.name;
+        r.calName = calMeta_.name.empty() ? "(unsaved)" : calMeta_.name;
+        r.calRev = calMeta_.revision;
+        r.label += " | cal " + r.calName + " r" + std::to_string(r.calRev);
         const float* c = palette[runs_.size() % 8];
         r.color[0] = c[0]; r.color[1] = c[1]; r.color[2] = c[2]; r.color[3] = 1;
         runs_.push_back(r);
@@ -192,6 +198,7 @@ void App::frame(float dt) {
     recordOpTrail(dt);
     pollBaseMap();
     baseMapFollowEngine(dt);
+    logFrame();
 
     // auto start: crank until the engine runs on its own
     if (autoStart_) {

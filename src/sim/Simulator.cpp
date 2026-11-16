@@ -1,4 +1,5 @@
 #include "sim/Simulator.h"
+#include "sim/DataLog.h"
 #include <chrono>
 #include "audio/ImpulseResponses.h"
 
@@ -263,6 +264,32 @@ void Simulator::render(float* out, int frames) {
     t.scopePos = scopeW_;
     for (const DynoPoint& d : dyno_.newPoints) dynoPts_.push_back(d);
     dyno_.newPoints.clear();
+    // data logging (sim time, so the samples are evenly spaced whatever the UI frame rate)
+    simTime_ += (double)frames / kOutRate;
+    if (logOn_.load()) {
+        if (simTime_ >= nextLog_) {
+            const size_t n = (size_t)logChannelCount();
+            if (logTimes_.size() < 200000) {          // ~30 min at 100 Hz between UI pulls is plenty
+                logTimes_.push_back(simTime_);
+                logVals_.resize(logVals_.size() + n);
+                sampleChannels(t, logVals_.data() + logVals_.size() - n);
+            }
+            const double per = 1.0 / std::max(1.0, logRate_.load());
+            nextLog_ = std::max(nextLog_ + per, simTime_ - per);
+        }
+    } else nextLog_ = simTime_;
+}
+
+void Simulator::setLogging(bool on, double rateHz) {
+    logRate_.store(std::max(1.0, rateHz));
+    logOn_.store(on);
+}
+
+void Simulator::takeLogSamples(std::vector<double>& times, std::vector<float>& values) {
+    std::lock_guard<std::mutex> lk(telMx_);
+    times.insert(times.end(), logTimes_.begin(), logTimes_.end());
+    values.insert(values.end(), logVals_.begin(), logVals_.end());
+    logTimes_.clear(); logVals_.clear();
 }
 
 void Simulator::getTelemetry(Telemetry& out) {

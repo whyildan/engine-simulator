@@ -288,7 +288,7 @@ Tiap komponen dipilih dari katalog (plus opsi "custom") dan punya efek fisik yan
   memakai mix suara lebih serak (pulse pressure 0.1, punch 0.15) agar denyut tak rata itu tidak tertutup
   dentum rendah. 13B stock idle 1000 rpm (950 bisa mati setelah idle lama). Tes `idle_hold`.
 
-### Fase 4 – Monitoring
+### Fase 4 – Monitoring ✅ selesai
 - Dashboard yang bisa diatur: gauge analog/digital per channel, tata letak tersimpan, alarm dan indikator status sensor.
 - Data logging:
   - pilih channel dan laju, start/stop, marker event;
@@ -296,6 +296,26 @@ Tiap komponen dipilih dari katalog (plus opsi "custom") dan punya efek fisik yan
   - ekspor CSV;
   - bandingkan sesi, ditautkan ke versi kalibrasi.
 - Dyno: ekspor CSV, satuan imperial (HP = lb-ft × rpm / 5252), perbandingan sebelum dan sesudah tuning.
+
+Implementasi:
+- **Channel log** (`src/sim/DataLog.*`): 43 channel (key, nama, satuan, grup, getter dari telemetri). Sampel
+  diambil di thread simulator per blok render menurut waktu simulasi (10/20/50/100 Hz), jadi laju log tidak
+  bergantung pada frame rate UI. `LogSession` menyimpan mesin, nama + revisi kalibrasi, laju, dan marker.
+- **CSV**: baris header `# key: value` (sesi, mesin, kalibrasi, revisi, laju), baris `# marker: t, label`, lalu
+  kolom `time` + channel yang dipilih. Impor CSV menolak file yang bukan log EngineSim. Tes: `log_test`.
+- **UI Data Logging** (`src/ui/Logging.cpp`): Record `R`, marker `M`, marker otomatis saat aksi proteksi, limp
+  mode, dan ganti gigi; tabel sesi; overlay sesi pembanding; 1–6 panel grafik (ImPlot subplot, sumbu X
+  tertaut) terhadap waktu atau rpm; saat merekam grafik mengikuti 30 s terakhir, tombol Fit menampilkan sesi
+  penuh.
+- **Dashboard Custom** (`src/ui/Dashboard.cpp`): grid widget (gauge analog, digital, bar) untuk channel log
+  mana pun, ambang warning/alarm bawah dan atas (warna dan kedip), daftar alarm aktif, strip status sensor
+  (merah = ECU memakai nilai fallback). Tata letak disimpan ke `dashboard.cfg` di samping exe.
+- **Dyno**: Nm/kW atau lb-ft/hp, ekspor CSV per run, run baseline dengan grafik delta dan delta puncak;
+  label run memuat mesin dan revisi kalibrasi.
+- **EGT** (diperbaiki sebelum fase ini): sensor EGT kini membaca gas setelah port buang yang melepas panas ke
+  dinding port (Dittus–Boelter, faktor aliran berdenyut 1.8, panjang port 4·D, dinding = coolant + 120 K).
+  Idle turun dari 800–959 °C ke ±560–740 °C. Sisa selisih ke mesin asli (±300–550 °C) berasal dari pembakaran
+  idle yang lambat (CA50 ±30° ATDC); mempercepatnya membuat idle beberapa preset tidak stabil, jadi ditunda.
 
 ### Fase 5 – Motorsport
 - Launch control dan 2-step/3-step (pemotongan pengapian/bahan bakar + retard), flat shift (cut saat ganti gigi tanpa angkat gas).

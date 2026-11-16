@@ -147,7 +147,7 @@ void App::navBar() {
 bool App::sectionImplemented(int s) const {
     switch (s) {
     case kEngineSetup: case kEcuSetup: case kFuelTuning: case kIgnitionTuning: case kBoostControl: case kSensorConfig:
-    case kLiveDashboard: case kVirtualDyno: case kCalibrationManager: case kEngineControl: case kEngineProtection:
+    case kLiveDashboard: case kVirtualDyno: case kCalibrationManager: case kEngineControl: case kEngineProtection: case kDataLogging:
         return true;
     default: return false;
     }
@@ -223,7 +223,11 @@ void App::workArea() {
     case kEngineProtection: sectionProtection(); break;
     case kLiveDashboard: {
         beginSplit("##dash", 0.55f);
-        panelDashboard();
+        if (ImGui::BeginTabBar("dashkind")) {
+            if (ImGui::BeginTabItem("Gauges")) { panelDashboard(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Custom")) { panelCustomDash(); ImGui::EndTabItem(); }
+            ImGui::EndTabBar();
+        }
         splitNext("##dash_right");
         if (ImGui::BeginTabBar("dashtabs")) {
             if (ImGui::BeginTabItem("Scope")) { panelScope(); ImGui::EndTabItem(); }
@@ -233,14 +237,7 @@ void App::workArea() {
         endSplit();
         break;
     }
-    case kDataLogging: {
-        static const char* items[] = {
-            "Channel selection and logging rate, start / stop, event markers",
-            "Time- and rpm-based graphs with zoom / pan",
-            "CSV export, session comparison linked to calibration versions"};
-        plannedSection("Phase 4", items, 3, "Live Dashboard > Scope shows the last 20 s of boost, MAP, throttle and AFR.");
-        break;
-    }
+    case kDataLogging: sectionDataLogging(); break;
     case kVirtualDyno: {
         beginSplit("##dyno", 0.64f);
         panelDyno();

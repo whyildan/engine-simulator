@@ -2,6 +2,7 @@
 #include "core/MathUtil.h"
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace es::ui {
 
@@ -75,8 +76,10 @@ void Meter(const char* label, float value, float vmin, float vmax, const char* f
     ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImGui::InvisibleButton(label, ImVec2(w, h));
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    float labelW = w * 0.32f;
-    dl->AddText(ImVec2(p0.x, p0.y + (h - ImGui::GetFontSize()) * 0.5f), col(0.75f, 0.75f, 0.78f), label);
+    const char* hid = std::strstr(label, "##");   // "##id" part is not drawn; a hidden label gets no label column
+    const char* labelEnd = hid ? hid : label + std::strlen(label);
+    float labelW = labelEnd > label ? w * 0.32f : 0.0f;
+    dl->AddText(ImVec2(p0.x, p0.y + (h - ImGui::GetFontSize()) * 0.5f), col(0.75f, 0.75f, 0.78f), label, labelEnd);
     ImVec2 b0(p0.x + labelW, p0.y + 2), b1(p0.x + w, p0.y + h - 2);
     dl->AddRectFilled(b0, b1, col(0.12f, 0.12f, 0.14f), 3);
     float t = clampv((value - vmin) / (vmax - vmin), 0.f, 1.f);

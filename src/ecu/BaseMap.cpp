@@ -51,7 +51,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
     const double ecuT = ambT + 15.0;                    // the ECU's charge temperature (IAT + 15 K)
     const Table2D& ax = p.cal.veMap;
     // rpm samples: dense at the low end (closed-throttle air goes like 1/rpm there), then spread
-    static const int pick[] = {0, 1, 2, 4, 7, 10, 13, 15};
+    static const int pick[] = {0, 1, 2, 4, 6, 9, 12, 15};   // 500, 750, 1000, 1500, then spread
     const int nR = 8;
     static const double thr[] = {0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.6, 1.0};
     const int nT = (int)(sizeof(thr) / sizeof(thr[0]));
@@ -70,6 +70,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
             }
           double est = 0, ve = 0, map = 0, veAtm = 0;
           bool fired = false;
+          const double tp = thr[ti];
           for (int pass = 0; pass < 4; ++pass) {
             e.ecu.veOverride = est * 100.0;            // 0 on the first pass: the generic table
             double sMap = 0, sVe = 0, sLam = 0, sVeEcu = 0, sTgt = 0; int n = 0, nl = 0;
@@ -81,7 +82,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
             for (double t = 0; t < 3.0; t += 0.1) {
                 double cMap = 0, cVe = 0, cLam = 0;
                 for (int k = 0; k < chunk; ++k) {
-                    e.setCrank(omega, e.theta()); e.step(dt, thr[ti], 0.0);
+                    e.setCrank(omega, e.theta()); e.step(dt, tp, 0.0);
                     double v = 0, l = 0;
                     for (int c = 0; c < e.cylinders(); ++c) { v += e.cyl(c).ve; l += std::min(3.0, e.cyl(c).lambda); }
                     cMap += e.intake.map(); cVe += v / e.cylinders(); cLam += l / e.cylinders();
@@ -94,7 +95,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
             const int steps = (int)(window * fs);
             for (int k = 0; k < steps; ++k) {
                 e.setCrank(omega, e.theta());           // motoring dyno: the speed is held
-                e.step(dt, thr[ti], 0.0);
+                e.step(dt, tp, 0.0);
                 double ve = 0;
                 for (int c = 0; c < e.cylinders(); ++c) ve += e.cyl(c).ve;
                 sVe += ve / e.cylinders(); sMap += e.intake.map(); ++n;
@@ -123,7 +124,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
           }
           e.ecu.veOverride = 0;
             veAtm = ve * map / kPatm / (ecuT / ambT);
-            pts[ri].push_back({map / 1000.0, thr[ti] * 100.0, ve * 100.0, veAtm * (ecuT / ambT) * 100.0, fired});
+            pts[ri].push_back({map / 1000.0, tp * 100.0, ve * 100.0, veAtm * (ecuT / ambT) * 100.0, fired});
         }
     }
     // resample onto the table axes: rows by MAP (or TPS), columns by rpm
@@ -160,7 +161,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
 // ------------------------------------------------------------------ on-disk cache
 // Keyed by everything that defines the engine (driver inputs, sound, dyno, vehicle and the VE maps
 // themselves are left out). Bump kBaseMapVersion when the physics changes.
-static constexpr uint32_t kBaseMapVersion = 8;   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
+static constexpr uint32_t kBaseMapVersion = 15;   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
 static std::string g_cacheDir;
 void setBaseMapCacheDir(const std::string& dir) { g_cacheDir = dir; }
 

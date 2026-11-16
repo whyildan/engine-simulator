@@ -3,6 +3,7 @@
 #include "core/MathUtil.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace es {
 
@@ -122,7 +123,10 @@ void generateCalibration(EngineParams& p) {
         Table2D& tb = calTable(c, t);
         tb.nx = kTabMax; tb.ny = kTabMax; tb.locked = 0;
         for (int i = 0; i < kTabMax; ++i) {
-            tb.x[i] = (float)(std::round((500.0 + (top - 500.0) * i / (kTabMax - 1)) / 50.0) * 50.0);
+            // rpm breakpoints dense around idle (500 .. 1500 in 250 steps), then even up to the top: the idle
+            // and return-to-idle region needs its own cells, not an interpolation from cranking speed
+            tb.x[i] = i < 5 ? (float)(500 + 250 * i)
+                            : (float)(std::round((1500.0 + (top - 1500.0) * (i - 4) / (kTabMax - 5)) / 50.0) * 50.0);
             tb.y[i] = t == kCalVeTps ? tpsAxis[i] : (float)std::round(20.0 + (mapTop - 20.0) * i / (kTabMax - 1));
         }
     }

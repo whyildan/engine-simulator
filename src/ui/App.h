@@ -3,6 +3,7 @@
 #include "audio/AudioOutput.h"
 #include "ecu/BaseMap.h"
 #include "ecu/CalibrationIO.h"
+#include "sim/DataLog.h"
 #include "ui/TableEditor.h"
 #include <atomic>
 #include <thread>
@@ -14,12 +15,25 @@ struct ImVec4;
 
 namespace es {
 
+// one widget of the custom dashboard
+struct DashWidget {
+    int ch = 0;                 // log channel
+    int type = 2;               // 0 analogue gauge, 1 digital, 2 bar
+    float lo = 0, hi = 100;     // display range
+    int useLo = 0;
+    float warnLo = 0, alarmLo = 0;   // (kept next to each other: edited as a pair)
+    int useHi = 0;
+    float warnHi = 0, alarmHi = 0;
+};
+
 struct DynoRun {
     std::string label;
     std::vector<DynoPoint> pts;
     float color[4];
     bool visible = true;
     float peakTorque = 0, peakTorqueRpm = 0, peakPower = 0, peakPowerRpm = 0;
+    std::string engine, calName;   // what the run was made with (before / after tuning)
+    int calRev = 0;
 };
 
 class App {
@@ -50,6 +64,34 @@ private:
     void tabBoostControl();
     void sectionEngineControl();
     void sectionProtection();
+    // Phase 4: data logging (Logging.cpp)
+    void sectionDataLogging();
+    // dyno extras (Phase 4)
+    bool dynoKw_ = false, imperial_ = false;
+    int dynoBase_ = -1;
+    void dynoExportCsv();
+    // custom dashboard (Dashboard.cpp)
+    void panelCustomDash();
+    void dashDefaults();
+    void dashSave();
+    void dashLoad();
+    std::vector<DashWidget> dash_;
+    int dashCols_ = 4;
+    bool dashEdit_ = false, dashLoaded_ = false;
+    void logFrame();
+    void logStart();
+    void logStop();
+    void logMarker(const std::string& label);
+    std::vector<LogSession> logSessions_;
+    std::vector<std::vector<int>> logPanels_;
+    std::vector<char> logExport_;
+    int logRec_ = -1, logView_ = -1, logCmp_ = -1, logRateIdx_ = 2, logCounter_ = 0;
+    bool logXRpm_ = false, logPrevLimp_ = false, logFitReq_ = true, logFitRpm_ = false;
+    int logFitView_ = -2;
+    int logPrevProt_[kProtCount] = {}, logPrevGear_ = 0;
+    double logT0_ = -1;
+    char logMarkText_[64] = {};
+    std::string logMsg_;
     // calibration manager (CalManager.cpp)
     void sectionCalibrationManager();
     void calRefresh();

@@ -64,7 +64,8 @@ public:
     void copyThermalFrom(const Engine& o) { thermal = o.thermal; elec = o.elec; rail = o.rail; }
     static constexpr int kTrace = 1080;
     float traceP[kTrace] = {}, traceV[kTrace] = {}, traceExh[kTrace] = {}, traceInt[kTrace] = {};
-    double lambdaAvg = 1, veAvg = 0, knockMax = 0, egtAvg = 800;
+    double lambdaAvg = 1, veAvg = 0, knockMax = 0, egtAvg = 800;   // egtAvg: in the manifold (after the port)
+    double egtCyl = 800;          // gas leaving the cylinders (before the port heat loss)
     int misfires = 0, afterfires = 0;
     // hardware components: derived model and live state
     const ComponentModel& components() const { return comp_; }
@@ -81,6 +82,7 @@ public:
     const float* phases() const { return phase_; }
 
 private:
+    double exhFlowAvg_ = 0;
     void stepCylinder(int i, double dt, double phiPrev, double phi, double rpm, bool spark, bool fuelCut);
     void updateValves();
     void setupChambers();

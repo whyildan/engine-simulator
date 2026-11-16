@@ -87,6 +87,9 @@ public:
     size_t pullAudio(float* stereo, size_t frames);   // audio callback
     void getTelemetry(Telemetry& out);
     void takeDynoPoints(std::vector<DynoPoint>& out, int& runId);
+    // data logging: sample every log channel at `rateHz` (sim time) while on; the UI collects the samples
+    void setLogging(bool on, double rateHz);
+    void takeLogSamples(std::vector<double>& times, std::vector<float>& values);   // values: channel-major per sample
     // custom exhaust impulse response (already resampled to kOutRate); used when irChoice = custom
     void setCustomIR(const std::vector<float>& ir);
     // simulation control (any thread)
@@ -142,6 +145,11 @@ private:
     std::mutex telMx_;
     Telemetry tel_;
     std::vector<DynoPoint> dynoPts_;
+    std::atomic<bool> logOn_{false};
+    std::atomic<double> logRate_{50.0};
+    double simTime_ = 0, nextLog_ = 0;
+    std::vector<double> logTimes_;
+    std::vector<float> logVals_;
     float scopeTmp_[Telemetry::kScope] = {};
     int scopeW_ = 0;
     double loadAvg_ = 0;

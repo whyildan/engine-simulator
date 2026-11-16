@@ -64,6 +64,7 @@ add_library(enginesim_core STATIC
   src/ecu/CalibrationIO.cpp
   src/sim/Vehicle.cpp
   src/sim/Simulator.cpp
+  src/sim/DataLog.cpp
   src/audio/Listener.cpp
   src/audio/Convolver.cpp
   src/audio/ImpulseResponses.cpp
@@ -100,6 +101,9 @@ add_executable(enginesim WIN32
   src/ui/Tuning.cpp
   src/ui/CalManager.cpp
   src/ui/Control.cpp
+  src/ui/FileDialog.cpp
+  src/ui/Logging.cpp
+  src/ui/Dashboard.cpp
   src/ui/Widgets.cpp
 )
 target_include_directories(enginesim PRIVATE src ${miniaudio_SOURCE_DIR})
@@ -158,3 +162,12 @@ target_link_libraries(rotary_idle PRIVATE enginesim_core)
 
 add_executable(idle_hold tests/idle_hold.cpp)
 target_link_libraries(idle_hold PRIVATE enginesim_core)
+
+add_executable(egt_probe tests/egt_probe.cpp)
+target_link_libraries(egt_probe PRIVATE enginesim_core)
+
+add_executable(log_test tests/log_test.cpp)
+target_link_libraries(log_test PRIVATE enginesim_core)
+
+add_executable(basemap_warm tests/basemap_warm.cpp)
+target_link_libraries(basemap_warm PRIVATE enginesim_core)

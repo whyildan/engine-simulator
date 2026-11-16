@@ -590,7 +590,24 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     lambdaAvg += (lam / n - lambdaAvg) * a;
     lamFast_ += (lam / n - lamFast_) * std::min(1.0, dt / 0.02);
     veAvg += (ve / n - veAvg) * a;
-    egtAvg += (egt / n - egtAvg) * a;
+    // gas leaving the cylinders -> exhaust port and manifold: heat goes into the coolant-cooled port walls before
+    // the gas reaches the pipes / the EGT sensor. Pipe-flow heat transfer (Dittus-Boelter, a laminar floor, x1.8
+    // for the pulsating flow) over port + manifold run of ~4 port diameters: little loss at full flow, a lot at
+    // idle, where the slow gas spends long in the port - that is why a real idle EGT is only some 300-550 C.
+    {
+        exhFlowAvg_ += (std::max(0.0, intake.airFlow() + intake.fuelFlow()) - exhFlowAvg_) * std::min(1.0, dt / 0.2);
+        const double D = clampv((double)p_.primaryDia_mm, 20.0, 90.0) * 1e-3;
+        const double mPort = std::max(1e-5, exhFlowAvg_ / std::max(1, nPorts_));
+        const double Re = 4.0 * mPort / (kPi * D * 4.0e-5);
+        const double Nu = 1.8 * std::max(8.0, 0.023 * std::pow(Re, 0.8) * 0.9);
+        const double hA = Nu * 0.06 / D * kPi * D * (4.0 * D);
+        const double ntu = hA / (mPort * 1150.0);
+        const double Tw = thermal.coolantC + 273.15 + 120.0;
+        const double Tcyl = egt / n;
+        egtCyl = Tcyl;
+        const double Tport = Tcyl > Tw ? Tw + (Tcyl - Tw) * std::exp(-ntu) : Tcyl;
+        egtAvg += (Tport - egtAvg) * a;
+    }
     exhaust.setGasTemp(egtAvg);   // pipe sound speed follows the gas temperature
     knockMax = std::max(kn, knockMax - dt * 0.5);
 

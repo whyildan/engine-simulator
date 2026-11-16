@@ -782,9 +782,26 @@ void App::panelDyno() {
     ImGui::Text("Absorber: %s  load %.0f Nm", st[clampv(tel_.dynoState, 0, 4)], tel_.dynoLoad);
     if (tel_.dynoState == 3) { ImGui::SameLine(); ImGui::ProgressBar(tel_.dynoProgress, ImVec2(-1, 0)); }
 
-    static bool kw = false;
+    bool& kw = dynoKw_;
     ImGui::SameLine();
     ImGui::Checkbox("kW", &kw);
+    ImGui::SameLine();
+    ImGui::Checkbox("lb-ft", &imperial_);
+    Help("Imperial torque (lb-ft). Power in hp is then lb-ft x rpm / 5252.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Export CSV...")) dynoExportCsv();
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+    {
+        std::string items = "no baseline";
+        items.push_back('\0');
+        for (size_t i = 0; i < runs_.size(); ++i) { items += "Run " + std::to_string(i + 1); items.push_back('\0'); }
+        int b = dynoBase_ + 1;
+        if (ImGui::Combo("##base", &b, items.c_str())) dynoBase_ = b - 1;
+        if (dynoBase_ >= (int)runs_.size()) dynoBase_ = -1;
+        Help("Before / after: pick the baseline run - the table shows every run's peaks against it and a\n"
+             "difference plot (torque and power delta over rpm) appears under the curves.");
+    }
     ImGui::Checkbox("Live trace", &showLive_); Help("Torque / power of the last 4 seconds against rpm: rev the engine and watch the curve being drawn.");
     ImGui::SameLine(); ImGui::Checkbox("Peak hold", &showPeak_); Help("Highest torque and power seen at every rpm since the last reset.\nOne full-throttle rev from idle to the limiter draws the whole curve.");
     ImGui::SameLine();
@@ -795,6 +812,10 @@ void App::panelDyno() {
         char buf[160];
         std::snprintf(buf, sizeof(buf), "#%d %s | peak hold (free rev%s)", (int)runs_.size() + 1, p_.name, p_.vehicle ? " / driving" : "");
         r.label = buf;
+        r.engine = p_.name;
+        r.calName = calMeta_.name.empty() ? "(unsaved)" : calMeta_.name;
+        r.calRev = calMeta_.revision;
+        r.label += " | cal " + r.calName + " r" + std::to_string(r.calRev);
         static const float pal[][3] = {{0.95f, 0.85f, 0.3f}, {0.3f, 0.9f, 0.85f}, {0.9f, 0.3f, 0.7f}, {0.6f, 0.5f, 1.0f}};
         const float* col = pal[runs_.size() % 4];
         r.color[0] = col[0]; r.color[1] = col[1]; r.color[2] = col[2]; r.color[3] = 1;
@@ -816,8 +837,13 @@ void App::panelDyno() {
     tqTop = std::max(tqTop, tel_.torque);
     pwTop = std::max(pwTop, tel_.powerKw);
     const float pwScale = kw ? 1.0f : 1.341f;
-    if (ImPlot::BeginPlot("##dyno", ImVec2(-1, std::max(200.0f, ImGui::GetContentRegionAvail().y - 120)))) {
-        ImPlot::SetupAxes("rpm", "torque (N m)", 0, 0);
+    const float tqScale = imperial_ ? 0.737562f : 1.0f;      // N m -> lb-ft
+    const char* tqUnit = imperial_ ? "lb-ft" : "N m";
+    tqTop *= tqScale;
+    const bool delta = dynoBase_ >= 0 && dynoBase_ < (int)runs_.size() && runs_.size() > 1;
+    const float plotH = std::max(200.0f, ImGui::GetContentRegionAvail().y - 120 - (delta ? 170.0f : 0.0f));
+    if (ImPlot::BeginPlot("##dyno", ImVec2(-1, plotH))) {
+        ImPlot::SetupAxes("rpm", imperial_ ? "torque (lb-ft)" : "torque (N m)", 0, 0);
         ImPlot::SetupAxis(ImAxis_Y2, kw ? "power (kW)" : "power (hp)", ImPlotAxisFlags_AuxDefault);
         ImPlot::SetupAxisLimits(ImAxis_X1, 0, std::ceil((p_.revLimit + 700) / 500.0) * 500.0, ImPlotCond_Always);
         ImPlot::SetupAxisLimits(ImAxis_Y1, 0, std::ceil(tqTop * 1.15f / 50.0f) * 50.0f, ImPlotCond_Always);
@@ -826,7 +852,7 @@ void App::panelDyno() {
             DynoRun& r = runs_[i];
             if (!r.visible || r.pts.empty()) continue;
             std::vector<float> x, t, pw;
-            for (auto& d : r.pts) { x.push_back(d.rpm); t.push_back(d.torque); pw.push_back(d.powerKw * pwScale); }
+            for (auto& d : r.pts) { x.push_back(d.rpm); t.push_back(d.torque * tqScale); pw.push_back(d.powerKw * pwScale); }
             ImVec4 cc(r.color[0], r.color[1], r.color[2], 1);
             char id[32];
             std::snprintf(id, sizeof(id), "Run %zu torque", i + 1);
@@ -858,7 +884,7 @@ void App::panelDyno() {
                     int a0 = std::max(first, b - 2), a1 = std::min(last, b + 2);
                     float st = 0, sp = 0; int cnt = 0;
                     for (int k = a0; k <= a1; ++k) { st += ft[k]; sp += fp[k]; ++cnt; }
-                    px[n] = b * 50.0f + 25.0f; pt[n] = st / cnt; pp[n] = sp / cnt * pwScale; ++n;
+                    px[n] = b * 50.0f + 25.0f; pt[n] = st / cnt * tqScale; pp[n] = sp / cnt * pwScale; ++n;
                 }
             }
             if (n > 1) {
@@ -873,9 +899,9 @@ void App::panelDyno() {
         if (showLive_ && liveRpm_.size() > 1) {
             // fading trail: draw it in a few segments, newer = brighter
             const int n = (int)liveRpm_.size();
-            static std::vector<float> lp;
-            lp.resize(n);
-            for (int i = 0; i < n; ++i) lp[i] = livePw_[i] * pwScale;
+            static std::vector<float> lp, lt;
+            lp.resize(n); lt.resize(n);
+            for (int i = 0; i < n; ++i) { lp[i] = livePw_[i] * pwScale; lt[i] = liveTq_[i] * tqScale; }
             const int seg = 4;
             for (int s = 0; s < seg; ++s) {
                 int a = n * s / seg, b = std::min(n, n * (s + 1) / seg + 1);
@@ -883,14 +909,14 @@ void App::panelDyno() {
                 float al = 0.25f + 0.75f * (s + 1) / seg;
                 ImPlot::SetAxes(ImAxis_X1, ImAxis_Y1);
                 ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, al), 1.5f);
-                ImPlot::PlotLine("##live torque", liveRpm_.data() + a, liveTq_.data() + a, b - a);
+                ImPlot::PlotLine("##live torque", liveRpm_.data() + a, lt.data() + a, b - a);
                 ImPlot::SetAxes(ImAxis_X1, ImAxis_Y2);
                 ImPlot::SetNextLineStyle(ImVec4(0.6f, 0.9f, 1.0f, al), 1.5f);
                 ImPlot::PlotLine("##live power", liveRpm_.data() + a, lp.data() + a, b - a);
             }
         }
         ImPlot::SetAxes(ImAxis_X1, ImAxis_Y1);
-        double rx[] = {tel_.rpm}, ry[] = {tel_.torque};
+        double rx[] = {tel_.rpm}, ry[] = {tel_.torque * tqScale};
         ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6, ImVec4(1, 1, 1, 1));
         ImPlot::PlotScatter("now torque", rx, ry, 1);
         ImPlot::SetAxes(ImAxis_X1, ImAxis_Y2);
@@ -900,15 +926,67 @@ void App::panelDyno() {
         // live readout in the corner
         ImPlot::SetAxes(ImAxis_X1, ImAxis_Y1);
         char txt[96];
-        std::snprintf(txt, sizeof(txt), "%.0f rpm   %.0f N m   %.0f %s", tel_.rpm, tel_.torque, tel_.powerKw * pwScale, kw ? "kW" : "hp");
+        std::snprintf(txt, sizeof(txt), "%.0f rpm   %.0f %s   %.0f %s", tel_.rpm, tel_.torque * tqScale, tqUnit, tel_.powerKw * pwScale, kw ? "kW" : "hp");
         ImPlot::Annotation(ImPlot::GetPlotLimits().X.Max, ImPlot::GetPlotLimits().Y.Max, ImVec4(0.1f, 0.1f, 0.12f, 0.85f), ImVec2(-8, 8), true, "%s", txt);
+        ImPlot::EndPlot();
+    }
+    // before / after: every visible run minus the baseline, over the rpm they share
+    if (delta && ImPlot::BeginPlot("##dyno_delta", ImVec2(-1, 160))) {
+        const DynoRun& base = runs_[dynoBase_];
+        ImPlot::SetupAxes("rpm", imperial_ ? "delta torque (lb-ft)" : "delta torque (N m)", 0, ImPlotAxisFlags_AutoFit);
+        ImPlot::SetupAxis(ImAxis_Y2, kw ? "delta power (kW)" : "delta power (hp)", ImPlotAxisFlags_AuxDefault | ImPlotAxisFlags_AutoFit);
+        ImPlot::SetupAxisLimits(ImAxis_X1, 0, std::ceil((p_.revLimit + 700) / 500.0) * 500.0, ImPlotCond_Always);
+        // a curve is "steep" where torque changes by more than 8 % of its peak per 100 rpm (sweep start, limiter
+        // cliff): there a few rpm of misalignment between runs reads as a huge, meaningless difference
+        auto steep = [](const DynoRun& run, size_t k) {
+            const DynoPoint &a = run.pts[k - 1], &b = run.pts[k];
+            return b.rpm > a.rpm && std::fabs(b.torque - a.torque) / (b.rpm - a.rpm) * 100.0f > 0.08f * run.peakTorque;
+        };
+        auto baseAt = [&](float rpm, bool power, bool& ok) {
+            ok = false;
+            for (size_t k = 1; k < base.pts.size(); ++k)
+                if (rpm >= base.pts[k - 1].rpm && rpm <= base.pts[k].rpm) {
+                    const DynoPoint &a = base.pts[k - 1], &b = base.pts[k];
+                    const float u = b.rpm > a.rpm ? (rpm - a.rpm) / (b.rpm - a.rpm) : 0.0f;
+                    ok = !steep(base, k);
+                    return power ? a.powerKw + (b.powerKw - a.powerKw) * u : a.torque + (b.torque - a.torque) * u;
+                }
+            return 0.0f;
+        };
+        double zero[2] = {0, 0};
+        ImPlot::SetNextLineStyle(ImVec4(0.6f, 0.6f, 0.6f, 0.6f));
+        ImPlot::PlotInfLines("##zero", zero, 1, ImPlotInfLinesFlags_Horizontal);
+        for (size_t i = 0; i < runs_.size(); ++i) {
+            const DynoRun& r = runs_[i];
+            if ((int)i == dynoBase_ || !r.visible) continue;
+            std::vector<float> x, dt, dp;
+            for (size_t k = 0; k < r.pts.size(); ++k) {
+                const DynoPoint& d = r.pts[k];
+                bool ok1, ok2;
+                const float bt = baseAt(d.rpm, false, ok1), bp = baseAt(d.rpm, true, ok2);
+                if (!ok1 || !ok2) continue;
+                if ((k > 0 && steep(r, k)) || (k + 1 < r.pts.size() && steep(r, k + 1))) continue;
+                x.push_back(d.rpm); dt.push_back((d.torque - bt) * tqScale); dp.push_back((d.powerKw - bp) * pwScale);
+            }
+            if (x.size() < 2) continue;
+            const ImVec4 cc(r.color[0], r.color[1], r.color[2], 1);
+            char id[40];
+            std::snprintf(id, sizeof(id), "Run %zu - Run %d torque", i + 1, dynoBase_ + 1);
+            ImPlot::SetAxes(ImAxis_X1, ImAxis_Y1);
+            ImPlot::SetNextLineStyle(cc, 2.0f);
+            ImPlot::PlotLine(id, x.data(), dt.data(), (int)x.size());
+            std::snprintf(id, sizeof(id), "Run %zu - Run %d power", i + 1, dynoBase_ + 1);
+            ImPlot::SetAxes(ImAxis_X1, ImAxis_Y2);
+            ImPlot::SetNextLineStyle(ImVec4(cc.x * 0.8f, cc.y * 0.8f, cc.z * 0.8f, 0.8f), 1.2f);
+            ImPlot::PlotLine(id, x.data(), dp.data(), (int)x.size());
+        }
         ImPlot::EndPlot();
     }
     if (ImGui::BeginTable("runs", 4, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp,
                           ImVec2(-1, std::max(60.0f, ImGui::GetContentRegionAvail().y - 4)))) {
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 50);
         ImGui::TableSetupColumn("Run");
-        ImGui::TableSetupColumn("Peaks", ImGuiTableColumnFlags_WidthFixed, 250);
+        ImGui::TableSetupColumn("Peaks", ImGuiTableColumnFlags_WidthFixed, 300);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 24);
         int del = -1;
         for (size_t i = 0; i < runs_.size(); ++i) {
@@ -919,14 +997,23 @@ void App::panelDyno() {
             ImGui::Checkbox("##v", &r.visible); ImGui::SameLine(0, 2);
             ImGui::ColorEdit3("##c", r.color, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(r.label.c_str());
+            ImGui::TextWrapped("%s", r.label.c_str());   // long labels (engine | cal name rev) wrap instead of being cut
             ImGui::TableNextColumn();
-            ImGui::Text("%.0f Nm @%.0f  %.0f hp @%.0f", r.peakTorque, r.peakTorqueRpm, r.peakPower, r.peakPowerRpm);
+            ImGui::Text("%.0f %s @%.0f  %.0f hp @%.0f", r.peakTorque * tqScale, tqUnit, r.peakTorqueRpm, r.peakPower, r.peakPowerRpm);
+            if (delta && (int)i != dynoBase_) {
+                const DynoRun& b = runs_[dynoBase_];
+                const float dT = (r.peakTorque - b.peakTorque) * tqScale, dP = r.peakPower - b.peakPower;
+                ImGui::TextColored(dP >= 0 ? ImVec4(0.45f, 0.9f, 0.45f, 1) : ImVec4(1, 0.45f, 0.4f, 1), "vs Run %d: %+.1f %s  %+.1f hp (%+.1f %%)",
+                                   dynoBase_ + 1, dT, tqUnit, dP, b.peakPower > 0 ? 100.0f * dP / b.peakPower : 0.0f);
+            } else if ((int)i == dynoBase_) ImGui::TextDisabled("baseline");
             ImGui::TableNextColumn();
             if (ImGui::SmallButton("x")) del = (int)i;
             ImGui::PopID();
         }
-        if (del >= 0) runs_.erase(runs_.begin() + del);
+        if (del >= 0) {
+            runs_.erase(runs_.begin() + del);
+            if (dynoBase_ == del) dynoBase_ = -1; else if (dynoBase_ > del) --dynoBase_;
+        }
         ImGui::EndTable();
     }
 }

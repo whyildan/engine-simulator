@@ -3,36 +3,16 @@
 #include "ui/App.h"
 #include "ecu/CalibrationIO.h"
 #include "imgui.h"
-#include <windows.h>
-#include <commdlg.h>
+#include "ui/FileDialog.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 namespace es {
 
-static std::string toUtf8(const wchar_t* w) {
-    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
-    std::string s(n > 0 ? n - 1 : 0, '\0');
-    if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w, -1, &s[0], n, nullptr, nullptr);
-    return s;
-}
-
 static bool fileDialog(bool save, const std::string& suggested, std::string& out) {
-    wchar_t file[MAX_PATH] = L"";
-    MultiByteToWideChar(CP_UTF8, 0, suggested.c_str(), -1, file, MAX_PATH);
-    OPENFILENAMEW ofn = {};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = GetActiveWindow();
-    ofn.lpstrFilter = L"Calibration (*.json)\0*.json\0All files\0*.*\0";
-    ofn.lpstrFile = file;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrDefExt = L"json";
-    ofn.lpstrTitle = save ? L"Export calibration" : L"Import calibration";
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
-    if (!(save ? GetSaveFileNameW(&ofn) : GetOpenFileNameW(&ofn))) return false;
-    out = toUtf8(file);
-    return true;
+    return ui::fileDialog(save, suggested, out, L"Calibration (*.json)\0*.json\0All files\0*.*\0", L"json",
+                          save ? L"Export calibration" : L"Import calibration");
 }
 
 void App::calMessage(int severity, const std::string& s) { calMsg_ = s; calMsgSev_ = severity; }

@@ -17,6 +17,11 @@ int main(int argc, char** argv) {
     int stalls = 0;
     for (int idx : list) {
         EngineParams p = makeCalibratedPreset(idx);
+        if (const char* g = std::getenv("IDLEGAIN")) {   // diagnostics: scale the idle controller
+            const float k = (float)std::atof(g);
+            p.cal.idleKp *= k; p.cal.idleKi *= k; p.cal.idleKd *= k;
+        }
+        if (const char* g = std::getenv("SPARKGAIN")) p.cal.idleSparkGain *= (float)std::atof(g);
         p.ignition = 1; p.starter = 1;
         Simulator sim(p);
         std::vector<float> buf(480 * 2);

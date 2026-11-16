@@ -210,6 +210,7 @@ static void survey() {
     std::vector<float> buf(480 * 2);
     Telemetry t;
     for (int i = 0; i < presetCount(); ++i) {
+        if (std::getenv("ONLY") && std::atoi(std::getenv("ONLY")) != i) continue;   // before the (expensive) base map
         EngineParams p = std::getenv("GENERIC") ? makePreset(i) : makeCalibratedPreset(i);
         if (std::getenv("IMP")) p.imperfection = (float)std::atof(std::getenv("IMP"));
         // diagnostics: part overrides
@@ -220,7 +221,6 @@ static void survey() {
         if (std::getenv("COIL")) p.comp.coilEnergy_mJ = (float)std::atof(std::getenv("COIL"));
         if (std::getenv("HEAT")) p.comp.plugHeatRange = std::atoi(std::getenv("HEAT"));
         if (std::getenv("SPRING")) { float s = (float)std::atof(std::getenv("SPRING")); p.comp.springOpen_N *= s; p.comp.springSeat_N *= s; }
-        if (std::getenv("ONLY") && std::atoi(std::getenv("ONLY")) != i) continue;
         // diagnostics: Phase 3 controls off
         if (std::getenv("NOKNOCK")) p.cal.knockControl = 0;
         if (std::getenv("NOPROT")) for (ProtRule& r : p.cal.prot) r.enabled = 0;
