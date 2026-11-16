@@ -115,7 +115,9 @@ If CMake is not on your PATH, use the one bundled with Visual Studio
 A fixed header (ignition, START ENGINE, throttle, preset, RPM / MAP / AFR / timing / boost / EGT readouts and
 warning lamps) and a 12-section navigation in the style of ECU software:
 
-1. **Engine Setup** — geometry, valvetrain / rotary ports, exhaust, vehicle, sound, components
+1. **Engine Setup** — geometry, valvetrain / rotary ports, exhaust, vehicle, sound, components, and the
+   **engine view**: flat cutaways of every cylinder / rotor laid out along the crankshaft in a rotatable 3D
+   scene (drag to orbit, wheel to zoom; live valve lift, VTEC cam, spark and gas by stroke)
 2. **ECU Setup** — loop rate, cold start, simulation pause / reset
 3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, base map
 4. **Ignition Tuning** — ignition map, corrections, knock control, per-cylinder trims

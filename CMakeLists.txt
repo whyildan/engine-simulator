@@ -106,6 +106,7 @@ add_executable(enginesim WIN32
   src/ui/Logging.cpp
   src/ui/Dashboard.cpp
   src/ui/Widgets.cpp
+  src/ui/EngineView3D.cpp
 )
 target_include_directories(enginesim PRIVATE src ${miniaudio_SOURCE_DIR})
 target_link_libraries(enginesim PRIVATE enginesim_core imgui_lib d3d11 dxgi d3dcompiler winmm comdlg32)

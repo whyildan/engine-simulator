@@ -382,6 +382,15 @@ Implementasi:
   (simpangan ±50). Sebelumnya I4 lama: ratusan misfire saat blip/deselerasi dan letupan saat WOT dan idle.
 - Preset 20 (V6 supercharger sentrifugal): gain idle lebih lembut (volume intake supercharger besar).
 
+### Engine view 2.5D
+- `src/ui/EngineView3D.*` menggantikan animasi 2D lama: setiap part (crank berbobot imbang, rod, piston dengan
+  alur ring, dinding liner, head dengan port, katup bentuk T, follower, lobe cam yang berputar setengah putaran
+  engkol; rotari: housing epitrochoid, rotor dengan roda gigi, poros eksentrik, port, busi) berupa bentuk datar
+  cembung yang diberi ketebalan, ditempatkan per silinder sepanjang poros engkol. Proyeksi perspektif software di
+  ImGui draw list, culling sisi belakang, diurutkan per irisan sepanjang poros lalu per lapisan.
+- Kamera: drag = putar, klik kanan/tengah = geser, roda = zoom, klik ganda = reset; tombol Front / Side / 3/4 dan
+  slider tebal potongan. Menampilkan lift katup, VTEC (lobe cam tinggi) dan VTC langsung dari telemetri.
+
 ### Fase 6 – Simulasi lanjutan
 - Peta efisiensi kompresor dan turbin yang bisa dimuat.
 - Model valve float dari pegas katup dan massa komponen.

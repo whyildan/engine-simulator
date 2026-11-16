@@ -5,6 +5,7 @@
 #include "ecu/CalibrationIO.h"
 #include "sim/DataLog.h"
 #include "ui/TableEditor.h"
+#include "ui/EngineView3D.h"
 #include <atomic>
 #include <thread>
 #include <memory>
@@ -173,6 +174,7 @@ private:
     int presetIdx_ = 0;
     bool keyThrottle_ = false, brakeKey_ = false, clutchKey_ = false;
     float animAngle_ = 0, animSpeed_ = 0.02f;
+    ui::ViewCam engCam_;
     bool autoStart_ = false;
     float autoStartTimer_ = 0, caughtTimer_ = 0;
     bool firstFrame_ = true;

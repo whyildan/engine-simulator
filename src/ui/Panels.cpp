@@ -1348,11 +1348,26 @@ void App::panelEngineView() {
     else
         ImGui::Text("crank %.0f deg   %s, %d cyl, %.2f L", animAngle_,
                     p_.layout == Layout::Inline ? "inline" : p_.layout == Layout::V ? "V" : "boxer", p_.cylinders, displacementL(p_));
+    // camera presets and the cutaway thickness
+    if (ImGui::SmallButton("Front")) { engCam_.yaw = 0; engCam_.pitch = 0; engCam_.panX = engCam_.panY = 0; }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Side")) { engCam_.yaw = 90; engCam_.pitch = 8; engCam_.panX = engCam_.panY = 0; }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("3/4")) { engCam_.yaw = 38; engCam_.pitch = 18; engCam_.panX = engCam_.panY = 0; }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140);
+    ImGui::SliderFloat("Cutaway depth", &engCam_.depth, 0.3f, 2.5f, "%.1f");
+    Help("Each cylinder / rotor is a flat cutaway in its own plane along the crankshaft. Drag to orbit the\n"
+         "view, right-drag to pan, wheel to zoom, double-click to reset. Cutaway depth sets how thick the\n"
+         "layered parts are.");
     float phases[kMaxCyl];
     computePhases(p_, phases);
+    ui::EngineViewLive live;
+    live.advance = tel_.running ? tel_.advance : p_.baseAdvance + p_.mechAdvance * 0.5f;
+    live.vtecBlend = tel_.vtecEngaged;
+    live.vtcAdvance = tel_.vtcAdvance;
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    if (isRotary(p_)) RotaryAnimation(p_, phases, animAngle_, ImVec2(avail.x, std::max(120.0f, avail.y)));
-    else EngineAnimation(p_, phases, animAngle_, ImVec2(avail.x, std::max(120.0f, avail.y)));
+    EngineView3D(p_, phases, animAngle_, live, engCam_, ImVec2(avail.x, std::max(120.0f, avail.y)));
 }
 
 // ======================================================================= components
