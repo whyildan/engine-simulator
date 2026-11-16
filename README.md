@@ -33,7 +33,8 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
 | 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; Roots, twin-screw and centrifugal superchargers. |
 | 📈 **Virtual dyno** | WOT sweeps and steady-state holds, before / after comparison with deltas, metric or imperial units, CSV export. |
-| 🗂️ **Data logging** | 43 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
+| 🏁 **Motorsport** | Launch control (2-step) with pops and bangs, 3-step / flat shift, shift cut, traction control, transbrake, rolling anti-lag, progressive wet / dry nitrous. |
+| 🗂️ **Data logging** | 48 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
 | 🎛️ **Custom dashboard** | Your own grid of gauges, digital readouts and bars with warning / alarm thresholds and a sensor status strip. |
 | 🚗 **Drive it** | Car or motorcycle as the load: manual / auto-clutch / automatic gearbox, clutch, tyre slip, 0–100 and 1/4-mile timers. |
 | 🧪 **Virtual sensors** | Lag, noise, 10-bit ADC, transport delay, faults (open / short / stuck / noisy) and the ECU's fallbacks. |
@@ -70,6 +71,8 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 | `1`…`9`, `0` | fixed throttle 10 %…90 %, 100 % · `↓` release |
 | `D` | dyno sweep |
 | `R` | data log: start / stop recording · `M` marker |
+| `C` + full throttle, standing | 2-step launch limiter (when launch control is on) |
+| `T` (hold) | transbrake · `G` (hold) rolling anti-lag · `X` nitrous arming switch |
 | `L` | listener: tailpipe / engine bay / cabin |
 | `V` | driving mode (car as the load) |
 | `E` / `Q` | shift up / down · `N` neutral · `C` (hold) clutch · `B` brake |
@@ -116,8 +119,8 @@ warning lamps) and a 12-section navigation in the style of ECU software:
 2. **ECU Setup** — loop rate, cold start, simulation pause / reset
 3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, base map
 4. **Ignition Tuning** — ignition map, corrections, knock control, per-cylinder trims
-5. **Boost Control** — turbo / supercharger hardware, ECU boost control
-6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter
+5. **Boost Control** — turbo / supercharger hardware, ECU boost control, anti-lag, nitrous
+6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter, launch / shift, traction control
 7. **Sensor Configuration** — true vs measured values, noise, lag, fault injection
 8. **Engine Protection** — protection rules, limp mode, shutdown
 9. **Live Dashboard** — gauges, readouts, scopes (pressure, P-V, boost, fuel map, sound) and a configurable
@@ -160,8 +163,14 @@ warning lamps) and a 12-section navigation in the style of ECU software:
   a crank-angle knock window, idle target over coolant temperature with PID and idle spark control,
   drive-by-wire pedal map, soft limiter (retard + partial spark cut), ECU boost control (target over rpm ×
   throttle × gear, feed-forward + PID to a wastegate solenoid, overboost cut, boost cut).
+- **Motorsport**: launch control (2-step: rpm, timing, spark or fuel cut, enrichment), clutch-in limiter while
+  moving (3-step at a fixed rpm, or flat shift holding the clutch-in rpm), shift cut on the gear-change signal,
+  traction control (slip target over speed, PI → retard then spark cut), transbrake (automatic / auto-clutch:
+  holds the car, the engine loads against it like a converter at stall), anti-lag on lift-off and rolling
+  anti-lag on a button, nitrous (shot size, wet or dry kit, bottle, arming switch, rpm / throttle / coolant
+  window, delay, progressive ramp, timing retard, lean shut-off).
 - **Data logging & dashboard**: pick channels and a rate (10 / 20 / 50 / 100 Hz of simulated time), add markers
-  (automatic ones on protection actions, limp mode and gear changes), up to 6 stacked graph panels with linked
+  (automatic ones on protection actions, limp mode, gear changes, launch and nitrous), up to 6 stacked graph panels with linked
   zoom / pan over time or rpm, overlay a second session, export the channels you choose to CSV (with engine,
   calibration name and revision in the header) and load CSV logs back. Custom dashboard widgets show any log
   channel as a gauge, digital readout or bar with low / high warning and alarm thresholds.
@@ -187,7 +196,10 @@ rebuild the engine with a short sound crossfade, without stopping it.
   residual gas, cycle-to-cycle variation, misfire (lean, rich, dilution, weak spark, fouled plug), Woschni heat
   transfer, end-gas knock index. The EGT sensor sees the gas after the exhaust port, which loses heat to the
   port wall (Dittus–Boelter convection, pulsating-flow factor) — so a low-flow idle reads well below the
-  in-cylinder exit temperature.
+  in-cylinder exit temperature. Fuel that burns in the manifold (overrun pops, a spark-cut 2-step) heats the
+  exhaust gas further — that is what spools a turbo on the 2-step.
+- **Nitrous**: N₂O is fed to the ports as air-equivalent charge (its extra oxygen plus its decomposition heat),
+  with a wet kit's own fuel and charge cooling from the liquid flashing to gas; a 100 hp jet flows ~32 g/s.
 - **Intake & exhaust**: a **digital waveguide network** — bidirectional delay lines with frequency-dependent
   losses, N-way scattering junctions, gas composition carried along each pipe, and open ends that radiate. Each
   pipe has its own gas temperature following the EGT, so resonances move with load.
@@ -242,6 +254,10 @@ build/Release/log_test.exe          # data logging: sampling, markers, CSV round
 ```
 
 ```bash
+build/Release/motorsport_test.exe   # 2-step, flat shift, shift cut, traction control, transbrake, rolling ALS, nitrous
+```
+
+```bash
 build/Release/basemap_warm.exe 14   # measure every preset's base map in parallel (fills the cache)
 ```
 
@@ -277,7 +293,7 @@ python tools/analyze_wav.py brap.wav 0 8 900       # level + spectral peaks (eng
 - [x] Phase 2 — calibration tables, table editor, measured base maps, calibration manager
 - [x] Phase 3 — closed-loop trims, knock control, idle / DBW, ECU boost control, engine protection
 - [x] Phase 4 — configurable dashboard, data logging with CSV export, dyno export
-- [ ] Phase 5 — launch control, 2-step / 3-step, flat shift, traction control, nitrous
+- [x] Phase 5 — launch control, 2-step / 3-step, flat shift, traction control, transbrake, nitrous
 - [ ] Phase 6 — loadable compressor / turbine maps, refined thermal and dyno models
 
 ## Acknowledgements

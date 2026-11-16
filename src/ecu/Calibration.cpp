@@ -29,6 +29,7 @@ const TableInfo kCurves[kCalCurveCount] = {
     {"idle_target", "Idle target",          "coolant C",  "", "rpm", 300, 3500, 10},
     {"dbw_map",   "Throttle (DBW) map",     "pedal %",    "", "%",   0, 100, 1},
     {"boost_gear", "Boost by gear",         "gear",       "", "%",   0, 200, 1},
+    {"tc_slip",   "Traction control slip target", "speed km/h", "", "%", 0, 100, 0.5f},
 };
 const ProtInfo kProts[kProtCount] = {
     {"over_rev",   "Over-rev",               "rpm",   true,  0, 20000},
@@ -64,8 +65,13 @@ Curve1D& calCurve(Calibration& c, int id) {
     case kCalWarmup: return c.warmup; case kCalAccel: return c.accel; case kCalIatFuel: return c.iatFuel;
     case kCalIatSpark: return c.iatSpark; case kCalEctSpark: return c.ectSpark; case kCalDeadTime: return c.deadTime;
     case kCalIdleTarget: return c.idleTarget; case kCalDbwMap: return c.dbwMap; case kCalBoostGear: return c.boostGear;
+    case kCalTcSlip: return c.tcSlipTarget;
     default: return c.crankAfr;
     }
+}
+const char* launchStateName(int s) {
+    static const char* n[kLaunchStateCount] = {"-", "2-STEP", "3-STEP", "FLAT SHIFT", "SHIFT CUT", "ROLLING ALS"};
+    return n[clampv(s, 0, kLaunchStateCount - 1)];
 }
 const Curve1D& calCurve(const Calibration& c, int id) { return calCurve(const_cast<Calibration&>(c), id); }
 
@@ -241,6 +247,32 @@ void generateCalibration(EngineParams& p) {
     c.prot[kProtEgt]       = {1, 950, 1050, 2.0f, 50, kActWarn};
     c.prot[kProtSensor]    = {1, 1, 1, 0.5f, 0.5f, kActWarn};
     c.limpThrottle = 35; c.limpRpm = 3500; c.protRetard = 5;
+
+    // ---- motorsport (Phase 5): all off by default except where a switch arms it; engines built for
+    //      anti-lag (drag / rally setups) come with launch control and the shift cut on
+    const double lim = p.revLimit;
+    c.launchControl = p.antiLag ? 1 : 0;
+    c.launchRpm = (float)(std::round(std::min(turbo ? 0.6 * lim : 0.55 * lim, 5000.0) / 100.0) * 100.0);
+    c.launchTiming = turbo ? -8.0f : 8.0f;
+    c.launchMinTps = 70; c.launchMaxSpeed = 8; c.launchCutBand = 150; c.launchCutMode = 0; c.launchEnrich = 10;
+    c.clutchMovingMode = 0;
+    c.threeStepRpm = (float)(std::round(0.8 * lim / 100.0) * 100.0);
+    c.flatShiftMargin = 150; c.flatShiftRetard = 10;
+    c.shiftCut = p.antiLag ? 1 : 0; c.shiftCutTime = 0.12f; c.shiftCutMinTps = 70;
+    c.alsTiming = -30; c.alsThrottle = 10; c.alsMaxTime = 2.0f; c.alsMinRpm = 2500;   // the former fixed anti-lag
+    c.rollingAls = 1; c.rollingAlsMinSpeed = 10;
+    c.tractionControl = 0;
+    setCurve(c.tcSlipTarget, {0, 10, 20, 40, 80, 160}, [](double x, const EngineParams&) {
+        static const double xs[6] = {0, 10, 20, 40, 80, 160}, v[6] = {25, 18, 14, 10, 8, 8};
+        for (int i = 0; i < 6; ++i) if (std::fabs(x - xs[i]) < 1e-6) return v[i];
+        return 10.0; }, p);
+    c.tcKp = 0.02f; c.tcKi = 0.08f; c.tcMaxRetard = 15; c.tcMaxCut = 0.9f;
+    c.n2oMinTps = 90; c.n2oMinRpm = (float)(std::round(std::max(2500.0, 0.35 * lim) / 100.0) * 100.0);
+    c.n2oMaxRpm = (float)(lim - 300.0); c.n2oMinEct = 60; c.n2oMinSpeed = 0;
+    c.n2oDelay = 0.2f; c.n2oRampTime = 0.5f; c.n2oStartPct = 50;
+    c.n2oRetard = (float)std::round(std::max(0.0f, p.n2oShotHp) / 25.0f);   // ~1 deg per 25 hp
+    c.n2oFlowGs = (float)(n2oFullFlowKgs(p) * 1000.0);
+    c.n2oLeanLambda = 0.95f;
 }
 
 } // namespace es

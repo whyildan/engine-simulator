@@ -60,6 +60,7 @@ double Vehicle::step(double dt, double we, const EngineParams& p, double& pedal)
     }
     lastRequest_ = p.gear;
     const bool autoClutch = p.transMode != TransMode::Manual;
+    transbrake = autoClutch && p.transbrake != 0 && gear > 0;
     if (pendingGear_ != gear && !shifting) {
         if (autoClutch) { shifting = true; shiftTimer_ = 0; }
         else { gear = pendingGear_; sinceShift_ = 0; }   // manual: you'd better have the clutch in
@@ -83,6 +84,15 @@ double Vehicle::step(double dt, double we, const EngineParams& p, double& pedal)
         else autoEng_ = clampv(autoEng_ + clampv((rpm - launch) * 0.004, -6.0, 6.0) * dt, 0.0, 1.0);
         // anti-stall: about to stall -> let the clutch go right away
         if (gear > 0 && !shifting && rpm < std::max(500.0, p.idleTargetRpm * 0.75)) autoEng_ = std::max(0.0, autoEng_ - 25.0 * dt);
+        // transbrake: the gearbox holds the car and the engine pushes against it like an automatic against its
+        // torque converter at stall - a load growing with rpm^2 (stall speed ~45 % of the rev limit, where it
+        // takes about the engine's peak torque, taken as 60 % of the clutch capacity). Releasing the button lets
+        // the clutch bite from those revs.
+        if (transbrake) {
+            const double stall = std::max(2200.0, 0.45 * (double)p.revLimit);
+            const double tConv = 0.6 * std::max(10.0f, p.clutchTorque) * (rpm / stall) * (rpm / stall);
+            autoEng_ = clampv(tConv / std::max(10.0f, p.clutchTorque), 0.0, 1.0);
+        }
         // the driver can still override with the pedal
         engagement = std::min(autoEng_, smoothstep(0.15, 0.85, 1.0 - clampv((double)p.clutchPedal, 0.0, 1.0)));
     }
@@ -133,6 +143,7 @@ double Vehicle::step(double dt, double we, const EngineParams& p, double& pedal)
     double Tb = brakeDriven * r * std::tanh(wheelOmega / 0.5);
     wheelOmega += (Tw - Fx * r - Tb) / Jw * dt;
     if (wheelOmega < 0) wheelOmega = 0;          // no reverse gear
+    if (transbrake) wheelOmega = 0;
     if (gear == 0) inputOmega += (T - 0.4 * std::tanh(inputOmega)) / kInputJ * dt;
     if (inputOmega < 0) inputOmega = 0;
     driveForce = Fx;
@@ -143,7 +154,7 @@ double Vehicle::step(double dt, double we, const EngineParams& p, double& pedal)
     double gradeF = m * kG * std::sin(std::atan(p.grade_pct * 0.01));
     double bOther = brakeOther * std::tanh(v / 0.3);
     v += (Fx - rolling - aero - gradeF - bOther) / m * dt;
-    if (v < 0) { v = 0; }
+    if (v < 0 || transbrake) { v = 0; }
     distance += v * dt;
 
     // ---------------------------------------------------------------- performance timer

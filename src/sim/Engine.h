@@ -59,9 +59,15 @@ public:
     SensorLayer sensors;
     Ecu ecu;
     // the vehicle (if any) feeds radiator ram air and the speed / gear sensors
-    void setVehicleState(double speedMs, int gear) { vehSpeed_ = speedMs; vehGear_ = gear; }
-    // carry thermal / electrical state over a rebuild (structural change while running)
-    void copyThermalFrom(const Engine& o) { thermal = o.thermal; elec = o.elec; rail = o.rail; }
+    // (+ the driven wheel speed for traction control and the gear-change signal for the shift cut)
+    void setVehicleState(double speedMs, int gear, double wheelMs = -1, bool shifting = false) {
+        vehSpeed_ = speedMs; vehGear_ = gear; wheelSpeed_ = wheelMs < 0 ? speedMs : wheelMs; shifting_ = shifting;
+    }
+    // carry thermal / electrical state (and the nitrous bottle) over a rebuild (structural change while running)
+    void copyThermalFrom(const Engine& o) { thermal = o.thermal; elec = o.elec; rail = o.rail; n2oBottle = o.n2oBottle; n2oRefillSeen_ = o.n2oRefillSeen_; }
+    // nitrous: what flows now and what is left in the bottle
+    double n2oFlow = 0;           // kg/s of N2O
+    double n2oBottle = 0;         // kg
     static constexpr int kTrace = 1080;
     float traceP[kTrace] = {}, traceV[kTrace] = {}, traceExh[kTrace] = {}, traceInt[kTrace] = {};
     double lambdaAvg = 1, veAvg = 0, knockMax = 0, egtAvg = 800;   // egtAvg: in the manifold (after the port)
@@ -93,6 +99,12 @@ private:
     void injectPort(int port, double rpm, double share);
     double ecuAcc_ = 1e9, vehSpeed_ = 0, lastFricW_ = 0, lamFast_ = 1;
     int vehGear_ = 0;
+    double wheelSpeed_ = 0;
+    bool shifting_ = false;
+    int n2oRefillSeen_ = -1;
+    double n2oCool_ = 0;          // K the port charge is cooled by the evaporating nitrous
+    double afHeatJ_ = 0, afPower_ = 0;   // afterfire heat released in the manifold (J this step, W smoothed)
+    void nitrousStep(double dt);
     bool fuelCutNow_ = false;
     ComponentModel comp_;
     int repairSeen_ = 0;

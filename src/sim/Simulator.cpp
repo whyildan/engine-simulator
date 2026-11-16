@@ -134,7 +134,9 @@ void Simulator::render(float* out, int frames) {
             if (driving && !prevVehicle_) vehicle_.reset();
             prevVehicle_ = driving;
             double load = driving ? vehicle_.step(dt, eng_->omega(), cur_, pedal) : dyno_.step(dt, cur_, *eng_, pedal);
-            eng_->setVehicleState(driving ? vehicle_.v : 0.0, driving ? vehicle_.gear : 0);
+            eng_->setVehicleState(driving ? vehicle_.v : 0.0, driving ? vehicle_.gear : 0,
+                                  driving ? vehicle_.wheelOmega * std::max(0.15, cur_.tireRadius_mm * 1e-3) : 0.0,
+                                  driving && vehicle_.shifting);
             eng_->step(dt, pedal, load, driving);
             double v[5] = {eng_->sExhL, eng_->sExhR, eng_->sIntake, eng_->sMech, eng_->sBoost + (driving ? vehicle_.sound() : 0.0)};
             if (old_) {
@@ -250,6 +252,12 @@ void Simulator::render(float* out, int frames) {
     t.runTime = (float)vehicle_.runTime; t.clutchLocked = vehicle_.clutchLocked; t.shifting = vehicle_.shifting;
     if (t.vehicle) { t.torque = (float)vehicle_.clutchTorqueAvg; t.powerKw = (float)(vehicle_.clutchTorqueAvg * e.omega() / 1000.0); }
     t.surging = e.boost.surging; t.bovOpen = e.boost.bovOpen; t.antiLag = e.antiLagActive;
+    t.launchState = e.ecu.launchState; t.launchLimitRpm = (float)e.ecu.launchLimitRpm;
+    t.tcSlip = (float)e.ecu.tcSlip; t.tcTarget = (float)e.ecu.tcTarget; t.tcReduction = (float)e.ecu.tcReduction;
+    t.tcRetard = (float)e.ecu.tcRetard; t.tcCut = (float)e.ecu.tcCut;
+    t.wheelKmh = (float)(t.vehicle ? vehicle_.wheelOmega * std::max(0.15, cur_.tireRadius_mm * 1e-3) * 3.6 : 0.0);
+    t.n2oDuty = (float)e.ecu.cmd.n2oDuty; t.n2oFlowGs = (float)(e.n2oFlow * 1000.0); t.n2oBottleKg = (float)e.n2oBottle;
+    t.n2oLeanLock = e.ecu.n2oLeanLock; t.transbrake = t.vehicle && vehicle_.transbrake;
     for (int i = 0; i < e.cylinders(); ++i) {
         t.cylImep[i] = (float)(e.cyl(i).imep * 1e-5);
         t.cylPmax[i] = (float)(e.cyl(i).pmaxCycle * 1e-5);

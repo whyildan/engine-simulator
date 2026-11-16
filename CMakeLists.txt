@@ -101,6 +101,7 @@ add_executable(enginesim WIN32
   src/ui/Tuning.cpp
   src/ui/CalManager.cpp
   src/ui/Control.cpp
+  src/ui/Motorsport.cpp
   src/ui/FileDialog.cpp
   src/ui/Logging.cpp
   src/ui/Dashboard.cpp
@@ -168,6 +169,9 @@ target_link_libraries(egt_probe PRIVATE enginesim_core)
 
 add_executable(log_test tests/log_test.cpp)
 target_link_libraries(log_test PRIVATE enginesim_core)
+
+add_executable(motorsport_test tests/motorsport_test.cpp)
+target_link_libraries(motorsport_test PRIVATE enginesim_core)
 
 add_executable(basemap_warm tests/basemap_warm.cpp)
 target_link_libraries(basemap_warm PRIVATE enginesim_core)

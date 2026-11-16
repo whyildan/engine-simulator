@@ -26,6 +26,9 @@ struct ActuatorCommands {
     double cutFraction = 0;       // soft limiter: share of sparks cut (0..1)
     double throttleTarget = -1;   // drive-by-wire throttle request 0..1 (-1: the pedal drives the throttle directly)
     double wgDuty = -1;           // wastegate solenoid duty 0..1 (-1: no ECU boost control, spring only)
+    // Phase 5
+    double fuelCutFraction = 0;   // launch limiter in fuel-cut mode: share of injection events dropped
+    double n2oDuty = 0;           // nitrous solenoid duty 0..1 (progressive controller)
 };
 
 class Ecu {
@@ -65,6 +68,11 @@ public:
     int protState[kProtCount] = {};          // 0 ok, 1 warning, 2 action active
     double protValue[kProtCount] = {};
     bool limp = false, shutdown = false, throttleLimited = false;
+    // Phase 5 telemetry
+    int launchState = kLaunchOff;
+    double launchLimitRpm = 0;               // rpm the active launch / shift limiter holds (0 = none)
+    double tcSlip = 0, tcTarget = 0, tcReduction = 0, tcRetard = 0, tcCut = 0;   // %, %, 0..1, deg, 0..1
+    bool n2oLeanLock = false;
     // a latched engine shutdown clears once the engine has stood still; this clears it at once
     void clearProtection();
 
@@ -75,6 +83,7 @@ private:
     void knockStep(double dt, const SensorReadings& s, double rpm);
     void boostStep(double dt, const SensorReadings& s, double rpm, double tpsPct);
     void autoTuneStep(double dt, const SensorReadings& s);
+    void motorsportStep(double dt, const SensorReadings& s, double rpm, double tpsPct, bool running);
     EngineParams p_{};
     Calibration cal_{}, lastIn_{};
     double vdCyl_ = 5e-4, revsPerEvent_ = 2.0;
@@ -87,7 +96,7 @@ private:
     bool limiterOn_ = false;
     double alsTimer_ = 10;
     // transients
-    double prevTps_ = 0, tpsRate_ = 0, prevMap_ = 101.3, mapRate_ = 0, mapRateSlow_ = 0, aeNow_ = 0, sinceCut_ = 100;
+    double prevTps_ = 0, tpsRate_ = 0, prevMap_ = 101.3, mapRate_ = 0, mapRateSlow_ = 0, aeNow_ = 0, aeTps_ = 0, sinceCut_ = 100;
     bool wasCut_ = false;
     bool dfcoArmed_ = true;      // decel cut allowed (re-armed by opening the throttle after a cut ended)
     double portDry_ = 0;         // 0..1: how dry the port walls are after decel fuel cut (drives the exit enrichment)
@@ -104,6 +113,15 @@ private:
     bool dbwIdentity_ = true;
     // protection actions currently in force
     bool actRetard_ = false, actBoost_ = false, actThrottle_ = false, actFuel_ = false;
+    // Phase 5 state: what the launch / shift limiters, traction control and nitrous ask of the spark and fuel
+    double msCut_ = 0, msRetard_ = 0, msEnrich_ = 0;
+    bool msTimingOn_ = false;
+    double msTiming_ = 0;
+    bool prevShift_ = false, flatLatched_ = false, rollLatched_ = false;
+    double shiftCutT_ = 0, flatRpm_ = 0, rollRpm_ = 0, tcI_ = 0;
+    double n2oOnT_ = 0, n2oLeanT_ = 0;
+    uint32_t rng_ = 0x9e3779b9u;
+    double rand01() { rng_ = rng_ * 1664525u + 1013904223u; return (rng_ >> 8) * (1.0 / 16777216.0); }
     // auto-tune history (what was commanded, matched to the wideband after the transport delay)
     struct Hist { double t, rpm, map, tps, w, lam, trim; bool ok; };
     static constexpr int kHist = 1024;

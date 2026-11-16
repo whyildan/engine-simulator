@@ -155,12 +155,12 @@ void App::sectionEngineControl() {
             rowLabel("Now", b);
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Launch / shift")) { tabLaunch(); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Traction control")) { tabTraction(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Planned")) {
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.35f, 1), "Planned for Phase 5 (motorsport):");
-            ImGui::BulletText("Launch control, two-step / three-step, flat shift");
-            ImGui::BulletText("Traction control, rolling anti-lag, transbrake");
-            ImGui::BulletText("VVT / VTEC control, torque management, gear-based control");
-            ImGui::TextDisabled("Anti-lag is in Boost Control; cam advance (VVT) in Engine Setup > Valvetrain.");
+            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.35f, 1), "Not modelled yet:");
+            ImGui::BulletText("VVT / VTEC control by the ECU, torque management, gear-based control");
+            ImGui::TextDisabled("Anti-lag and nitrous are in Boost Control; cam advance (VVT) in Engine Setup > Valvetrain.");
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

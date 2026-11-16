@@ -34,6 +34,7 @@ double interp(const std::vector<std::pair<double, double>>& xy, double x) {
 bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* prog, double fs) {
     EngineParams p = pIn;
     p.vehicle = 0; p.dynoMode = DynoMode::Off; p.ignition = 1; p.starter = 0; p.coldStart = 0;
+    p.clutchPedal = 0; p.n2oArm = 0; p.transbrake = 0; p.rollingAlsButton = 0;   // no launch limiter / nitrous on the rig
     p.cal.autoTune = 0; p.cal.closedLoop = 0;
     // the calibration rig measures the bare engine: no knock retard, trims, soft limiter or protection actions
     p.cal.knockControl = 0; p.cal.ltftLearn = 0; p.cal.softLimitBand = 0;
@@ -161,7 +162,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
 // ------------------------------------------------------------------ on-disk cache
 // Keyed by everything that defines the engine (driver inputs, sound, dyno, vehicle and the VE maps
 // themselves are left out). Bump kBaseMapVersion when the physics changes.
-static constexpr uint32_t kBaseMapVersion = 15;   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
+static constexpr uint32_t kBaseMapVersion = 16;   // 16: afterfire heat in the exhaust (Phase 5)   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
 static std::string g_cacheDir;
 void setBaseMapCacheDir(const std::string& dir) { g_cacheDir = dir; }
 
@@ -173,6 +174,8 @@ static uint64_t engineKey(const EngineParams& in) {
     p.throttle = 0; p.ignition = 0; p.starter = 0; p.listener = ListenerPos::Tailpipe; p.volume = 0;
     p.dynoMode = DynoMode::Off; p.dynoHoldRpm = 0; p.sweepRequest = 0; p.sweepStartRpm = p.sweepEndRpm = p.sweepRate = 0;
     p.vehicle = 0; p.gear = 0; p.clutchPedal = 0; p.brake = 0;
+    p.nitrous = 0; p.n2oShotHp = 0; p.n2oWet = 0; p.n2oBottleKg = 0; p.n2oRefill = 0;
+    p.n2oArm = 0; p.transbrake = 0; p.rollingAlsButton = 0;
     p.exhaustRasp = p.exhaustPunch = p.exhaustSteep = p.pressureMix = p.smoothHz = 0; p.soundStyle = 0;
     p.environment = Environment::OpenRoad; p.reverbMix = 0; p.irChoice = 0; p.irMix = 0;
     p.comp.repairCount = 0; p.comp.allowFailure = 0;

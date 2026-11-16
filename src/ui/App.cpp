@@ -129,6 +129,13 @@ void App::keyboard(float dt) {
     if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { if (logRec_ >= 0) logStop(); else logStart(); }
     if (ImGui::IsKeyPressed(ImGuiKey_M, false)) logMarker("marker");
     if (ImGui::IsKeyPressed(ImGuiKey_L, false)) { p_.listener = (ListenerPos)(((int)p_.listener + 1) % 3); }
+    // motorsport switches: T transbrake (hold), G rolling anti-lag button (hold), X nitrous arming switch (toggle)
+    static bool tbKey = false, alsKey = false;
+    if (ImGui::IsKeyDown(ImGuiKey_T)) { p_.transbrake = 1; tbKey = true; }
+    else if (tbKey) { p_.transbrake = 0; tbKey = false; }
+    if (ImGui::IsKeyDown(ImGuiKey_G)) { p_.rollingAlsButton = 1; alsKey = true; }
+    else if (alsKey) { p_.rollingAlsButton = 0; alsKey = false; }
+    if (ImGui::IsKeyPressed(ImGuiKey_X, false)) p_.n2oArm = !p_.n2oArm;
 }
 
 void App::pullDyno() {

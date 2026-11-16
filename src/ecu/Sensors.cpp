@@ -46,6 +46,7 @@ void SensorLayer::reset(const EngineParams&) { init_ = false; histW_ = 0; }
 
 void SensorLayer::update(double dt, const SensorTruth& t, const EngineParams& p) {
     truth = t;
+    r.in = t.in;
     // exhaust gas reaches the lambda sensors after a transport delay (shorter at high flow)
     lamHist_[histW_] = t.v[kSnsWideband];
     const double rpm = std::max(300.0, t.v[kSnsCKP]);

@@ -1,4 +1,5 @@
 #include "sim/Engine.h"
+#include <cstdlib>
 #include <cstdio>
 #include <algorithm>
 
@@ -168,6 +169,12 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     t.v[kSnsVSS] = vehSpeed_ * 3.6;
     t.v[kSnsGear] = vehGear_;
     t.v[kSnsBattery] = elec.volts;
+    t.in.clutch = p_.clutchPedal > 0.5f;
+    t.in.transbrake = p_.transbrake != 0 && p_.transMode != TransMode::Manual;
+    t.in.n2oArm = p_.n2oArm != 0;
+    t.in.rollingAls = p_.rollingAlsButton != 0;
+    t.in.shift = shifting_;
+    t.in.wheelKmh = wheelSpeed_ * 3.6;
     sensors.update(h, t, p_);
     ecu.update(h, sensors.r, p_.starter != 0);
     intake.setIac(ecu.cmd.iac);
@@ -180,6 +187,27 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
         for (int i = 0; i < (int)ecu.asyncFuel.size(); ++i)
             if (ecu.asyncFuel[i] > 0) intake.injectPulse(i, ecu.pulseFor(ecu.asyncFuel[i], sensors.r), cycT, flowA, deadA);
     }
+}
+
+// nitrous: the solenoid (ECU duty) lets N2O from the bottle into the ports - modelled as air-equivalent charge
+// (oxygen + decomposition heat, kN2oAirEquiv), a wet kit's own fuel, and charge cooling from the liquid flashing
+void Engine::nitrousStep(double dt) {
+    if (p_.n2oRefill != n2oRefillSeen_) { n2oRefillSeen_ = p_.n2oRefill; n2oBottle = std::max(0.0f, p_.n2oBottleKg); }
+    n2oFlow = 0;
+    double coolTarget = 0;
+    if (p_.nitrous && p_.ignition && ecu.cmd.n2oDuty > 0 && n2oBottle > 0) {
+        // the bottle delivers liquid at full pressure until the last ~15 %, then the flow falls off
+        const double left = n2oBottle / std::max(0.1, (double)p_.n2oBottleKg);
+        n2oFlow = n2oFullFlowKgs(p_) * ecu.cmd.n2oDuty * clampv(left / 0.15, 0.0, 1.0);
+        n2oBottle = std::max(0.0, n2oBottle - n2oFlow * dt);
+        const double airEq = n2oFlow * kN2oAirEquiv * dt / nPorts_;
+        const double fuel = p_.n2oWet ? airEq / 12.5 : 0.0;   // wet kit: jetted a little rich of stoichiometric
+        for (int i = 0; i < nPorts_; ++i) intake.addPortCharge(i, airEq, fuel);
+        const double air = std::max(1e-4, intake.airFlow());
+        coolTarget = 250.0 * n2oFlow / (air + n2oFlow);
+    }
+    n2oCool_ += (coolTarget - n2oCool_) * std::min(1.0, dt / 0.15);
+    if (n2oCool_ > 1e-3 || coolTarget > 0) intake.setPortCooling(n2oCool_);
 }
 
 // injection event of a port: the ECU decides the pulse, the injector delivers what physics allows
@@ -488,6 +516,7 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     fireTimer_ += dt;
     running_ = rpm > 300 && fireTimer_ < 0.3;
     boost.setWgDuty(ecu.cmd.wgDuty);
+    nitrousStep(dt);
     double scTorque = isBoosted(p_) ? boost.step(dt, omega_, egtAvg, intake, exhaust) : 0.0;
     intake.stepAir(dt, pedal, rpm, p_.ignition && !fuelCut);
 
@@ -513,6 +542,7 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
             if (rng_.uniform() < rate * dt) {
                 double burn = c.afterfireFuel * 0.7;
                 c.afterfireFuel -= burn;
+                afHeatJ_ += burn * kLHV * 0.9;
                 GasNode& ep = exhaust.port(portOf_[i]);
                 c.popPending += std::min(burn * kLHV * (kGamma - 1.0) / ep.V * 0.03, 0.7e5) * (0.6 + 0.4 * rng_.uniform());
                 ++afterfires;
@@ -605,7 +635,12 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
         const double Tw = thermal.coolantC + 273.15 + 120.0;
         const double Tcyl = egt / n;
         egtCyl = Tcyl;
-        const double Tport = Tcyl > Tw ? Tw + (Tcyl - Tw) * std::exp(-ntu) : Tcyl;
+        double Tport = Tcyl > Tw ? Tw + (Tcyl - Tw) * std::exp(-ntu) : Tcyl;
+        // afterfire: fuel burning in the manifold (overrun pops, a spark-cut 2-step / limiter) heats the exhaust
+        // gas downstream of the port - this is what spools a turbo on the 2-step
+        afPower_ += (afHeatJ_ / std::max(1e-6, dt) - afPower_) * std::min(1.0, dt / 0.15);
+        afHeatJ_ = 0;
+        Tport += std::min(900.0, afPower_ / (std::max(2e-3, exhFlowAvg_) * 1150.0));
         egtAvg += (Tport - egtAvg) * a;
     }
     exhaust.setGasTemp(egtAvg);   // pipe sound speed follows the gas temperature

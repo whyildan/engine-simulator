@@ -298,7 +298,7 @@ Tiap komponen dipilih dari katalog (plus opsi "custom") dan punya efek fisik yan
 - Dyno: ekspor CSV, satuan imperial (HP = lb-ft × rpm / 5252), perbandingan sebelum dan sesudah tuning.
 
 Implementasi:
-- **Channel log** (`src/sim/DataLog.*`): 43 channel (key, nama, satuan, grup, getter dari telemetri). Sampel
+- **Channel log** (`src/sim/DataLog.*`): 43 channel (48 sejak Fase 5) (key, nama, satuan, grup, getter dari telemetri). Sampel
   diambil di thread simulator per blok render menurut waktu simulasi (10/20/50/100 Hz), jadi laju log tidak
   bergantung pada frame rate UI. `LogSession` menyimpan mesin, nama + revisi kalibrasi, laju, dan marker.
 - **CSV**: baris header `# key: value` (sesi, mesin, kalibrasi, revisi, laju), baris `# marker: t, label`, lalu
@@ -317,12 +317,45 @@ Implementasi:
   Idle turun dari 800–959 °C ke ±560–740 °C. Sisa selisih ke mesin asli (±300–550 °C) berasal dari pembakaran
   idle yang lambat (CA50 ±30° ATDC); mempercepatnya membuat idle beberapa preset tidak stabil, jadi ditunda.
 
-### Fase 5 – Motorsport
+### Fase 5 – Motorsport ✅ selesai
 - Launch control dan 2-step/3-step (pemotongan pengapian/bahan bakar + retard), flat shift (cut saat ganti gigi tanpa angkat gas).
 - Traction control dari slip roda yang sudah ada di `Vehicle`.
 - Rolling anti-lag (memakai ALS yang sudah ada).
 - Boost by gear dan transbrake.
 - Nitrous: injeksi N₂O dengan tambahan oksigen dan efek pendinginan muatan, plus pengayaan bahan bakar.
+
+Implementasi:
+- **Input digital** (`DigitalInputs` di `src/ecu/Sensors.h`): saklar kopling (pedal > 50 %), transbrake, saklar
+  arming nitrous, tombol rolling anti-lag, sinyal ganti gigi, dan kecepatan roda penggerak. ECU membacanya
+  apa adanya (tanpa model lag/noise).
+- **`Ecu::motorsportStep`**: satu limiter aktif sekaligus, urutan 2-step → 3-step → flat shift → shift cut →
+  rolling ALS. Limiter memotong spark (atau bahan bakar) dengan porsi yang naik dari 0 di limit − band ke 100 %
+  di limit + band. 2-step/3-step/rolling ALS memakai timing absolut (launch timing / ALS timing); flat shift
+  menahan rpm saat kopling diinjak (+ margin) dengan retard. Bahan bakar dari silinder yang dipotong terbakar
+  di manifold (letupan), dan panasnya kini ikut menaikkan EGT dan memutar turbin — itulah yang membangun
+  boost di 2-step. Base map diukur ulang (versi 16).
+- **Traction control**: slip = (roda penggerak − kecepatan mobil) / max(kecepatan, 10 km/h); target slip berupa
+  kurva atas kecepatan; PI dengan anti-windup; 40 % pertama pengurangan berupa retard, sisanya spark cut
+  (maks 90 %).
+- **Transbrake** (gearbox otomatis / auto-clutch): roda dikunci, mesin dibebani seperti torque converter saat
+  stall (beban ∝ rpm², stall ±45 % rev limit); tombol ikut meng-arm 2-step. Lepas tombol → kopling menggigit.
+- **Anti-lag**: parameter yang dulu tetap (−30°, throttle 10 %, 2 s, > 2500 rpm) kini kalibrasi.
+- **Nitrous**: N₂O masuk ke port sebagai muatan setara udara ×2.2 (oksigen 1.57× udara + panas dekomposisi),
+  0.32 g/s per hp shot, pendinginan muatan, kit wet (bahan bakar sendiri, ±AFR 12.5 untuk porsi N₂O) atau dry
+  (ECU menambah bahan bakar menurut nilai aliran N₂O di kalibrasinya). Kontroler: arming, TPS, jendela rpm,
+  ECT, kecepatan, delay, ramp progresif, retard, mati saat lean. Botol berkurang; aliran turun di 15 % terakhir.
+- **UI**: Engine Control › Launch / shift dan Traction control; Boost Control › Anti-lag dan Nitrous; tombol
+  `T` (transbrake), `G` (rolling ALS), `X` (arming nitrous); status aktif di kanan baris judul section; 5
+  channel log baru dan marker otomatis "launch" / "nitrous on".
+- **Hasil `motorsport_test`**: 2-step I4 tertahan ±4100 rpm dengan letupan; turbo besar di 2-step dengan
+  timing −15° vs +15°: turbo 69k vs 59k rpm, EGT 666 vs 547 °C; flat shift: maks 5332 rpm (tanpa: 6983);
+  shift cut memangkas lonjakan rpm saat ganti gigi; TC di grip 0.6: slip rata-rata 151 % → 17 % dan mobil
+  lebih cepat; transbrake menahan mobil di ±2700 rpm dengan boost 1.3 bar lalu meluncur; rolling ALS menahan
+  rpm dan membangun boost; nitrous 100 hp di dyno: +99 hp, AFR 12.4 (wet) / 12.3 (dry), lean → mati.
+- Ikut diperbaiki: pengayaan laju-MAP (ECU menangkap idle yang turun) tidak lagi dihitung sebagai transien.
+  Sebelumnya setiap turunan idle me-reset closed loop, sehingga idle yang naik-turun hampir tidak pernah masuk
+  closed loop (tes baterai macet: closed loop 40 % waktu, λ 0.875 → sekarang 100 %, λ 0.999).
+- Belum: kontrol VVT/VTEC oleh ECU, torque management, kontrol berbasis gigi selain boost.
 
 ### Fase 6 – Simulasi lanjutan
 - Peta efisiensi kompresor dan turbin yang bisa dimuat.

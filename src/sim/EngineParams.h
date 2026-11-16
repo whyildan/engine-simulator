@@ -170,6 +170,17 @@ struct EngineParams {
     float clutchPedal;        // 0 = released (engaged) .. 1 = pressed (disengaged)
     float brake;              // 0..1
 
+    // ---------------------------------------------------------- motorsport hardware and switches (Phase 5)
+    int32_t nitrous;          // nitrous system fitted
+    float n2oShotHp;          // jetted for this many hp (sets the N2O flow)
+    int32_t n2oWet;           // 1 = wet kit (its own fuel solenoid adds the fuel), 0 = dry (the ECU adds the fuel)
+    float n2oBottleKg;        // bottle size
+    int32_t n2oRefill;        // incremented by the UI: refill the bottle
+    // driver switches - the ECU reads them as digital inputs (the clutch switch comes from clutchPedal)
+    int32_t n2oArm;           // nitrous arming switch
+    int32_t transbrake;       // transbrake button held (automatic / auto-clutch gearbox: holds the car)
+    int32_t rollingAlsButton; // rolling anti-lag button held
+
     // ---------------------------------------------------------- exhaust tone / acoustics
     float exhaustRasp;        // turbulent jet noise at the tailpipe (0 = off, 1 = physical estimate)
     float exhaustPunch;       // low-frequency "body" (gas pulse pressure) mixed into the radiated sound
@@ -213,6 +224,13 @@ inline double starterReleaseRpm(const EngineParams& p, double coolantC = 88.0) {
 }
 
 inline bool isBoosted(const EngineParams& p) { return p.induction != Induction::Natural; }
+
+// Nitrous oxide is modelled as extra intake charge: 1 kg of N2O carries the oxygen of 1.57 kg of air and
+// releases its decomposition heat on top, so it is fed to the ports as this much air-equivalent mass (and
+// burns with the matching fuel). The flow per jetted hp follows from ~2.3 MJ of brake work per kg of N2O.
+constexpr double kN2oAirEquiv = 2.2;
+constexpr double kN2oKgsPerHp = 3.2e-4;
+inline double n2oFullFlowKgs(const EngineParams& p) { return std::max(0.0f, p.n2oShotHp) * kN2oKgsPerHp; }
 
 inline bool isRotary(const EngineParams& p) { return p.engineType == EngineType::Rotary; }
 // length of one working cycle of a chamber in crank / eccentric-shaft degrees

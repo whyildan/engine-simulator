@@ -83,6 +83,11 @@ void App::logFrame() {
     logPrevLimp_ = tel_.limp;
     if (p_.vehicle && tel_.gear != logPrevGear_) logMarker("gear " + std::to_string(tel_.gear));
     logPrevGear_ = tel_.gear;
+    // launch: the moment the 2-step lets go is the start of the run
+    if (logPrevLaunch_ == kLaunch2Step && tel_.launchState != kLaunch2Step) logMarker("launch");
+    logPrevLaunch_ = tel_.launchState;
+    if (tel_.n2oDuty > 0 && !logPrevN2o_) logMarker("nitrous on");
+    logPrevN2o_ = tel_.n2oDuty > 0;
 }
 
 // dyno runs -> CSV (every visible run, metric and imperial columns, the calibration each run was made with)
@@ -136,7 +141,7 @@ void App::sectionDataLogging() {
     ImGui::BeginDisabled(logRec_ < 0);
     if (ImGui::Button("Marker [M]")) { logMarker(logMarkText_[0] ? logMarkText_ : "marker"); }
     ImGui::EndDisabled();
-    ImGui::TextDisabled("Automatic markers: protection actions, limp mode, gear changes.");
+    ImGui::TextDisabled("Automatic markers: protection actions, limp mode, gear changes, launch, nitrous on.");
 
     ImGui::SeparatorText("Sessions");
     if (ImGui::BeginTable("##sess", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_BordersInnerV, ImVec2(0, em * 9))) {

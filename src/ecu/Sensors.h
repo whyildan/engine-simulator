@@ -9,11 +9,22 @@
 
 namespace es {
 
+// switch inputs and the driven-wheel speed (digital / frequency inputs: read as they are, no lag or noise model)
+struct DigitalInputs {
+    bool clutch = false;        // clutch switch (pedal more than half down)
+    bool transbrake = false;
+    bool n2oArm = false;
+    bool rollingAls = false;    // rolling anti-lag button
+    bool shift = false;         // gear-change signal (gearbox actuator / shift switch)
+    double wheelKmh = 0;        // driven wheel speed
+};
+
 struct SensorTruth {
     double v[kSensorCount] = {};   // physical truth in each sensor's unit (O2 / wideband: lambda)
     // knock per cylinder (port) from the crank-angle window, and its cycle counter (one value per combustion)
     double knockCyl[kMaxCyl] = {};
     int knockSeq[kMaxCyl] = {};
+    DigitalInputs in;
 };
 
 enum SensorStatus : int { kStatusOk = 0, kStatusLow = 1, kStatusHigh = 2, kStatusNoSignal = 3 };
@@ -26,6 +37,7 @@ struct SensorReadings {
     bool fallback[kSensorCount] = {};
     double knockCyl[kMaxCyl] = {};       // windowed knock intensity per cylinder (0 when the knock sensor failed)
     int knockSeq[kMaxCyl] = {};
+    DigitalInputs in;
     bool ok(int id) const { return !fallback[id]; }
 };
 

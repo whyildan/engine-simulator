@@ -187,6 +187,30 @@ const ScalarDef kScalars[] = {
     // protection actions
     {"limp_throttle", &Calibration::limpThrottle, nullptr}, {"limp_rpm", &Calibration::limpRpm, nullptr},
     {"prot_retard", &Calibration::protRetard, nullptr},
+    // motorsport: launch / 3-step / flat shift / shift cut
+    {"launch_control", nullptr, &Calibration::launchControl}, {"launch_rpm", &Calibration::launchRpm, nullptr},
+    {"launch_timing", &Calibration::launchTiming, nullptr}, {"launch_min_tps", &Calibration::launchMinTps, nullptr},
+    {"launch_max_speed", &Calibration::launchMaxSpeed, nullptr}, {"launch_cut_band", &Calibration::launchCutBand, nullptr},
+    {"launch_cut_mode", nullptr, &Calibration::launchCutMode}, {"launch_enrich", &Calibration::launchEnrich, nullptr},
+    {"clutch_moving_mode", nullptr, &Calibration::clutchMovingMode}, {"three_step_rpm", &Calibration::threeStepRpm, nullptr},
+    {"flat_shift_margin", &Calibration::flatShiftMargin, nullptr}, {"flat_shift_retard", &Calibration::flatShiftRetard, nullptr},
+    {"shift_cut", nullptr, &Calibration::shiftCut}, {"shift_cut_time", &Calibration::shiftCutTime, nullptr},
+    {"shift_cut_min_tps", &Calibration::shiftCutMinTps, nullptr},
+    // anti-lag
+    {"als_timing", &Calibration::alsTiming, nullptr}, {"als_throttle", &Calibration::alsThrottle, nullptr},
+    {"als_max_time", &Calibration::alsMaxTime, nullptr}, {"als_min_rpm", &Calibration::alsMinRpm, nullptr},
+    {"rolling_als", nullptr, &Calibration::rollingAls}, {"rolling_als_min_speed", &Calibration::rollingAlsMinSpeed, nullptr},
+    // traction control
+    {"traction_control", nullptr, &Calibration::tractionControl}, {"tc_kp", &Calibration::tcKp, nullptr},
+    {"tc_ki", &Calibration::tcKi, nullptr}, {"tc_max_retard", &Calibration::tcMaxRetard, nullptr},
+    {"tc_max_cut", &Calibration::tcMaxCut, nullptr},
+    // nitrous controller
+    {"n2o_min_tps", &Calibration::n2oMinTps, nullptr}, {"n2o_min_rpm", &Calibration::n2oMinRpm, nullptr},
+    {"n2o_max_rpm", &Calibration::n2oMaxRpm, nullptr}, {"n2o_min_ect", &Calibration::n2oMinEct, nullptr},
+    {"n2o_min_speed", &Calibration::n2oMinSpeed, nullptr}, {"n2o_delay", &Calibration::n2oDelay, nullptr},
+    {"n2o_ramp_time", &Calibration::n2oRampTime, nullptr}, {"n2o_start_pct", &Calibration::n2oStartPct, nullptr},
+    {"n2o_retard", &Calibration::n2oRetard, nullptr}, {"n2o_flow_gs", &Calibration::n2oFlowGs, nullptr},
+    {"n2o_lean_lambda", &Calibration::n2oLeanLambda, nullptr},
 };
 const char* kActKeys[kActCount] = {"warn", "retard", "boost_reduce", "throttle_limit", "fuel_limit", "limp", "shutdown"};
 const char* kLoadModeNames[] = {"speed_density", "alpha_n", "maf", "hybrid"};

@@ -94,6 +94,8 @@ static EngineParams base() {
 
     p.vehicle = 0; p.transMode = TransMode::ManualAutoClutch;
     p.gear = 0; p.clutchPedal = 0; p.brake = 0; p.grade_pct = 0;
+    p.nitrous = 0; p.n2oShotHp = 100; p.n2oWet = 1; p.n2oBottleKg = 4.5f; p.n2oRefill = 0;   // 10 lb bottle
+    p.n2oArm = 0; p.transbrake = 0; p.rollingAlsButton = 0;
     p.exhaustRasp = 0.3f; p.exhaustPunch = 0.4f; p.exhaustSteep = 0.0f;
     p.soundStyle = 0; p.pressureMix = 0.5f; p.smoothHz = 4500.0f; p.environment = Environment::OpenRoad; p.reverbMix = 0.35f;
     p.irChoice = 1; p.irMix = 0.7f; p.imperfection = 0.6f;
@@ -498,6 +500,8 @@ EngineParams makePreset(int idx) {
     finish(p);
     applyVehicleDefaults(p);
     applyComponentDefaults(p);
+    // a nitrous kit sized to the engine (~30 hp per litre, in 25 hp jet steps)
+    p.n2oShotHp = (float)(std::round(std::max(50.0, 30.0 * equivalentDisplacementL(p)) / 25.0) * 25.0);
     generateCalibration(p);
     std::snprintf(p.name, sizeof(p.name), "%s", presetName(idx));
     return p;

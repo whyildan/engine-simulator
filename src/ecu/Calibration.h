@@ -110,12 +110,54 @@ struct Calibration {
     float limpThrottle;     // % max throttle in limp mode / throttle limitation
     float limpRpm;          // rpm cap in limp mode / fuel limitation
     float protRetard;       // deg of retard for the retard action / limp mode
+
+    // ---- motorsport (Phase 5)
+    // launch control (2-step) and the clutch-in limiters while moving (3-step / flat shift)
+    int32_t launchControl;
+    float launchRpm;        // 2-step: rpm held at standstill with the clutch in (or the transbrake on)
+    float launchTiming;     // deg BTDC while a launch / 3-step limit is armed (turbo: retarded timing builds boost)
+    float launchMinTps;     // % throttle that arms the limiters
+    float launchMaxSpeed;   // km/h: below = standing (2-step), above = moving (3-step / flat shift)
+    float launchCutBand;    // rpm: the cut ramps from 0 to 100 % across +-band around the limit
+    int32_t launchCutMode;  // 0 spark cut (unburned fuel bangs in the exhaust), 1 fuel cut
+    float launchEnrich;     // % extra fuel while a launch limit is holding
+    int32_t clutchMovingMode;   // clutch in while moving: 0 off, 1 3-step (fixed rpm), 2 flat shift (hold the clutch-in rpm)
+    float threeStepRpm;
+    float flatShiftMargin;  // rpm above the clutch-in rpm
+    float flatShiftRetard;  // deg
+    int32_t shiftCut;       // spark cut on the gear-change signal (sequential / auto-clutch / automatic gearbox)
+    float shiftCutTime;     // s
+    float shiftCutMinTps;   // %
+    // anti-lag (on lift-off) and rolling anti-lag (on its button)
+    float alsTiming;        // deg BTDC
+    float alsThrottle;      // % throttle crack
+    float alsMaxTime;       // s after lift-off
+    float alsMinRpm;
+    int32_t rollingAls;
+    float rollingAlsMinSpeed;   // km/h
+    // traction control (driven wheel speed against the vehicle speed)
+    int32_t tractionControl;
+    Curve1D tcSlipTarget;   // allowed slip % over vehicle speed km/h
+    float tcKp, tcKi;       // torque reduction (0..1) per % slip above the target / per % s
+    float tcMaxRetard;      // deg: the first 40 % of the reduction is retard ...
+    float tcMaxCut;         // ... the rest cuts up to this share of the sparks (0..1)
+    // nitrous controller
+    float n2oMinTps, n2oMinRpm, n2oMaxRpm, n2oMinEct, n2oMinSpeed;
+    float n2oDelay;         // s the conditions must hold before the solenoid opens
+    float n2oRampTime;      // s from the start duty to full (progressive controller)
+    float n2oStartPct;      // % duty at the start of the ramp
+    float n2oRetard;        // deg at full flow
+    float n2oFlowGs;        // dry kit: the N2O flow (g/s at full duty) the ECU adds fuel for
+    float n2oLeanLambda;    // wideband leaner than this while spraying -> nitrous off until the throttle is lifted
 };
 
 // table identities (UI / files)
 enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalLtft, kCalBoostTarget, kCalTableCount };
 enum CalCurveId : int { kCalCrankAfr, kCalWarmup, kCalAccel, kCalIatFuel, kCalIatSpark, kCalEctSpark, kCalDeadTime,
-                        kCalIdleTarget, kCalDbwMap, kCalBoostGear, kCalCurveCount };
+                        kCalIdleTarget, kCalDbwMap, kCalBoostGear, kCalTcSlip, kCalCurveCount };
+// what the launch / shift limiters are doing (telemetry)
+enum LaunchState : int { kLaunchOff, kLaunch2Step, kLaunch3Step, kLaunchFlatShift, kLaunchShiftCut, kLaunchRollingAls, kLaunchStateCount };
+const char* launchStateName(int s);
 struct TableInfo { const char* key; const char* name; const char* xName; const char* yName; const char* unit; float lo, hi; float step; };
 const TableInfo& calTableInfo(int id);
 const TableInfo& calCurveInfo(int id);

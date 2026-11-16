@@ -30,6 +30,7 @@ public:
     double distance = 0;
     bool clutchLocked = false;
     bool shifting = false;
+    bool transbrake = false;      // transbrake holding the car
     // performance timer
     double runTime = 0, t100 = 0, tQuarter = 0, vQuarter = 0;
     bool timing = false;

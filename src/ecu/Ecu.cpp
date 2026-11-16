@@ -160,6 +160,91 @@ void Ecu::boostStep(double dt, const SensorReadings& s, double rpm, double tpsPc
     if (!isBoosted(p_) || holdIac) overboostCut = boostCut = false;
 }
 
+// ---- motorsport (Phase 5): launch control (2-step), the clutch-in limiters while moving (3-step / flat shift),
+//      the shift cut, rolling anti-lag, traction control and the nitrous controller. Everything works through
+//      the spark (cut share, retard), the fuel (cut share, enrichment) and the nitrous solenoid.
+void Ecu::motorsportStep(double dt, const SensorReadings& s, double rpm, double tpsPct, bool running) {
+    const DigitalInputs& in = s.in;
+    const double vss = s.fallback[kSnsVSS] ? 0.0 : s.value[kSnsVSS];
+    const bool standing = vss <= cal_.launchMaxSpeed;
+    msCut_ = 0; msRetard_ = 0; msEnrich_ = 0; msTimingOn_ = false;
+    cmd.fuelCutFraction = 0;
+    launchState = kLaunchOff;
+    launchLimitRpm = 0;
+
+    // ---- launch / shift limiters (one at a time, in this order)
+    if (in.shift && !prevShift_) shiftCutT_ = cal_.shiftCutTime;
+    prevShift_ = in.shift;
+    shiftCutT_ = std::max(0.0, shiftCutT_ - dt);
+    const bool armedTps = tpsPct >= cal_.launchMinTps;
+    // flat shift: the rpm where the clutch went in (at full throttle, moving) is held until it comes out
+    if (cal_.clutchMovingMode == 2 && in.clutch && !standing && armedTps && running) {
+        if (!flatLatched_) { flatLatched_ = true; flatRpm_ = rpm; }
+    } else flatLatched_ = false;
+    // rolling anti-lag: the rpm where the button went in is held, with anti-lag timing, to build boost on the move
+    if (cal_.rollingAls && in.rollingAls && vss >= cal_.rollingAlsMinSpeed && tpsPct >= cal_.launchMinTps && running && !limp) {
+        if (!rollLatched_) { rollLatched_ = true; rollRpm_ = rpm; }
+    } else rollLatched_ = false;
+    if (cal_.launchControl && (in.clutch || in.transbrake) && standing && armedTps) {
+        launchState = kLaunch2Step; launchLimitRpm = cal_.launchRpm;
+        msTimingOn_ = true; msTiming_ = cal_.launchTiming; msEnrich_ = cal_.launchEnrich;
+    } else if (cal_.clutchMovingMode == 1 && in.clutch && !standing && armedTps) {
+        launchState = kLaunch3Step; launchLimitRpm = cal_.threeStepRpm;
+        msTimingOn_ = true; msTiming_ = cal_.launchTiming; msEnrich_ = cal_.launchEnrich;
+    } else if (flatLatched_) {
+        launchState = kLaunchFlatShift; launchLimitRpm = flatRpm_ + cal_.flatShiftMargin;
+        msRetard_ = cal_.flatShiftRetard;
+    } else if (cal_.shiftCut && shiftCutT_ > 0 && tpsPct >= cal_.shiftCutMinTps) {
+        launchState = kLaunchShiftCut;
+        msCut_ = 1.0;
+    } else if (rollLatched_) {
+        launchState = kLaunchRollingAls; launchLimitRpm = rollRpm_;
+        msTimingOn_ = true; msTiming_ = cal_.alsTiming; msEnrich_ = cal_.launchEnrich;
+    }
+    if (launchLimitRpm > 0) {
+        // the cut share ramps from 0 at limit - band to 100 % at limit + band: the revs settle on the limit
+        const double band = std::max(30.0f, cal_.launchCutBand);
+        const double f = clampv((rpm - (launchLimitRpm - band)) / (2.0 * band), 0.0, 1.0);
+        if (cal_.launchCutMode == 1 && p_.fuelSystem == FuelSystem::EFI) cmd.fuelCutFraction = f;
+        else msCut_ = f;
+    }
+
+    // ---- traction control: driven wheel speed against the vehicle speed
+    tcSlip = in.wheelKmh > 3.0 ? (in.wheelKmh - vss) / std::max(vss, 10.0) * 100.0 : 0.0;
+    tcTarget = curveLookup(cal_.tcSlipTarget, vss);
+    const bool tcOn = cal_.tractionControl && running && !s.fallback[kSnsVSS];
+    if (tcOn) {
+        const double err = tcSlip - tcTarget;
+        const double pTerm = cal_.tcKp * err;
+        // anti-windup: no further integration while the P term alone already saturates the output, and the
+        // integrator lets go quickly once the tyres have hooked up (a wound-up integrator bogs the engine)
+        if (!(err > 0 && pTerm >= 1.0)) tcI_ += cal_.tcKi * err * (err < 0 ? 3.0 : 1.0) * dt;
+        tcI_ = clampv(tcI_, 0.0, 1.0);
+        tcReduction = clampv(pTerm + tcI_, 0.0, 1.0);
+    } else { tcI_ = 0; tcReduction = 0; }
+    // the first 40 % of the reduction is retard (smooth), the rest cuts sparks (strong; on a turbo engine the
+    // retard alone even feeds the turbine)
+    tcRetard = std::min(1.0, tcReduction / 0.4) * cal_.tcMaxRetard;
+    tcCut = clampv((tcReduction - 0.4) / 0.6, 0.0, 1.0) * clampv((double)cal_.tcMaxCut, 0.0, 1.0);
+
+    // ---- nitrous: armed, full throttle, inside the rpm window, warm, not limiting - then after a delay
+    //      the solenoid opens progressively (start duty -> 100 % over the ramp time)
+    const bool lean = !s.fallback[kSnsWideband] && s.value[kSnsWideband] > cal_.n2oLeanLambda;
+    n2oLeanT_ = (lean && cmd.n2oDuty > 0 && n2oOnT_ > cal_.n2oDelay + 0.3) ? n2oLeanT_ + dt : 0.0;
+    if (n2oLeanT_ > 0.2) n2oLeanLock = true;                  // lean while spraying: off until the throttle is lifted
+    if (tpsPct < cal_.n2oMinTps) n2oLeanLock = false;
+    const bool n2oOk = p_.nitrous && in.n2oArm && running && tpsPct >= cal_.n2oMinTps && rpm >= cal_.n2oMinRpm &&
+                       rpm <= cal_.n2oMaxRpm && s.value[kSnsECT] >= cal_.n2oMinEct && vss >= cal_.n2oMinSpeed &&
+                       launchState == kLaunchOff && !limiterOn_ && !limp && !shutdown && !n2oLeanLock;
+    n2oOnT_ = n2oOk ? n2oOnT_ + dt : 0.0;
+    double duty = 0;
+    if (n2oOnT_ > cal_.n2oDelay) {
+        const double u = cal_.n2oRampTime > 0.01f ? clampv((n2oOnT_ - cal_.n2oDelay) / cal_.n2oRampTime, 0.0, 1.0) : 1.0;
+        duty = lerp(clampv(cal_.n2oStartPct * 0.01, 0.0, 1.0), 1.0, u);
+    }
+    cmd.n2oDuty = duty;
+}
+
 // ---- fuel trims: STFT integrates the wideband error in closed loop and decays in open loop; the LTFT table
 //      slowly takes over what the STFT keeps correcting in a load cell, so it is there next time (open loop too)
 void Ecu::fuelTrimStep(double dt, const SensorReadings& s, double rpm, bool running) {
@@ -225,9 +310,11 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     mapRateSlow_ += ((mapRate_) - mapRateSlow_) * (1.0 - std::exp(-dt / 0.15));   // sustained MAP rise, not idle pulsation
     prevMap_ = mapUsed;
     aeNow_ *= std::exp(-dt / std::max(0.02, (double)cal_.accelDecay));
+    aeTps_ *= std::exp(-dt / std::max(0.02, (double)cal_.accelDecay));
     if (tpsRate_ > 0) {
         double ae = curveLookup(cal_.accel, tpsRate_) * 0.01 * (1.0 + (cal_.accelColdMult - 1.0) * cold);
         aeNow_ = std::max(aeNow_, ae);
+        aeTps_ = std::max(aeTps_, ae);
     }
     // MAP-rate enrichment: catches air increases the throttle does not show (idle valve opening to catch a
     // falling idle, a dashpot) - the MAP sensor lags the port, so speed density alone runs lean there
@@ -243,9 +330,10 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     if (wasCut_) portDry_ = std::min(1.0, portDry_ + dt / 0.6);
     else portDry_ *= std::exp(-dt / std::max(0.02, (double)cal_.dfcoExitDecay));
 
-    // a real transient: the throttle moving, a large MAP swing or real acceleration enrichment (not the small MAP-rate
-    // enrichment that the pulsating manifold of an idling engine keeps nudging)
-    sinceTransient_ = (std::fabs(tpsRate_) > 60.0 || std::fabs(mapRate_) > 150.0 || aeNow_ > 0.05) ? 0.0 : sinceTransient_ + dt;
+    // a real transient: the throttle moving, a large MAP swing or real (throttle) acceleration enrichment - not the
+    // MAP-rate enrichment with which the ECU itself catches a sagging idle: that is idle control, and resetting the
+    // closed loop on every idle dip would keep a hunting idle out of closed loop for good
+    sinceTransient_ = (std::fabs(tpsRate_) > 60.0 || std::fabs(mapRate_) > 150.0 || aeTps_ > 0.05) ? 0.0 : sinceTransient_ + dt;
     const double d = dt > 0 ? (rpm - prevRpm_) / dt : 0.0;
     prevRpm_ = rpm;
     rpmRate_ += (d - rpmRate_) * (1.0 - std::exp(-dt / 0.12));
@@ -274,6 +362,9 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     const double band = cal_.softLimitBand;
     const double soft = band > 1.0 ? clampv((rpm - (p_.revLimit - band)) / band, 0.0, 1.0) : 0.0;
     cmd.cutFraction = soft * clampv((double)cal_.softLimitCut, 0.0, 1.0);
+    // launch / shift limiters, traction control, nitrous
+    motorsportStep(dt, s, rpm, tpsPct, running);
+    cmd.cutFraction = std::max(cmd.cutFraction, std::max(msCut_, tcCut));
 
     // ---- spark: ignition map + temperature corrections (per-cylinder trims added by the engine)
     double adv;
@@ -286,10 +377,15 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
         adv += clampv((idleTarget - rpm) * cal_.idleSparkGain, (double)cal_.idleSparkMin, (double)cal_.idleSparkMax);
     adv -= soft * cal_.softLimitRetard;
     if (actRetard_ || limp) adv -= cal_.protRetard;
+    if (msTimingOn_ && rpm >= 400) adv = msTiming_;              // launch / 3-step / rolling anti-lag timing
+    if (rpm >= 400) adv -= msRetard_ + tcRetard + cal_.n2oRetard * cmd.n2oDuty;
+    // anti-lag on lift-off: very late spark + a cracked throttle keep the turbine fed
     if (pedal > 0.3) alsTimer_ = 0; else if (pedal < 0.05) alsTimer_ += dt;
-    cmd.antiLag = p_.antiLag && p_.induction == Induction::Turbo && p_.ignition && pedal < 0.05 && rpm > 2500 && alsTimer_ < 2.0 && !limp;
-    cmd.throttleCrack = cmd.antiLag ? 0.10 : 0.0;
-    if (cmd.antiLag) adv = -30.0;
+    cmd.antiLag = p_.antiLag && p_.induction == Induction::Turbo && p_.ignition && pedal < 0.05 && rpm > cal_.alsMinRpm &&
+                  alsTimer_ < cal_.alsMaxTime && !limp;
+    cmd.throttleCrack = cmd.antiLag ? clampv(cal_.alsThrottle * 0.01, 0.0, 1.0) : 0.0;
+    if (cmd.antiLag) adv = cal_.alsTiming;
+    if (launchState == kLaunchRollingAls) cmd.antiLag = true;
     cmd.sparkAdvance = adv;
     knockStep(dt, s, rpm);
 
@@ -436,7 +532,10 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     // point moves with the decel rate, which itself drops as soon as the engine fires - otherwise the cut chatters)
     if (tpsPct > 2.0) dfcoArmed_ = true;
     bool dfco = tpsPct < 1.0 && rpm > resume && (wasCut_ || dfcoArmed_);
-    if (cmd.fuelCut || dfco) {
+    // launch limiter in fuel-cut mode: a share of the injection events is dropped
+    const bool limitDrop = cmd.fuelCutFraction > 0 && rand01() < cmd.fuelCutFraction;
+    if (cmd.fuelCut || dfco || limitDrop) {
+        if (limitDrop && !cmd.fuelCut && !dfco) { injDuty = 0; return 0; }   // not a decel cut: no port-wall bookkeeping
         targetAfr = 0; injDuty = 0; fuelling_ = false; evapAcc_[port] = 0;   // film evaporated into the cut cycles
         wasCut_ = true;
         return 0;
@@ -479,6 +578,12 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     targetAfr = afr;
     lastAfr_[port] = afr;
     double fuel = air / std::max(5.0, afr);
+    // dry nitrous kit: the ECU adds the fuel for the N2O it believes is flowing (its own calibration value)
+    if (p_.nitrous && !p_.n2oWet && cmd.n2oDuty > 0 && rpm > 300) {
+        const double eventsPerS = ports_ * rpm / (60.0 * revsPerEvent_);
+        fuel += cal_.n2oFlowGs * 1e-3 * cmd.n2oDuty * kN2oAirEquiv / std::max(5.0, afr) / eventsPerS;
+    }
+    if (launchState != kLaunchOff && launchState != kLaunchShiftCut) fuel *= 1.0 + msEnrich_ * 0.01;
     // ---- enrichments and corrections
     warmup = cranking ? 0.0 : curveLookup(cal_.warmup, s.value[kSnsECT]) * 0.01;   // cranking AFR already covers it
     // the longer the cut, the drier the port walls: full enrichment after ~0.6 s of cut

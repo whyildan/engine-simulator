@@ -122,8 +122,25 @@ static void fuzz(int seconds) {
     int bad = 0, changes = 0;
     auto U = [&](float lo, float hi) { return (float)(lo + (hi - lo) * rng.uniform()); };
     for (int step = 0; step < seconds * 4; ++step) {
-        int what = (int)(rng.uniform() * 19);
+        int what = (int)(rng.uniform() * 20);
         switch (what) {
+        case 19: {   // Phase 5: launch / shift limiters, anti-lag, traction control, nitrous, transbrake
+            Calibration& c = p.cal;
+            c.launchControl = rng.uniform() < 0.7; c.launchRpm = U(1500, 9000); c.launchTiming = U(-30, 30);
+            c.launchMinTps = U(0, 100); c.launchMaxSpeed = U(0, 30); c.launchCutBand = U(0, 600); c.launchCutMode = rng.uniform() < 0.5;
+            c.launchEnrich = U(0, 50); c.clutchMovingMode = (int)(rng.uniform() * 3); c.threeStepRpm = U(1500, 10000);
+            c.flatShiftMargin = U(0, 800); c.flatShiftRetard = U(0, 30); c.shiftCut = rng.uniform() < 0.5; c.shiftCutTime = U(0, 0.5f);
+            c.alsTiming = U(-40, 10); c.alsThrottle = U(0, 40); c.alsMaxTime = U(0, 10); c.alsMinRpm = U(0, 6000);
+            c.rollingAls = rng.uniform() < 0.5; c.tractionControl = rng.uniform() < 0.6;
+            c.tcKp = U(0, 0.2f); c.tcKi = U(0, 1); c.tcMaxRetard = U(0, 30); c.tcMaxCut = U(0, 1);
+            c.n2oMinTps = U(0, 100); c.n2oMinRpm = U(0, 6000); c.n2oMaxRpm = U(1000, 12000); c.n2oDelay = U(0, 2);
+            c.n2oRampTime = U(0, 3); c.n2oStartPct = U(0, 100); c.n2oRetard = U(0, 20); c.n2oFlowGs = U(0, 200);
+            p.nitrous = rng.uniform() < 0.6; p.n2oShotHp = U(0, 500); p.n2oWet = rng.uniform() < 0.5; p.n2oBottleKg = U(0, 10);
+            if (rng.uniform() < 0.3) p.n2oRefill++;
+            p.n2oArm = rng.uniform() < 0.6; p.transbrake = rng.uniform() < 0.3; p.rollingAlsButton = rng.uniform() < 0.3;
+            p.clutchPedal = rng.uniform() < 0.5 ? 0 : 1;
+            break;
+        }
         case 18: {   // Phase 3 controls: trims, knock control, soft limiter, idle / DBW, boost control, protection
             Calibration& c = p.cal;
             c.closedLoop = rng.uniform() < 0.5; c.autoTune = rng.uniform() < 0.3; c.ltftLearn = rng.uniform() < 0.7;

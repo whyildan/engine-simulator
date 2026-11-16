@@ -26,6 +26,9 @@ public:
     void setColdWalls(double cold) { cold_ = clampv(cold, 0.0, 1.0); }
 
     GasNode& port(int i) { return ports_[i]; }
+    // nitrous: air-equivalent charge and fuel fed straight into a port, and the charge cooling it causes
+    void addPortCharge(int i, double airKg, double fuelKg) { GasNode& g = ports_[i]; g.m += airKg + fuelKg; g.mf += fuelKg; }
+    void setPortCooling(double dK) { for (GasNode& g : ports_) g.T = ambT_ + 15.0 - clampv(dK, 0.0, 150.0); }
     GasNode& chargeNode() { return charge_; }        // compressor outlet / throttle inlet (boost)
     double throttlePosition() const { return throttlePos_; }
     int inletCount() const { return (int)inlets_.size(); }

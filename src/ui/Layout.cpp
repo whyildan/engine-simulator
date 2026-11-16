@@ -21,7 +21,7 @@ const SectionInfo kSections[App::kSectionCount] = {
     {"ECU Setup",            "Controller settings, live ECU state, diagnostics, simulation control"},
     {"Fuel Tuning",          "VE / lambda maps, enrichments, corrections, injector data, load model, base map"},
     {"Ignition Tuning",      "Ignition map, temperature / per-cylinder corrections, limiter"},
-    {"Boost Control",        "Turbocharger / supercharger hardware, wastegate and boost history"},
+    {"Boost Control",        "Turbo / supercharger hardware, ECU boost control, anti-lag, nitrous"},
     {"Engine Control",       "Idle, limiters, launch, flat shift, VVT, torque management"},
     {"Sensor Configuration", "Virtual sensors: calibration, noise, delay, failures"},
     {"Engine Protection",    "Warning thresholds, protection actions and limp mode"},
@@ -184,6 +184,20 @@ void App::workArea() {
     ImGui::TextColored(ImVec4(1.0f, 0.68f, 0.32f, 1), "%d  %s", section_ + 1, kSections[section_].name);
     ImGui::SameLine();
     ImGui::TextDisabled("  %s", kSections[section_].subtitle);
+    // motorsport states, right-aligned on the title line (the header row is full on boosted engines)
+    {
+        std::string tags;
+        if (tel_.launchState != kLaunchOff) tags += std::string(launchStateName(tel_.launchState)) + "  ";
+        if (tel_.transbrake) tags += "TRANSBRAKE  ";
+        if (tel_.tcReduction > 0.02f) tags += "TC  ";
+        if (tel_.n2oDuty > 0) tags += "N2O  ";
+        else if (p_.nitrous && p_.n2oArm) tags += "N2O armed  ";
+        if (!tags.empty()) {
+            const float w = ImGui::CalcTextSize(tags.c_str()).x;
+            ImGui::SameLine(std::max(ImGui::GetCursorPosX(), ImGui::GetWindowContentRegionMax().x - w));
+            ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.2f, 1), "%s", tags.c_str());
+        }
+    }
     ImGui::Separator();
 
     switch (section_) {
@@ -211,6 +225,8 @@ void App::workArea() {
         if (ImGui::BeginTabBar("boosttabs")) {
             if (ImGui::BeginTabItem("Hardware")) { panelBoost(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("ECU boost control")) { tabBoostControl(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Anti-lag")) { tabAntiLag(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Nitrous")) { tabNitrous(); ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         splitNext("##boost_graph");

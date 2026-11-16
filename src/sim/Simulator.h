@@ -61,6 +61,12 @@ struct Telemetry {
     int protState[kProtCount] = {};
     float protValue[kProtCount] = {};
     bool limp = false, shutdown = false, throttleLimited = false;
+    // Phase 5: launch / shift limiters, traction control, nitrous, transbrake
+    int launchState = 0;
+    float launchLimitRpm = 0;
+    float tcSlip = 0, tcTarget = 0, tcReduction = 0, tcRetard = 0, tcCut = 0, wheelKmh = 0;
+    float n2oDuty = 0, n2oFlowGs = 0, n2oBottleKg = 0;
+    bool n2oLeanLock = false, transbrake = false;
     float ecuVe = 0, ecuLoadX = 0, ecuLoadY = 0, ecuTps = 0, ecuAccel = 0, ecuAirMg = 0;
     bool tuning = false;
     float throttle = 0;

@@ -62,6 +62,11 @@ private:
     void tabFuelTrims();
     void tabKnock();
     void tabBoostControl();
+    // Phase 5: motorsport
+    void tabLaunch();
+    void tabTraction();
+    void tabAntiLag();
+    void tabNitrous();
     void sectionEngineControl();
     void sectionProtection();
     // Phase 4: data logging (Logging.cpp)
@@ -86,6 +91,8 @@ private:
     std::vector<std::vector<int>> logPanels_;
     std::vector<char> logExport_;
     int logRec_ = -1, logView_ = -1, logCmp_ = -1, logRateIdx_ = 2, logCounter_ = 0;
+    int logPrevLaunch_ = 0;
+    bool logPrevN2o_ = false;
     bool logXRpm_ = false, logPrevLimp_ = false, logFitReq_ = true, logFitRpm_ = false;
     int logFitView_ = -2;
     int logPrevProt_[kProtCount] = {}, logPrevGear_ = 0;

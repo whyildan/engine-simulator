@@ -65,6 +65,11 @@ const LogChannel kChannels[] = {
     {"clutch_tq",    "Clutch torque",       "Nm",    "Vehicle", [](const Telemetry& t) { return t.clutchTq; }},
     {"limp",         "Limp mode",           "on",    "Protection", [](const Telemetry& t) { return t.limp ? 1.0f : 0.0f; }},
     {"prot_active",  "Protections active",  "",      "Protection", protActive},
+    {"launch",       "Launch / shift limiter", "state", "Motorsport", [](const Telemetry& t) { return (float)t.launchState; }},
+    {"tc_slip",      "Wheel slip (TC)",     "%",     "Motorsport", [](const Telemetry& t) { return t.tcSlip; }},
+    {"tc_reduction", "TC torque reduction", "%",     "Motorsport", [](const Telemetry& t) { return t.tcReduction * 100.0f; }},
+    {"n2o_duty",     "Nitrous duty",        "%",     "Motorsport", [](const Telemetry& t) { return t.n2oDuty * 100.0f; }},
+    {"n2o_bottle",   "Nitrous bottle",      "kg",    "Motorsport", [](const Telemetry& t) { return t.n2oBottleKg; }},
 };
 constexpr int kCount = (int)(sizeof(kChannels) / sizeof(kChannels[0]));
 } // namespace
