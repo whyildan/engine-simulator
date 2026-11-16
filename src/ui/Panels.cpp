@@ -373,14 +373,33 @@ void App::panelValvetrain() {
     SliderF("Exhaust centerline", &p_.exhaustCenterline, 90, 130, "%.0f BTDC");
     SliderF("Exhaust cam advance", &p_.exhaustCamAdvance, -30, 40, "%.0f deg");
     SliderF("Valve lash", &p_.valveLash_mm, 0, 0.6f, "%.2f mm", "Too much lash shortens effective duration and clatters.");
+    ImGui::SeparatorText("VTEC (two-stage cams)");
+    Check("VTEC fitted", &p_.vtec);
+    Help("A second, longer and higher cam profile per valve. Above the switch-over (Engine Control > Cam control)\n"
+         "and under load the ECU locks the rockers onto it: the low cam gives a clean idle and torque down low,\n"
+         "the high cam the top end. The switch takes ~80 ms of oil pressure.");
+    if (p_.vtec) {
+        SliderF("High cam intake duration", &p_.vtecInDuration, 180, 340, "%.0f deg");
+        SliderF("High cam intake lift", &p_.vtecInLift_mm, 4, 18, "%.1f mm");
+        SliderF("High cam exhaust duration", &p_.vtecExDuration, 180, 340, "%.0f deg");
+        SliderF("High cam exhaust lift", &p_.vtecExLift_mm, 4, 18, "%.1f mm");
+    }
+    ImGui::SeparatorText("VTC (intake cam phaser)");
+    Check("VTC fitted", &p_.vtc);
+    Help("Continuously variable intake cam timing: the ECU advances the intake cam from its map (Engine Control >\n"
+         "Cam control) - little overlap at idle and on the overrun, more mid-range torque under load.");
+    if (p_.vtc) SliderF("Phaser range", &p_.vtcRange, 10, 60, "%.0f deg crank");
     ImGui::PopItemWidth();
+    if (p_.vtec || p_.vtc)
+        ImGui::Text("Now: %s cam, intake advanced %.1f deg", tel_.vtecEngaged > 0.5f ? "HIGH" : "low", tel_.vtcAdvance);
 
     double ivo = 360 + p_.intakeCenterline - p_.intakeCamAdvance - p_.intakeDuration / 2;
     double evc = 360 - p_.exhaustCenterline - p_.exhaustCamAdvance + p_.exhaustDuration / 2;
     double lsa = 0.5 * (p_.intakeCenterline - p_.intakeCamAdvance + p_.exhaustCenterline + p_.exhaustCamAdvance);
     ImGui::Text("Overlap %.0f deg   LSA %.1f deg", std::max(0.0, evc - ivo), lsa);
 
-    static float xs[721], li[721], le[721], pis[721];
+    static float xs[721], li[721], le[721], pis[721], hi[721], he[721];
+    const double vtcNow = p_.vtc ? tel_.vtcAdvance : 0.0;
     double r = p_.stroke_mm * 0.5, l = p_.rod_mm;
     for (int a = 0; a <= 720; ++a) {
         xs[a] = (float)a;
@@ -389,8 +408,10 @@ void App::panelValvetrain() {
             if (std::fabs(d) >= h) return 0.0;
             return std::max(0.0, L * std::pow(0.5 * (1 + std::cos(kPi * d / h)), 0.75) - p_.valveLash_mm);
         };
-        li[a] = (float)lift(360 + p_.intakeCenterline - p_.intakeCamAdvance, p_.intakeDuration, p_.intakeLift_mm);
+        li[a] = (float)lift(360 + p_.intakeCenterline - p_.intakeCamAdvance - vtcNow, p_.intakeDuration, p_.intakeLift_mm);
         le[a] = (float)lift(360 - p_.exhaustCenterline - p_.exhaustCamAdvance, p_.exhaustDuration, p_.exhaustLift_mm);
+        hi[a] = (float)lift(360 + p_.intakeCenterline - p_.intakeCamAdvance - vtcNow, p_.vtecInDuration, p_.vtecInLift_mm);
+        he[a] = (float)lift(360 - p_.exhaustCenterline - p_.exhaustCamAdvance, p_.vtecExDuration, p_.vtecExLift_mm);
         double th = a * kDeg;
         double s = r * (1 - std::cos(th)) + l - std::sqrt(l * l - r * r * std::sin(th) * std::sin(th));
         pis[a] = (float)(s / (2 * r) * std::max(p_.intakeLift_mm, p_.exhaustLift_mm));
@@ -398,7 +419,8 @@ void App::panelValvetrain() {
     if (ImPlot::BeginPlot("Valve lift", ImVec2(-1, 260))) {
         ImPlot::SetupAxes("crank angle (0 = firing TDC)", "lift mm");
         ImPlot::SetupAxisLimits(ImAxis_X1, 0, 720, ImPlotCond_Always);
-        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, std::max(p_.intakeLift_mm, p_.exhaustLift_mm) * 1.15, ImPlotCond_Always);
+        const float topLift = std::max(std::max(p_.intakeLift_mm, p_.exhaustLift_mm), p_.vtec ? std::max(p_.vtecInLift_mm, p_.vtecExLift_mm) : 0.0f);
+        ImPlot::SetupAxisLimits(ImAxis_Y1, 0, topLift * 1.15, ImPlotCond_Always);
         ImPlot::SetNextFillStyle(ImVec4(0.3f, 0.6f, 1, 1), 0.25f);
         ImPlot::PlotShaded("Intake", xs, li, 721);
         ImPlot::SetNextLineStyle(ImVec4(0.3f, 0.6f, 1, 1), 2);
@@ -407,6 +429,12 @@ void App::panelValvetrain() {
         ImPlot::PlotShaded("Exhaust", xs, le, 721);
         ImPlot::SetNextLineStyle(ImVec4(1, 0.5f, 0.2f, 1), 2);
         ImPlot::PlotLine("Exhaust", xs, le, 721);
+        if (p_.vtec) {
+            ImPlot::SetNextLineStyle(ImVec4(0.55f, 0.8f, 1, 0.9f), 1.5f);
+            ImPlot::PlotLine("Intake (VTEC high cam)", xs, hi, 721);
+            ImPlot::SetNextLineStyle(ImVec4(1, 0.75f, 0.45f, 0.9f), 1.5f);
+            ImPlot::PlotLine("Exhaust (VTEC high cam)", xs, he, 721);
+        }
         ImPlot::SetNextLineStyle(ImVec4(0.7f, 0.7f, 0.7f, 0.6f), 1);
         ImPlot::PlotLine("Piston (scaled)", xs, pis, 721);
         double tdc[] = {0, 360, 720};

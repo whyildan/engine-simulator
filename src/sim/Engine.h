@@ -72,7 +72,9 @@ public:
     float traceP[kTrace] = {}, traceV[kTrace] = {}, traceExh[kTrace] = {}, traceInt[kTrace] = {};
     double lambdaAvg = 1, veAvg = 0, knockMax = 0, egtAvg = 800;   // egtAvg: in the manifold (after the port)
     double egtCyl = 800;          // gas leaving the cylinders (before the port heat loss)
-    int misfires = 0, afterfires = 0;
+    int misfires = 0, afterfires = 0;   // misfires: charges with fuel that did not light (fuel-cut cycles are not counted)
+    enum MisCause : int { kMisLean, kMisSpark, kMisFouled, kMisRich, kMisDilution, kMisCauseCount };
+    int misfireCause[kMisCauseCount] = {};
     // hardware components: derived model and live state
     const ComponentModel& components() const { return comp_; }
     double stress = 0;            // peak inertia load / limit of the weakest part
@@ -86,6 +88,8 @@ public:
     int failure = 0;              // 0 none, 1 piston, 2 rod, 3 crank, 4 valve-to-piston contact, 5 knock (piston)
     const EngineParams& params() const { return p_; }
     const float* phases() const { return phase_; }
+    double vtecEngaged() const { return vtecBlend_; }   // 0 low cam .. 1 high cam
+    double vtcAdvance() const { return vtcNow_; }       // intake cam advance now, crank deg
 
 private:
     double exhFlowAvg_ = 0;
@@ -94,6 +98,9 @@ private:
     void setupChambers();
     void apexLeakage(double dt);
     double valveLift(const ValveSpec& v, double phi, double fl) const;
+    double camLift(const ValveSpec& lo, const ValveSpec& hi, double phi, double fl) const;
+    ValveSpec vinHi_, vexHi_;     // VTEC high-cam profiles
+    double vtecBlend_ = 0, vtcNow_ = 0;
     void updateHealth(double dt, double rpm, double mapPa);
     void ecuTick(double h, double pedal, double rpm);
     void injectPort(int port, double rpm, double share);
@@ -103,7 +110,8 @@ private:
     bool shifting_ = false;
     int n2oRefillSeen_ = -1;
     double n2oCool_ = 0;          // K the port charge is cooled by the evaporating nitrous
-    double afHeatJ_ = 0, afPower_ = 0;   // afterfire heat released in the manifold (J this step, W smoothed)
+    double afHeatJ_ = 0, afPower_ = 0;
+    double sinceCutS_ = 10;       // s since the last fuel cut (limiter / decel cut)   // afterfire heat released in the manifold (J this step, W smoothed)
     void nitrousStep(double dt);
     bool fuelCutNow_ = false;
     ComponentModel comp_;

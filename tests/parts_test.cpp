@@ -33,14 +33,16 @@ static Telemetry wotHold(EngineParams p, float rpm, double seconds = 2.0) {
 int main() {
     // ---- valve springs: weak springs float the valves -> torque drops at high rpm
     {
-        std::printf("[valve springs] I4 at 6500 rpm WOT\n");
         EngineParams p = makeCalibratedPreset(0);
-        Telemetry a = wotHold(p, 6500);
         EngineParams w = p; w.comp.springOpen_N *= 0.35f; w.comp.springSeat_N *= 0.35f;
         ComponentModel m; m.build(w);
-        Telemetry b = wotHold(w, 6500);
+        // hold above the weak springs' float onset (but below the limiter)
+        const float rpm = std::min(p.revLimit - 300.0f, (float)m.floatRpmIn + 500.0f);
+        std::printf("[valve springs] %s at %.0f rpm WOT\n", p.name, rpm);
+        Telemetry a = wotHold(p, rpm);
+        Telemetry b = wotHold(w, rpm);
         std::printf("  default %.1f Nm (float %.2f)  weak springs %.1f Nm (float %.2f, onset %.0f rpm)\n", a.torque, a.floatIn, b.torque, b.floatIn, m.floatRpmIn);
-        CHECK(m.floatRpmIn < 6000, "weak springs float below 6000 rpm");
+        CHECK(m.floatRpmIn < 0.8 * p.revLimit, "weak springs float well below the rev limit");
         CHECK(b.floatIn > 0.5 && b.torque < a.torque * 0.92, "valve float costs torque");
     }
     // ---- stiffer springs and high-tension rings cost friction (lower WOT torque at mid rpm)

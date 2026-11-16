@@ -70,6 +70,8 @@ const LogChannel kChannels[] = {
     {"tc_reduction", "TC torque reduction", "%",     "Motorsport", [](const Telemetry& t) { return t.tcReduction * 100.0f; }},
     {"n2o_duty",     "Nitrous duty",        "%",     "Motorsport", [](const Telemetry& t) { return t.n2oDuty * 100.0f; }},
     {"n2o_bottle",   "Nitrous bottle",      "kg",    "Motorsport", [](const Telemetry& t) { return t.n2oBottleKg; }},
+    {"vtec",         "VTEC high cam",       "on",    "Control", [](const Telemetry& t) { return t.vtecEngaged; }},
+    {"vtc",          "Intake cam advance (VTC)", "deg", "Control", [](const Telemetry& t) { return t.vtcAdvance; }},
 };
 constexpr int kCount = (int)(sizeof(kChannels) / sizeof(kChannels[0]));
 } // namespace

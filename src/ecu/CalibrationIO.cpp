@@ -164,6 +164,9 @@ const ScalarDef kScalars[] = {
     {"injector_flow", &Calibration::injFlow, nullptr},
     {"async_tip_in", nullptr, &Calibration::asyncTipIn},   {"auto_tune", nullptr, &Calibration::autoTune},
     {"closed_loop", nullptr, &Calibration::closedLoop},
+    // cam control
+    {"vtec_rpm", &Calibration::vtecRpm, nullptr}, {"vtec_hyst", &Calibration::vtecHyst, nullptr},
+    {"vtec_min_map", &Calibration::vtecMinMap, nullptr}, {"vtec_min_ect", &Calibration::vtecMinEct, nullptr},
     // closed-loop lambda
     {"stft_gain", &Calibration::stftGain, nullptr}, {"stft_limit", &Calibration::stftLimit, nullptr},
     {"ltft_learn", nullptr, &Calibration::ltftLearn}, {"ltft_rate", &Calibration::ltftRate, nullptr},
@@ -211,6 +214,8 @@ const ScalarDef kScalars[] = {
     {"n2o_ramp_time", &Calibration::n2oRampTime, nullptr}, {"n2o_start_pct", &Calibration::n2oStartPct, nullptr},
     {"n2o_retard", &Calibration::n2oRetard, nullptr}, {"n2o_flow_gs", &Calibration::n2oFlowGs, nullptr},
     {"n2o_lean_lambda", &Calibration::n2oLeanLambda, nullptr},
+    {"dfco_resume_above", &Calibration::dfcoResumeAbove, nullptr}, {"dfco_anticipate", &Calibration::dfcoAnticipate, nullptr},
+    {"dfco_delay", &Calibration::dfcoDelay, nullptr},
 };
 const char* kActKeys[kActCount] = {"warn", "retard", "boost_reduce", "throttle_limit", "fuel_limit", "limp", "shutdown"};
 const char* kLoadModeNames[] = {"speed_density", "alpha_n", "maf", "hybrid"};

@@ -98,6 +98,19 @@ void Engine::updateValves() {
     vex_.dur = clampv((double)p_.exhaustDuration, 120.0, 400.0);
     vex_.center = 360.0 - p_.exhaustCenterline - p_.exhaustCamAdvance;
     vex_.lash = p_.valveLash_mm * 1e-3;
+    // VTEC high cam: same valves and centerlines, longer and higher
+    vinHi_ = vin_; vexHi_ = vex_;
+    vinHi_.lift = p_.vtecInLift_mm * 1e-3; vinHi_.dur = clampv((double)p_.vtecInDuration, 120.0, 400.0);
+    vexHi_.lift = p_.vtecExLift_mm * 1e-3; vexHi_.dur = clampv((double)p_.vtecExDuration, 120.0, 400.0);
+    vin_.center = vinHi_.center = vin_.center - vtcNow_;
+}
+
+// lift with VTEC: once the rockers are locked onto the high cam it sets the lift (it encloses the low profile);
+// while the pin slides the two are blended
+double Engine::camLift(const ValveSpec& lo, const ValveSpec& hi, double phi, double fl) const {
+    double L = valveLift(lo, phi, fl);
+    if (vtecBlend_ > 0) { const double H = valveLift(hi, phi, fl); L += vtecBlend_ * (std::max(H, L) - L); }
+    return L;
 }
 
 void Engine::apply(const EngineParams& p) {
@@ -289,7 +302,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     // ---- valves
     double Ai, Ae;
     if (geom_.rotary) { Ai = pin_.areaAt(phi); Ae = pex_.areaAt(phi); }
-    else { Ai = vin_.area(valveLift(vin_, phi, floatIn)); Ae = vex_.area(valveLift(vex_, phi, floatEx)); }
+    else { Ai = vin_.area(camLift(vin_, vinHi_, phi, floatIn)); Ae = vex_.area(camLift(vex_, vexHi_, phi, floatEx)); }
     // no two ports flow the same (casting, seat, valve-to-guide spread)
     const double imp = effImperfection(p_);
     Ai *= 1.0 + 0.02 * imp * sprPort_[0][port];
@@ -323,7 +336,18 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             dU -= q * kCp * c.T;
             double w = clampv(q / (c.m + 1e-9), 0.0, 1.0);
             c.egt += (c.T - c.egt) * w * 0.5;
-            c.afterfireFuel += q * ffC;
+            const double airOut = q * std::max(0.0, 1.0 - ffC - bfC);
+            if (c.burning) {
+                // the flame is still going when the exhaust valve opens (late / slow burn at high rpm): the mixture
+                // that leaves keeps burning in the port as a continuous flame - heat for the exhaust, not a pop
+                const double b = std::min(q * ffC, airOut / kStoich);
+                afHeatJ_ += b * kLHV * 0.9;
+                c.afterfireFuel += q * ffC - b;
+                c.afterfireAir += airOut - b * kStoich;
+            } else {
+                c.afterfireFuel += q * ffC;
+                c.afterfireAir += airOut;   // fresh air (misfired / lean / cut charge)
+            }
         } else if (q < 0) {
             q = std::min(-q, ep.m * 0.5);
             double ff = ep.fuelFrac(), bf = ep.burnedFrac();
@@ -369,27 +393,34 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             const double vapF = 1.0 - 0.25 * thermal.coldFactor();
             double lam = c.mf > 1e-10 ? air / (c.mf * vapF * kStoich) : 99.0;
             double resid = c.m > 0 ? c.mb / c.m : 1;
-            double pMis = 0;
+            // misfire probability per cause; the largest one decides (and is counted for diagnostics)
+            double pc[kMisCauseCount] = {};
             // wider plug gap lights leaner mixtures (bigger kernel)
             const double leanLim = 1.35 + 0.15 * clampv((double)p_.comp.plugGap_mm - 0.8, -0.4, 0.6);
-            if (lam > leanLim) pMis = clampv((lam - leanLim) / 0.3, 0.0, 1.0);
+            if (lam > leanLim) pc[kMisLean] = clampv((lam - leanLim) / 0.3, 0.0, 1.0);
             // ignition energy: a coil that had too little dwell (or high cylinder pressure / wide gap) can't fire
             if (c.mf > 1e-9) {
                 double need = ComponentModel::sparkNeeded(p_, c.p, lam);
                 double ratio = sparkAvail / std::max(1e-3, need);
                 sparkMargin = std::min(sparkMargin, ratio);
-                if (ratio < 1.0) pMis = std::max(pMis, clampv((1.0 - ratio) / 0.4, 0.0, 1.0));
+                if (ratio < 1.0) pc[kMisSpark] = clampv((1.0 - ratio) / 0.4, 0.0, 1.0);
             }
-            pMis = std::max(pMis, clampv(fouling, 0.0, 1.0) * 0.6);   // fouled plug
-            if (lam < 0.62) pMis = clampv((0.62 - lam) / 0.15, 0.0, 1.0);
+            pc[kMisFouled] = clampv(fouling, 0.0, 1.0) * 0.6;   // fouled plug
+            if (lam < 0.62) pc[kMisRich] = clampv((0.62 - lam) / 0.15, 0.0, 1.0);
             // dilution: burned gas in the charge (residual, exhaust reverted through a big overlap) - past ~35 % the
             // flame kernel starts to fail. A misfired charge leaves fresh mixture behind, so the next one fires
             // harder: the lumpy idle of big-overlap engines (bridge / peripheral ported rotaries).
             c.dilution = resid;
-            if (resid > 0.35) pMis = std::max(pMis, clampv((resid - 0.35) / 0.25, 0.0, 1.0));
-            if (c.mf < 1e-9) pMis = 1;
+            if (resid > 0.35) pc[kMisDilution] = clampv((resid - 0.35) / 0.25, 0.0, 1.0);
+            // fuel cut: nothing (or only the trace evaporating off the port walls) to light - not a misfire
+            // (a charge inducted during the cut - up to one cycle after it ended - counts as cut, too)
+            const bool noFuel = c.mf < 1e-9 || (sinceCutS_ < 1.5 * 60.0 * (cycle_ / 360.0) / std::max(rpm, 300.0) && lam > 1.3);
+            int cause = 0;
+            for (int k = 1; k < kMisCauseCount; ++k) if (pc[k] > pc[cause]) cause = k;
+            const double pMis = noFuel ? 1.0 : (cause == kMisRich ? pc[kMisRich] : pc[cause]);
             if (rng_.uniform() < pMis) {
-                c.misfired = true; ++misfires;
+                c.misfired = true;
+                if (!noFuel) { ++misfires; ++misfireCause[cause]; }
                 c.burnEta = 0;
             } else {
                 c.misfired = false;
@@ -405,7 +436,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
                 c.burning = true;
                 fireTimer_ = 0;
             }
-        }
+        } else c.misfired = true;   // spark cut (limiter / launch / shift / traction control) or ignition off: the charge stays unburned
     }
     if (c.burning) {
         // signed angle since the start of the burn: the cycle-to-cycle jitter can put the start a
@@ -499,6 +530,7 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     const ActuatorCommands& cmd = ecu.cmd;
     bool fuelCut = cmd.fuelCut || cmd.syncLost;
     fuelCutNow_ = fuelCut;
+    sinceCutS_ = (fuelCut || (p_.fuelSystem == FuelSystem::EFI && ecu.targetAfr <= 0)) ? 0.0 : sinceCutS_ + dt;
     bool spark = p_.ignition && !cmd.sparkCut && !cmd.syncLost;
     advance_ = cmd.sparkAdvance;
     antiLagActive = cmd.antiLag;
@@ -517,6 +549,15 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     running_ = rpm > 300 && fireTimer_ < 0.3;
     boost.setWgDuty(ecu.cmd.wgDuty);
     nitrousStep(dt);
+    // ---- cam actuators: the VTEC spool valve locks / unlocks the rockers in ~80 ms, the VTC phaser moves at
+    //      ~200 crank deg/s; both need oil pressure (a phaser without it rests at its base position)
+    if (p_.vtec || p_.vtc) {
+        const double tgt = (p_.vtec && ecu.cmd.vtec && oilBar > 1.0) ? 1.0 : 0.0;
+        vtecBlend_ = tgt > vtecBlend_ ? std::min(tgt, vtecBlend_ + dt / 0.08) : std::max(tgt, vtecBlend_ - dt / 0.08);
+        const double vt = (p_.vtc && oilBar > 0.5) ? ecu.cmd.vtcAdvance : 0.0;
+        vtcNow_ += clampv(vt - vtcNow_, -200.0 * dt, 200.0 * dt);
+        vin_.center = vinHi_.center = 360.0 + p_.intakeCenterline - p_.intakeCamAdvance - vtcNow_;
+    }
     double scTorque = isBoosted(p_) ? boost.step(dt, omega_, egtAvg, intake, exhaust) : 0.0;
     intake.stepAir(dt, pedal, rpm, p_.ignition && !fuelCut);
 
@@ -536,12 +577,27 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     for (int i = 0; i < n; ++i) {
         Cylinder& c = cyls_[i];
         c.afterfireFuel *= std::exp(-dt / 0.07);
+        c.afterfireAir *= std::exp(-dt / 0.07);
         c.egt += (ambT_ + 150 - c.egt) * dt * 0.05; // slow cool down
-        if (c.afterfireFuel > 1.5e-6 && c.egt > 650 && p_.ignition) {
-            double rate = 25.0 * (c.afterfireFuel / 1e-5) * smoothstep(650, 950, c.egt);
+        // only fuel that meets oxygen can burn: the exhaust of a complete rich burn holds unburned fuel (CO / HC)
+        // but no air, so a rich engine does not pop - a misfired, cut or very lean charge brings both
+        const double burnable = std::min(c.afterfireFuel, c.afterfireAir / kStoich);
+        // a firing cylinder under load fills its port with hot, fast gas: mixture that slips through (scavenging
+        // with a big overlap, late burning) burns there as a continuous flame. Pops need a pocket of mixture - an
+        // unburned (misfired or cut) charge, or the cooler gas of the overrun.
+        if (!c.misfired && c.egt > 900 && burnable > 0) {
+            const double b = burnable * std::min(1.0, dt / 0.004);
+            c.afterfireFuel -= b; c.afterfireAir = std::max(0.0, c.afterfireAir - b * kStoich);
+            afHeatJ_ += b * kLHV * 0.9;
+        } else if (burnable > 1.5e-6 && c.egt > 650 && p_.ignition &&
+                   // the pocket must be flammable: the trace of fuel the port walls give off during a fuel cut
+                   // sits in far too much air to ignite (lean flammability limit ~ lambda 1.7)
+                   c.afterfireAir < 1.7 * kStoich * c.afterfireFuel) {
+            double rate = 25.0 * (burnable / 1e-5) * smoothstep(650, 950, c.egt);
             if (rng_.uniform() < rate * dt) {
-                double burn = c.afterfireFuel * 0.7;
+                double burn = burnable * 0.7;
                 c.afterfireFuel -= burn;
+                c.afterfireAir = std::max(0.0, c.afterfireAir - burn * kStoich);
                 afHeatJ_ += burn * kLHV * 0.9;
                 GasNode& ep = exhaust.port(portOf_[i]);
                 c.popPending += std::min(burn * kLHV * (kGamma - 1.0) / ep.V * 0.03, 0.7e5) * (0.6 + 0.4 * rng_.uniform());

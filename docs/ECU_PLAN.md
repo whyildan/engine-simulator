@@ -298,7 +298,7 @@ Tiap komponen dipilih dari katalog (plus opsi "custom") dan punya efek fisik yan
 - Dyno: ekspor CSV, satuan imperial (HP = lb-ft × rpm / 5252), perbandingan sebelum dan sesudah tuning.
 
 Implementasi:
-- **Channel log** (`src/sim/DataLog.*`): 43 channel (48 sejak Fase 5) (key, nama, satuan, grup, getter dari telemetri). Sampel
+- **Channel log** (`src/sim/DataLog.*`): 43 channel (50 sejak Fase 5 + cam) (key, nama, satuan, grup, getter dari telemetri). Sampel
   diambil di thread simulator per blok render menurut waktu simulasi (10/20/50/100 Hz), jadi laju log tidak
   bergantung pada frame rate UI. `LogSession` menyimpan mesin, nama + revisi kalibrasi, laju, dan marker.
 - **CSV**: baris header `# key: value` (sesi, mesin, kalibrasi, revisi, laju), baris `# marker: t, label`, lalu
@@ -356,6 +356,31 @@ Implementasi:
   Sebelumnya setiap turunan idle me-reset closed loop, sehingga idle yang naik-turun hampir tidak pernah masuk
   closed loop (tes baterai macet: closed loop 40 % waktu, λ 0.875 → sekarang 100 %, λ 0.999).
 - Belum: kontrol VVT/VTEC oleh ECU, torque management, kontrol berbasis gigi selain boost.
+
+### Setelah Fase 5 – K20A, VTEC / VTC, misfire dan letupan
+- **Preset 0 kini K20A-style (i-VTEC)**: 86 × 86, CR 11.5, 4 katup 35/30 mm, cam low 236°/9.8 mm (overlap kecil:
+  idle bersih), cam high 272°/12.0 mm mulai 5800 rpm di beban, VTC 50°, limiter 8600 rpm, flywheel 0.12, runner
+  260 mm, header 4-2-1 primer 380 mm, transmisi rasio rapat DC5. Dyno: 238 Nm @ 6000, **220 PS @ 7000–7500**.
+  Preset 16 (I4 turbo) tetap memakai I4 generik lama.
+- **VTEC**: profil cam kedua (durasi/lift intake & exhaust). ECU memindah ke cam high di atas rpm switch-over saat
+  MAP dan coolant cukup, dengan histeresis; spool valve butuh tekanan oli dan ±80 ms. Sumbu rpm tabel VE punya
+  titik tepat di kiri-kanan switch-over dan rig base map mengukur keduanya (base map versi 17).
+- **VTC**: phaser intake kontinu dari peta advance (rpm × MAP, tabel kalibrasi baru), ±200°/s, butuh oli.
+  UI: Engine Setup › Valvetrain (hardware + grafik profil low/high) dan Engine Control › Cam control.
+- **Misfire**: siklus yang di-cut (DFCO/limiter, termasuk muatan yang masuk saat cut) tidak dihitung misfire;
+  penyebab misfire dicatat (lean, spark, fouled, rich, dilution) — alat `misfire_probe`.
+- **Letupan (afterfire)**: perlu oksigen (gas buang campuran kaya tidak punya), perlu campuran dalam batas nyala
+  (λ < ±1.7: jejak bahan bakar saat fuel cut terlalu tipis), dan muatan yang lolos dari silinder yang menyala
+  (scavenging overlap, pembakaran terlambat) terbakar kontinu di port (panas, tanpa letupan). Letupan tetap ada
+  dari muatan yang misfire / di-cut (2-step, rotari brap) dan saat overrun.
+- **DFCO**: delay 0.25 s sebelum fuel cut (blip/angkat gas singkat tidak memotong), pengayaan keluar-DFCO 150 %
+  yang meluruh 0.25 s — setelah cut, gas sisa di ruang bakar adalah udara, pada vakum tinggi hampir sebanyak
+  muatan segar, sehingga siklus pertama sangat kurus. Titik resume dan antisipasinya kini kalibrasi.
+- **VE generik** memperhitungkan overlap cam (cam overlap kecil menangkap lebih banyak udara di beban rendah /
+  putaran rendah) — K20A tidak lagi mati sebelum base map pertama selesai diukur.
+- **Hasil K20A** (`misfire_probe`): idle, cruise, WOT dan deselerasi 0–2 misfire dan 0–1 letupan; idle 860 rpm
+  (simpangan ±50). Sebelumnya I4 lama: ratusan misfire saat blip/deselerasi dan letupan saat WOT dan idle.
+- Preset 20 (V6 supercharger sentrifugal): gain idle lebih lembut (volume intake supercharger besar).
 
 ### Fase 6 – Simulasi lanjutan
 - Peta efisiensi kompresor dan turbin yang bisa dimuat.

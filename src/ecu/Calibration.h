@@ -67,6 +67,13 @@ struct Calibration {
     int32_t autoTune;    // learn the active VE table from the wideband
     int32_t closedLoop;  // short-term fuel trim on the wideband at part load
 
+    // ---- cam control (changes the air the engine breathes, so it sits before the trim / control settings
+    //      that the base map cache ignores)
+    float vtecRpm, vtecHyst;   // high cam above vtecRpm, back to the low cam below vtecRpm - hyst
+    float vtecMinMap;          // kPa: only under load (part throttle cruising stays on the low cam)
+    float vtecMinEct;          // C
+    Table2D vtcMap;            // intake cam advance deg over rpm x MAP
+
     // ---- closed-loop lambda (STFT / LTFT)
     float stftGain;      // per s (fraction of the lambda error integrated per second)
     float stftLimit;     // +- %
@@ -149,10 +156,15 @@ struct Calibration {
     float n2oRetard;        // deg at full flow
     float n2oFlowGs;        // dry kit: the N2O flow (g/s at full duty) the ECU adds fuel for
     float n2oLeanLambda;    // wideband leaner than this while spraying -> nitrous off until the throttle is lifted
+
+    // ---- decel fuel cut resume (after Phase 5)
+    float dfcoResumeAbove;  // rpm above the idle target where fuel comes back (never below 1600 rpm)
+    float dfcoAnticipate;   // s: resume earlier by the rpm the engine will lose in this time (falling revs)
+    float dfcoDelay;        // s the throttle must be closed before fuel is cut (a blip or a quick lift does not cut)
 };
 
 // table identities (UI / files)
-enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalLtft, kCalBoostTarget, kCalTableCount };
+enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalLtft, kCalBoostTarget, kCalVtc, kCalTableCount };
 enum CalCurveId : int { kCalCrankAfr, kCalWarmup, kCalAccel, kCalIatFuel, kCalIatSpark, kCalEctSpark, kCalDeadTime,
                         kCalIdleTarget, kCalDbwMap, kCalBoostGear, kCalTcSlip, kCalCurveCount };
 // what the launch / shift limiters are doing (telemetry)

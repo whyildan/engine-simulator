@@ -175,3 +175,9 @@ target_link_libraries(motorsport_test PRIVATE enginesim_core)
 
 add_executable(basemap_warm tests/basemap_warm.cpp)
 target_link_libraries(basemap_warm PRIVATE enginesim_core)
+
+add_executable(misfire_probe tests/misfire_probe.cpp)
+target_link_libraries(misfire_probe PRIVATE enginesim_core)
+
+add_executable(dyno_sweep tests/dyno_sweep.cpp)
+target_link_libraries(dyno_sweep PRIVATE enginesim_core)

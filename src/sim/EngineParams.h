@@ -52,6 +52,12 @@ struct EngineParams {
     float exhaustCenterline;  // deg BTDC (overlap TDC)
     float intakeCamAdvance, exhaustCamAdvance; // deg (+ = earlier)
     float valveLash_mm;
+    // two-stage cam switching (VTEC-style): a second, high-rpm profile the ECU locks the rockers onto
+    int32_t vtec;
+    float vtecInDuration, vtecInLift_mm, vtecExDuration, vtecExLift_mm;
+    // continuously variable intake cam phaser (VTC-style): the ECU advances the intake cam from its map
+    int32_t vtc;
+    float vtcRange;           // crank deg of phaser authority (advance from the base centerline)
 
     // ---------------------------------------------------------- ignition
     float baseAdvance;        // deg BTDC

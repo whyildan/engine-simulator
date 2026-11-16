@@ -112,6 +112,7 @@ struct Cylinder {
     int cycles = 0;               // completed working cycles (the knock window counts per cycle)
     double egt = 800;
     double afterfireFuel = 0;             // unburned fuel sitting in the primary
+    double afterfireAir = 0;              // ... and the fresh air (oxygen) next to it
     double popPending = 0;                // afterfire pressure still to be released (Pa)
     bool misfired = false;
     double dilution = 0;                  // burned gas share of the charge at the spark (residual + reverted exhaust)

@@ -52,8 +52,14 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
     const double ecuT = ambT + 15.0;                    // the ECU's charge temperature (IAT + 15 K)
     const Table2D& ax = p.cal.veMap;
     // rpm samples: dense at the low end (closed-throttle air goes like 1/rpm there), then spread
-    static const int pick[] = {0, 1, 2, 4, 6, 9, 12, 15};   // 500, 750, 1000, 1500, then spread
-    const int nR = 8;
+    std::vector<int> pick = {0, 1, 2, 4, 6, 9, 12, 15};   // 500, 750, 1000, 1500, then spread
+    // VTEC: also measure the columns either side of the cam crossover (low cam below, high cam above)
+    if (p.vtec)
+        for (int k = 0; k + 1 < ax.nx; ++k)
+            if (ax.x[k] <= p.cal.vtecRpm && p.cal.vtecRpm < ax.x[k + 1]) { pick.push_back(k); pick.push_back(k + 1); break; }
+    std::sort(pick.begin(), pick.end());
+    pick.erase(std::unique(pick.begin(), pick.end()), pick.end());
+    const int nR = (int)pick.size();
     static const double thr[] = {0.0, 0.02, 0.05, 0.1, 0.2, 0.35, 0.6, 1.0};
     const int nT = (int)(sizeof(thr) / sizeof(thr[0]));
     const double settle = 0.15, window = 0.08, dt = 1.0 / fs;
@@ -162,7 +168,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
 // ------------------------------------------------------------------ on-disk cache
 // Keyed by everything that defines the engine (driver inputs, sound, dyno, vehicle and the VE maps
 // themselves are left out). Bump kBaseMapVersion when the physics changes.
-static constexpr uint32_t kBaseMapVersion = 16;   // 16: afterfire heat in the exhaust (Phase 5)   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
+static constexpr uint32_t kBaseMapVersion = 17;   // 17: VTEC crossover columns, afterfire needs oxygen   // 16: afterfire heat in the exhaust (Phase 5)   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
 static std::string g_cacheDir;
 void setBaseMapCacheDir(const std::string& dir) { g_cacheDir = dir; }
 

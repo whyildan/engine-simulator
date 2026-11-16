@@ -155,12 +155,39 @@ void App::sectionEngineControl() {
             rowLabel("Now", b);
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Cam control")) {
+            if (!p_.vtec && !p_.vtc)
+                ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "This engine has neither VTEC nor a VTC phaser (Engine Setup > Valvetrain).");
+            char b[160];
+            std::snprintf(b, sizeof(b), "%s cam%s   intake advance %.1f deg (target %.1f)", tel_.vtecEngaged > 0.5f ? "HIGH" : "low",
+                          tel_.vtecCmd && tel_.vtecEngaged < 0.99f ? " (switching)" : "", tel_.vtcAdvance, tel_.vtcTarget);
+            rowLabel("Now", b);
+            ImGui::PushItemWidth(-260);
+            ImGui::SeparatorText("VTEC switch-over");
+            ImGui::BeginDisabled(!p_.vtec);
+            ImGui::SliderFloat("Switch to the high cam above", &c.vtecRpm, 2000, std::max(3000.0f, p_.revLimit), "%.0f rpm");
+            Help("Best where the high-cam torque curve crosses the low-cam one (a dyno sweep with VTEC off and on shows\n"
+                 "it). The base map is measured just either side of it, so moving it far needs a new base map.");
+            ImGui::SliderFloat("Hysteresis", &c.vtecHyst, 0, 1000, "%.0f rpm");
+            ImGui::SliderFloat("Only above MAP", &c.vtecMinMap, 20, 110, "%.0f kPa");
+            Help("Part-throttle cruising stays on the low cam (economy, smoothness); the high cam needs load.");
+            ImGui::SliderFloat("Only above coolant", &c.vtecMinEct, 0, 100, "%.0f C");
+            ImGui::EndDisabled();
+            ImGui::PopItemWidth();
+            ImGui::SeparatorText("VTC: intake cam advance (deg) over rpm x MAP");
+            OpPoint op; op.x = tel_.rpm; op.y = tel_.ecuMap; op.valid = tel_.running;
+            tabEd_[kCalVtc].draw("vtc", c.vtcMap, calTableInfo(kCalVtc), op, nullptr, ref ? &ref->vtcMap : nullptr, refName_.c_str());
+            Help("More advance = earlier intake closing and more overlap: mid-range torque under load. Keep it small at\n"
+                 "idle and light load (stable idle, little exhaust pulled back). Changing it changes the air the engine\n"
+                 "breathes - re-measure the base map or let auto-tune follow.");
+            ImGui::EndTabItem();
+        }
         if (ImGui::BeginTabItem("Launch / shift")) { tabLaunch(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Traction control")) { tabTraction(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Planned")) {
             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.35f, 1), "Not modelled yet:");
-            ImGui::BulletText("VVT / VTEC control by the ECU, torque management, gear-based control");
-            ImGui::TextDisabled("Anti-lag and nitrous are in Boost Control; cam advance (VVT) in Engine Setup > Valvetrain.");
+            ImGui::BulletText("Torque management, gear-based control");
+            ImGui::TextDisabled("Anti-lag and nitrous are in Boost Control; VTEC / VTC hardware in Engine Setup > Valvetrain.");
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

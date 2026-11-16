@@ -17,6 +17,7 @@ const TableInfo kTables[kCalTableCount] = {
     {"ignition", "Ignition advance",   "rpm", "MAP kPa", "deg",    -20, 60, 0.5f},
     {"ltft",     "Long-term fuel trim", "rpm", "MAP kPa", "%",     -40, 40, 0.5f},
     {"boost_target", "Boost target",   "rpm", "TPS %",   "bar",    0, 4, 0.05f},
+    {"vtc",      "Intake cam advance (VTC)", "rpm", "MAP kPa", "deg", 0, 60, 0.5f},
 };
 const TableInfo kCurves[kCalCurveCount] = {
     {"crank_afr", "Cranking AFR",           "coolant C",  "", "AFR", 6, 16, 0.1f},
@@ -55,7 +56,7 @@ const char* protActionName(int a) { return kActNames[clampv(a, 0, kActCount - 1)
 Table2D& calTable(Calibration& c, int id) {
     switch (id) {
     case kCalVeTps: return c.veTps; case kCalLambda: return c.lambda; case kCalIgnition: return c.ignition;
-    case kCalLtft: return c.ltft; case kCalBoostTarget: return c.boostTarget;
+    case kCalLtft: return c.ltft; case kCalBoostTarget: return c.boostTarget; case kCalVtc: return c.vtcMap;
     default: return c.veMap;
     }
 }
@@ -135,8 +136,27 @@ void generateCalibration(EngineParams& p) {
                             : (float)(std::round((1500.0 + (top - 1500.0) * (i - 4) / (kTabMax - 5)) / 50.0) * 50.0);
             tb.y[i] = t == kCalVeTps ? tpsAxis[i] : (float)std::round(20.0 + (mapTop - 20.0) * i / (kTabMax - 1));
         }
+        // VTEC: breakpoints just either side of the cam crossover, so the step in breathing is a step in the map
+        // (and the base map rig measures both sides) instead of being smeared over a whole column
+        if (p.vtec) {
+            const float xo = (float)(std::round(0.68 * p.revLimit / 100.0) * 100.0);
+            for (int k = 5; k + 2 < kTabMax; ++k)
+                if (tb.x[k] <= xo && xo < tb.x[k + 1]) {
+                    if (xo - 150.0f > tb.x[k - 1] + 50.0f) tb.x[k] = xo - 150.0f;
+                    if (xo + 150.0f < tb.x[k + 2] - 50.0f) tb.x[k + 1] = xo + 150.0f;
+                    break;
+                }
+        }
     }
     const double mechRpm = std::max(1000.0, (double)p.mechAdvanceRpm);
+    // valve overlap (base cam position): the more overlap, the more burned gas the cylinder keeps at light load
+    // and at low speed - a small-overlap cam (e.g. a VTEC low cam) traps clearly more air there
+    double overlapF = 1.0;
+    if (!isRotary(p)) {
+        const double ivo = 360.0 + p.intakeCenterline - p.intakeCamAdvance - 0.5 * p.intakeDuration;
+        const double evc = 360.0 - p.exhaustCenterline - p.exhaustCamAdvance + 0.5 * p.exhaustDuration;
+        overlapF = clampv(std::max(0.0, evc - ivo) / 28.0, 0.15, 2.0);   // 1 = the generic 28 deg cam
+    }
     for (int r = 0; r < kTabMax; ++r) {
         for (int k = 0; k < kTabMax; ++k) {
             const double rpm = c.veMap.x[k], map = c.veMap.y[r];
@@ -144,8 +164,10 @@ void generateCalibration(EngineParams& p) {
             // VE: a generic guess - auto-tune / the tuner refine it
             // (at very low MAP the cylinder still traps more than MAP x Vd suggests: port pressure / backflow)
             c.veMap.v[r][k] = (float)(100.0 * std::min(1.05, (0.58 + 0.33 * std::min(1.0, load)) * (map + 6.0) / map));
-            // cranking speeds: no ram effect, long overlap backflow -> the cylinder fills poorly
-            c.veMap.v[r][k] *= (float)(1.0 - 0.3 * (1.0 - smoothstep(500.0, 1200.0, rpm)));
+            // small overlap: less residual at part load
+            if (overlapF < 1.0) c.veMap.v[r][k] *= (float)(1.0 + 0.15 * (1.0 - overlapF) * (1.0 - std::min(1.0, load)));
+            // cranking speeds: no ram effect, overlap backflow -> the cylinder fills poorly (scaled by the overlap)
+            c.veMap.v[r][k] *= (float)(1.0 - std::min(0.5, 0.3 * overlapF) * (1.0 - smoothstep(500.0, 1200.0, rpm)));
             // alpha-N: air relative to an atmospheric cylinder, from a rough throttle -> MAP estimate
             const double tps = c.veTps.y[r] * 0.01;
             // throttle area (plus idle bypass) against the air the engine pulls at this speed
@@ -176,7 +198,9 @@ void generateCalibration(EngineParams& p) {
         for (int i = 0; i < 7; ++i) if (std::fabs(x - xs[i]) < 1e-6) return v[i];
         return 0.0; }, p);
     c.accelDecay = 0.3f; c.accelColdMult = 1.5f;
-    c.dfcoExitEnrich = 60.0f; c.dfcoExitDecay = 1.0f;   // long: after a cut the exhaust is full of air and low-load reversion pulls it back in
+    // after a decel cut the exhaust is full of air: at high vacuum the residual gas in the chamber is about as much
+    // as the fresh charge, so the first cycles back on fuel get a lot of air - strong, short enrichment
+    c.dfcoExitEnrich = 150.0f; c.dfcoExitDecay = 0.25f;
     c.asyncTipIn = 1;
     setCurve(c.iatFuel, {-20, 0, 20, 40, 60, 80}, [](double, const EngineParams&) { return 0.0; }, p);
     setCurve(c.iatSpark, {-20, 0, 20, 40, 50, 60, 70, 80}, [](double x, const EngineParams&) { return x <= 40 ? 0.0 : -(x - 40.0) / 10.0; }, p);
@@ -187,6 +211,30 @@ void generateCalibration(EngineParams& p) {
     for (int i = 0; i < kCalMaxCyl; ++i) { c.cylFuel[i] = 0; c.cylSpark[i] = 0; }
     c.autoTune = p.veLearning ? 1 : 0;
     c.closedLoop = p.veLearning ? 1 : 0;
+
+    // ---- cam control: VTEC crossover at ~70 % of the limit under load, VTC advance for mid-range torque and
+    //      little overlap at idle / light load (stable idle, little exhaust pulled back on the overrun)
+    c.vtecRpm = (float)(std::round(0.68 * p.revLimit / 100.0) * 100.0);
+    c.vtecHyst = 300; c.vtecMinMap = 60; c.vtecMinEct = 60;
+    {
+        Table2D& t = c.vtcMap;
+        t = Table2D{};
+        static const float maps[6] = {20, 35, 50, 65, 80, 100};
+        t.nx = 10; t.ny = 6; t.locked = 0;
+        const double range = p.vtc ? std::max(0.0f, p.vtcRange) : 0.0;
+        for (int i = 0; i < 10; ++i) t.x[i] = (float)(std::round((800.0 + (top - 800.0) * i / 9.0) / 50.0) * 50.0);
+        for (int r = 0; r < 6; ++r) {
+            t.y[r] = maps[r];
+            const double load = smoothstep(30.0, 70.0, maps[r]);
+            for (int k = 0; k < 10; ++k) {
+                const double rpmF = t.x[k] / std::max(2000.0, (double)p.revLimit);
+                // advance peaks in the mid range under load and backs off towards the limit (late intake closing
+                // fills the cylinder at high rpm); nearly none at idle
+                const double mid = smoothstep(0.12, 0.35, rpmF) * (1.0 - 0.55 * smoothstep(0.55, 0.95, rpmF));
+                t.v[r][k] = (float)(std::round(range * (0.06 + 0.52 * load) * mid * 2.0) / 2.0);
+            }
+        }
+    }
 
     // ---- closed-loop lambda
     c.stftGain = 0.5f; c.stftLimit = 25; c.ltftLearn = 1; c.ltftRate = 0.15f; c.ltftLimit = 25;
@@ -273,6 +321,8 @@ void generateCalibration(EngineParams& p) {
     c.n2oRetard = (float)std::round(std::max(0.0f, p.n2oShotHp) / 25.0f);   // ~1 deg per 25 hp
     c.n2oFlowGs = (float)(n2oFullFlowKgs(p) * 1000.0);
     c.n2oLeanLambda = 0.95f;
+    c.dfcoResumeAbove = 1000; c.dfcoAnticipate = 0.3f;
+    c.dfcoDelay = 0.25f;   // a quick lift or a blip does not cut the fuel (and so needs no recovery)
 }
 
 } // namespace es

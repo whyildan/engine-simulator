@@ -187,6 +187,7 @@ void App::workArea() {
     // motorsport states, right-aligned on the title line (the header row is full on boosted engines)
     {
         std::string tags;
+        if (tel_.vtecEngaged > 0.5f) tags += "VTEC  ";
         if (tel_.launchState != kLaunchOff) tags += std::string(launchStateName(tel_.launchState)) + "  ";
         if (tel_.transbrake) tags += "TRANSBRAKE  ";
         if (tel_.tcReduction > 0.02f) tags += "TC  ";

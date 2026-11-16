@@ -34,7 +34,7 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; Roots, twin-screw and centrifugal superchargers. |
 | 📈 **Virtual dyno** | WOT sweeps and steady-state holds, before / after comparison with deltas, metric or imperial units, CSV export. |
 | 🏁 **Motorsport** | Launch control (2-step) with pops and bangs, 3-step / flat shift, shift cut, traction control, transbrake, rolling anti-lag, progressive wet / dry nitrous. |
-| 🗂️ **Data logging** | 48 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
+| 🗂️ **Data logging** | 50 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
 | 🎛️ **Custom dashboard** | Your own grid of gauges, digital readouts and bars with warning / alarm thresholds and a sensor status strip. |
 | 🚗 **Drive it** | Car or motorcycle as the load: manual / auto-clutch / automatic gearbox, clutch, tyre slip, 0–100 and 1/4-mile timers. |
 | 🧪 **Virtual sensors** | Lag, noise, 10-bit ADC, transport delay, faults (open / short / stuck / noisy) and the ECU's fallbacks. |
@@ -81,7 +81,7 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 
 | # | Engine | # | Engine |
 |---|---|---|---|
-| 0 | I4 2.0 EFI (hatchback) | 12 | Rotary 13B 2-rotor |
+| 0 | **I4 2.0 K20A-style (i-VTEC, 8600 rpm)** | 12 | Rotary 13B 2-rotor |
 | 1 | I3 1.0 EFI | 13 | Rotary 20B 3-rotor (street port) |
 | 2 | I6 3.0 EFI | 14 | Rotary 26B 4-rotor (peripheral port race) |
 | 3 | V6 3.5 EFI | 15 | Rotary 1-rotor carb |
@@ -120,7 +120,7 @@ warning lamps) and a 12-section navigation in the style of ECU software:
 3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, base map
 4. **Ignition Tuning** — ignition map, corrections, knock control, per-cylinder trims
 5. **Boost Control** — turbo / supercharger hardware, ECU boost control, anti-lag, nitrous
-6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter, launch / shift, traction control
+6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter, cam control (VTEC / VTC), launch / shift, traction control
 7. **Sensor Configuration** — true vs measured values, noise, lag, fault injection
 8. **Engine Protection** — protection rules, limp mode, shutdown
 9. **Live Dashboard** — gauges, readouts, scopes (pressure, P-V, boost, fuel map, sound) and a configurable
@@ -136,7 +136,8 @@ warning lamps) and a 12-section navigation in the style of ECU software:
   flywheel, **firing order**, even firing or **free per-cylinder phasing** (odd-fire V-twin, big-bang), exhaust
   bank split.
 - **Valvetrain**: valves and diameters, cam duration, lift, centerline / LSA, cam advance (VVT), lash, with a
-  valve lift / overlap graph.
+  valve lift / overlap graph; **VTEC-style two-stage cams** (high-cam profile, ECU switch-over by rpm / load /
+  coolant with hysteresis) and a **VTC-style intake cam phaser** (advance map over rpm × MAP).
 - **Fuel & intake**: EFI (port / throttle body, injector size and dead time) or a carburettor (barrels, venturi,
   jets, idle screw, accelerator pump, choke); throttle body or ITBs, plenum, runners, air filter.
 - **Exhaust**: log manifold / N-into-1 / tri-Y headers, per-cylinder primary lengths ("boxer rumble"),
@@ -198,6 +199,10 @@ rebuild the engine with a short sound crossfade, without stopping it.
   port wall (Dittus–Boelter convection, pulsating-flow factor) — so a low-flow idle reads well below the
   in-cylinder exit temperature. Fuel that burns in the manifold (overrun pops, a spark-cut 2-step) heats the
   exhaust gas further — that is what spools a turbo on the 2-step.
+- **Afterfire**: unburned fuel only pops where it meets oxygen in a flammable mixture — a misfired or cut charge,
+  or the overrun. The exhaust of a rich burn has no oxygen; mixture that slips through a firing cylinder
+  (overlap scavenging, late burning) keeps burning as a continuous flame (heat, no bang); the trace of fuel the
+  port walls give off during a fuel cut is far too lean to ignite. Fuel-cut cycles do not count as misfires.
 - **Nitrous**: N₂O is fed to the ports as air-equivalent charge (its extra oxygen plus its decomposition heat),
   with a wet kit's own fuel and charge cooling from the liquid flashing to gas; a 100 hp jet flows ~32 g/s.
 - **Intake & exhaust**: a **digital waveguide network** — bidirectional delay lines with frequency-dependent
@@ -251,6 +256,14 @@ build/Release/parts_test.exe        # physical effect of each component
 
 ```bash
 build/Release/log_test.exe          # data logging: sampling, markers, CSV round trip
+```
+
+```bash
+build/Release/misfire_probe.exe 0   # misfires (by cause) and pops per phase: idle, cruise, blips, WOT, decel
+```
+
+```bash
+build/Release/dyno_sweep.exe 0      # WOT sweep: torque, power, AFR, spark, VTEC / VTC, VE per rpm
 ```
 
 ```bash

@@ -67,6 +67,10 @@ struct Telemetry {
     float tcSlip = 0, tcTarget = 0, tcReduction = 0, tcRetard = 0, tcCut = 0, wheelKmh = 0;
     float n2oDuty = 0, n2oFlowGs = 0, n2oBottleKg = 0;
     bool n2oLeanLock = false, transbrake = false;
+    // cam control
+    float vtecEngaged = 0, vtcAdvance = 0, vtcTarget = 0;
+    bool vtecCmd = false;
+    int misfireCause[5] = {};
     float ecuVe = 0, ecuLoadX = 0, ecuLoadY = 0, ecuTps = 0, ecuAccel = 0, ecuAirMg = 0;
     bool tuning = false;
     float throttle = 0;

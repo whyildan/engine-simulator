@@ -258,6 +258,9 @@ void Simulator::render(float* out, int frames) {
     t.wheelKmh = (float)(t.vehicle ? vehicle_.wheelOmega * std::max(0.15, cur_.tireRadius_mm * 1e-3) * 3.6 : 0.0);
     t.n2oDuty = (float)e.ecu.cmd.n2oDuty; t.n2oFlowGs = (float)(e.n2oFlow * 1000.0); t.n2oBottleKg = (float)e.n2oBottle;
     t.n2oLeanLock = e.ecu.n2oLeanLock; t.transbrake = t.vehicle && vehicle_.transbrake;
+    t.vtecEngaged = (float)e.vtecEngaged(); t.vtcAdvance = (float)e.vtcAdvance(); t.vtcTarget = (float)e.ecu.cmd.vtcAdvance;
+    t.vtecCmd = e.ecu.cmd.vtec;
+    for (int k = 0; k < Engine::kMisCauseCount && k < 5; ++k) t.misfireCause[k] = e.misfireCause[k];
     for (int i = 0; i < e.cylinders(); ++i) {
         t.cylImep[i] = (float)(e.cyl(i).imep * 1e-5);
         t.cylPmax[i] = (float)(e.cyl(i).pmaxCycle * 1e-5);

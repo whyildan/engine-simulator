@@ -29,6 +29,9 @@ struct ActuatorCommands {
     // Phase 5
     double fuelCutFraction = 0;   // launch limiter in fuel-cut mode: share of injection events dropped
     double n2oDuty = 0;           // nitrous solenoid duty 0..1 (progressive controller)
+    // cam control
+    bool vtec = false;            // high cam engaged
+    double vtcAdvance = 0;        // intake cam advance request, crank deg
 };
 
 class Ecu {
@@ -99,6 +102,7 @@ private:
     double prevTps_ = 0, tpsRate_ = 0, prevMap_ = 101.3, mapRate_ = 0, mapRateSlow_ = 0, aeNow_ = 0, aeTps_ = 0, sinceCut_ = 100;
     bool wasCut_ = false;
     bool dfcoArmed_ = true;      // decel cut allowed (re-armed by opening the throttle after a cut ended)
+    double closedFor_ = 0;       // s the throttle has been closed (decel fuel cut entry delay)
     double portDry_ = 0;         // 0..1: how dry the port walls are after decel fuel cut (drives the exit enrichment)
     bool fuelling_ = false;
     // Phase 3 state

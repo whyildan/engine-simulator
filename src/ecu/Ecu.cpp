@@ -325,6 +325,7 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
         aeNow_ = std::max(aeNow_, std::min(0.4, 0.004 * (mapRise - 20.0)) * (1.0 + (cal_.accelColdMult - 1.0) * cold));
     accel = aeNow_;
     sinceCut_ += dt;
+    closedFor_ = tpsPct < 1.0 ? closedFor_ + dt : 0.0;
     // port wall dryness: builds up during a fuel cut (dry after ~0.6 s), recovers once fuel flows again;
     // repeated short cuts add up instead of each starting from wet walls
     if (wasCut_) portDry_ = std::min(1.0, portDry_ + dt / 0.6);
@@ -344,6 +345,15 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     // ---- protection (decides the actions), then boost control (needs them)
     protectionStep(dt, s, rpm, tpsPct, running);
     boostStep(dt, s, rpm, tpsPct);
+
+    // ---- cam control: VTEC on rpm + load with hysteresis (part-throttle cruising stays on the economical low
+    //      cam), VTC intake advance from its map
+    if (p_.vtec && !limp) {
+        const bool loadOk = mapUsed >= cal_.vtecMinMap && s.value[kSnsECT] >= cal_.vtecMinEct;
+        if (!cmd.vtec && loadOk && rpm > cal_.vtecRpm) cmd.vtec = true;
+        else if (cmd.vtec && (rpm < cal_.vtecRpm - cal_.vtecHyst || mapUsed < cal_.vtecMinMap - 10.0)) cmd.vtec = false;
+    } else cmd.vtec = false;
+    cmd.vtcAdvance = p_.vtc ? clampv(tableLookup(cal_.vtcMap, rpm, mapUsed), 0.0, (double)std::max(0.0f, p_.vtcRange)) : 0.0;
 
     // ---- rev limiter: hard limit at the rev limit, plus an rpm cap for fuel limitation / limp mode
     //      (and for a throttle limitation the cable throttle cannot do)
@@ -527,11 +537,11 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     const double mapPa = mapUsed * 1000.0;
     const double cold = coldFactor(s);
     // deceleration fuel cut-off; resume early when the revs are dropping fast (anticipate ~0.3 s)
-    double resume = std::max(1600.0, idleTargetNow + 1000.0) + 0.3 * std::max(0.0, -rpmRate_);
+    double resume = std::max(1600.0, idleTargetNow + cal_.dfcoResumeAbove) + cal_.dfcoAnticipate * std::max(0.0, -rpmRate_);
     // one cut per deceleration: once fuel is back it stays on until the throttle has been opened again (the resume
     // point moves with the decel rate, which itself drops as soon as the engine fires - otherwise the cut chatters)
     if (tpsPct > 2.0) dfcoArmed_ = true;
-    bool dfco = tpsPct < 1.0 && rpm > resume && (wasCut_ || dfcoArmed_);
+    bool dfco = tpsPct < 1.0 && rpm > resume && (wasCut_ || dfcoArmed_) && (wasCut_ || closedFor_ >= cal_.dfcoDelay);
     // launch limiter in fuel-cut mode: a share of the injection events is dropped
     const bool limitDrop = cmd.fuelCutFraction > 0 && rand01() < cmd.fuelCutFraction;
     if (cmd.fuelCut || dfco || limitDrop) {

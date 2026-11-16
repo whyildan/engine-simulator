@@ -58,6 +58,8 @@ static EngineParams base() {
     p.intakeLift_mm = 10; p.exhaustLift_mm = 9.5f;
     p.intakeCenterline = 108; p.exhaustCenterline = 112;
     p.valveLash_mm = 0.15f;
+    p.vtec = 0; p.vtecInDuration = 248; p.vtecInLift_mm = 10; p.vtecExDuration = 248; p.vtecExLift_mm = 9.5f;
+    p.vtc = 0; p.vtcRange = 0;
 
     p.baseAdvance = 12; p.mechAdvance = 20; p.mechAdvanceRpm = 3500; p.vacuumAdvance = 10;
     p.revLimit = 7000; p.limiter = Limiter::FuelCut;
@@ -223,7 +225,7 @@ static void finish(EngineParams& p) {
 }
 
 static const char* kNames[] = {
-    "I4 2.0 EFI (hatchback)",
+    "I4 2.0 K20A-style (i-VTEC)",
     "I3 1.0 EFI",
     "I6 3.0 EFI (straight six)",
     "V6 3.5 EFI",
@@ -257,12 +259,23 @@ EngineParams makePreset(int idx) {
     std::snprintf(p.name, sizeof(p.name), "%s", presetName(idx));
     switch (idx) {
     default:
-    case 0: // I4 2.0
+    case 0: // I4 2.0 K20A-style: square 86 x 86, high compression, i-VTEC (two-stage cams + intake cam phaser),
+            // revs to 8600. Low cam with almost no overlap for a clean idle, high cam from ~5800 rpm under load.
         p.cylinders = 4; p.layout = Layout::Inline; applyLayoutDefaults(p);
-        p.bore_mm = 86; p.stroke_mm = 86; p.rod_mm = 143; p.compression = 10.5f;
-        p.intakeValves = 2; p.exhaustValves = 2; p.intakeValveDia_mm = 34; p.exhaustValveDia_mm = 28;
-        p.header = HeaderType::TriY; p.primaryDia_mm = 38; p.collectorDia_mm = 50; p.pipeDia_mm = 50;
-        p.revLimit = 6800; p.flywheel = 0.12f;
+        p.bore_mm = 86; p.stroke_mm = 86; p.rod_mm = 139; p.compression = 11.5f;
+        p.intakeValves = 2; p.exhaustValves = 2; p.intakeValveDia_mm = 35; p.exhaustValveDia_mm = 30;
+        p.intakeDuration = 236; p.intakeLift_mm = 9.8f; p.exhaustDuration = 232; p.exhaustLift_mm = 9.4f;
+        p.intakeCenterline = 114; p.exhaustCenterline = 110; p.valveLash_mm = 0.2f;
+        p.vtec = 1; p.vtecInDuration = 272; p.vtecInLift_mm = 12.0f; p.vtecExDuration = 266; p.vtecExLift_mm = 11.3f;
+        p.vtc = 1; p.vtcRange = 50;
+        p.baseAdvance = 12; p.mechAdvance = 18; p.mechAdvanceRpm = 4500; p.vacuumAdvance = 12;   // ~30 deg at WOT (CR 11.5)
+        p.revLimit = 8600; p.limiter = Limiter::FuelCut; p.flywheel = 0.12f;
+        p.throttleBore_mm = 62; p.plenum_L = 2.6f; p.runnerLen_mm = 260; p.runnerDia_mm = 38; p.airFilter = 0.3f;
+        p.injector_ccmin = 310; p.idleTargetRpm = 850; p.afrWot = 12.8f;
+        p.header = HeaderType::TriY; p.primaryDia_mm = 38; p.secondaryLen_mm = 380; p.collectorDia_mm = 54;
+        for (int i = 0; i < kMaxCyl; ++i) p.primaryLen_mm[i] = 380;
+        p.collectorLen_mm = 250; p.pipeDia_mm = 57; p.muffler = Muffler::StraightThrough;
+        p.sweepStartRpm = 1500; p.sweepEndRpm = 8400;
         break;
     case 1: // I3 1.0
         p.cylinders = 3; p.layout = Layout::Inline; applyLayoutDefaults(p);
@@ -424,8 +437,13 @@ EngineParams makePreset(int idx) {
         p.sweepStartRpm = 2000; p.sweepEndRpm = p.revLimit - 200;
         break;
     }
-    case 16: // turbo I4
-        p = makePreset(0);
+    case 16: // turbo I4 (on the generic 2.0 I4 that preset 0 used to be)
+        p = base();
+        p.cylinders = 4; p.layout = Layout::Inline; applyLayoutDefaults(p);
+        p.bore_mm = 86; p.stroke_mm = 86; p.rod_mm = 143; p.compression = 10.5f;
+        p.intakeValves = 2; p.exhaustValves = 2; p.intakeValveDia_mm = 34; p.exhaustValveDia_mm = 28;
+        p.header = HeaderType::TriY; p.primaryDia_mm = 38; p.collectorDia_mm = 50; p.pipeDia_mm = 50;
+        p.revLimit = 6800; p.flywheel = 0.12f;
         applyInductionDefaults(p, Induction::Turbo);
         p.compression = 9.3f; p.compFlow_gs = 270; p.turbineAR = 0.34f; p.turboInertia = 0.07f; p.wastegateBar = 1.1f; p.boostRetard = 5;
         p.injector_ccmin = 550; p.revLimit = 6800; p.mechAdvance = 11; p.muffler = Muffler::Chambered;
@@ -499,10 +517,24 @@ EngineParams makePreset(int idx) {
     }
     finish(p);
     applyVehicleDefaults(p);
+    if (idx == 0) {   // K20A: close-ratio six-speed in a ~1.2 t hatch / coupe
+        static const float r[6] = {3.267f, 2.130f, 1.517f, 1.147f, 0.921f, 0.738f};
+        p.gears = 6; for (int i = 0; i < kMaxGears; ++i) p.gearRatio[i] = i < 6 ? r[i] : 0.738f;
+        p.finalDrive = 4.764f; p.mass_kg = 1250; p.tireRadius_mm = 310;
+    }
     applyComponentDefaults(p);
+    if (idx == 0) p.comp.plugHeatRange = 6;   // K20A street plug: hot enough to stay clean at idle
     // a nitrous kit sized to the engine (~30 hp per litre, in 25 hp jet steps)
     p.n2oShotHp = (float)(std::round(std::max(50.0, 30.0 * equivalentDisplacementL(p)) / 25.0) * 25.0);
     generateCalibration(p);
+    if (idx == 0) {   // free-revving, small ports: the revs and the manifold react fast - less acceleration fuel,
+                      // a little more idle valve damping
+        for (int i = 0; i < p.cal.accel.n; ++i) p.cal.accel.v[i] = std::round(p.cal.accel.v[i] * 0.6f);
+        p.cal.idleKd = 0.0002f;
+    }
+    if (idx == 20) {   // the supercharger's charge piping adds a lot of intake volume: the idle loop is slower, softer gains
+        p.cal.idleKp *= 0.6f; p.cal.idleKi *= 0.6f; p.cal.idleKd *= 0.6f; p.cal.idleSparkGain *= 0.8f;
+    }
     std::snprintf(p.name, sizeof(p.name), "%s", presetName(idx));
     return p;
 }
