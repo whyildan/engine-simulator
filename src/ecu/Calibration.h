@@ -25,6 +25,16 @@ struct Curve1D {
 
 enum class LoadMode : int32_t { SpeedDensity = 0, AlphaN = 1, Maf = 2, Hybrid = 3 };
 
+// trigger wheels (Phase 7): crank teeth with missing-tooth gaps; the ECU syncs on a gap (or on the cam tooth)
+enum TriggerPattern : int { kTrig60_2, kTrig36_1, kTrig36_2_2_2, kTrig24_1, kTrig12_1, kTrig4Cam, kTrigCount };
+struct TriggerInfo { const char* name; int teeth; int gaps; bool camRef; };   // camRef: sync only from the cam tooth
+const TriggerInfo& triggerInfo(int pattern);
+const char* triggerNames();     // ImGui combo list
+// injection timing: sequential (each port at its own angle), semi-sequential (each port twice per cycle, half the
+// fuel each), batch (all injectors together twice per cycle at one crank angle)
+enum InjMode : int { kInjSequential, kInjSemiSequential, kInjBatch, kInjModeCount };
+const char* injModeNames();
+
 // engine protection (Phase 3): one rule per monitored condition
 enum ProtId : int { kProtOverRev, kProtOverboost, kProtCoolant, kProtOilTemp, kProtOilPress, kProtFuelPress, kProtLean,
                     kProtKnock, kProtEgt, kProtSensor, kProtCount };
@@ -161,12 +171,30 @@ struct Calibration {
     float dfcoResumeAbove;  // rpm above the idle target where fuel comes back (never below 1600 rpm)
     float dfcoAnticipate;   // s: resume earlier by the rpm the engine will lose in this time (falling revs)
     float dfcoDelay;        // s the throttle must be closed before fuel is cut (a blip or a quick lift does not cut)
+
+    // ---- ECU configuration (Phase 7): trigger, injection timing, ignition dwell
+    int32_t triggerPattern; // TriggerPattern
+    int32_t camSensor;      // cam phase sensor fitted: sequential injection once synced (else semi-sequential)
+    int32_t injMode;        // InjMode the ECU runs once it knows the cycle phase
+    Curve1D dwell;          // coil dwell ms over battery V
+    float dwellMaxDuty;     // the coil may charge at most this share of the time between its sparks
+
+    // ---- torque management and gear-based control (Phase 7)
+    int32_t torqueMgmt;
+    Curve1D tqLimitGear;    // torque limit over gear, % of a full naturally aspirated charge (boost: > 100)
+    float tqMaxRetard;      // deg: the first 15 % of a reduction is retard (with DBW: while the throttle closes) ...
+    float tqMaxCut;         // ... the rest cuts up to this share of the sparks (0..1)
+    float tqThrottleRate;   // DBW: how fast the throttle cap follows the limit (per s per % of error)
+    int32_t gearControl;
+    Curve1D gearRevLimit;   // rpm limit over gear (above the main rev limit: the main limiter)
+    Curve1D gearSpark;      // spark trim deg over gear
 };
 
 // table identities (UI / files)
 enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalLtft, kCalBoostTarget, kCalVtc, kCalTableCount };
 enum CalCurveId : int { kCalCrankAfr, kCalWarmup, kCalAccel, kCalIatFuel, kCalIatSpark, kCalEctSpark, kCalDeadTime,
-                        kCalIdleTarget, kCalDbwMap, kCalBoostGear, kCalTcSlip, kCalCurveCount };
+                        kCalIdleTarget, kCalDbwMap, kCalBoostGear, kCalTcSlip, kCalDwell, kCalTqGear, kCalGearRev,
+                        kCalGearSpark, kCalCurveCount };
 // what the launch / shift limiters are doing (telemetry)
 enum LaunchState : int { kLaunchOff, kLaunch2Step, kLaunch3Step, kLaunchFlatShift, kLaunchShiftCut, kLaunchRollingAls, kLaunchStateCount };
 const char* launchStateName(int s);

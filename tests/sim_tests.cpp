@@ -230,6 +230,8 @@ static void survey() {
         if (std::getenv("ONLY") && std::atoi(std::getenv("ONLY")) != i) continue;   // before the (expensive) base map
         EngineParams p = std::getenv("GENERIC") ? makePreset(i) : makeCalibratedPreset(i);
         if (std::getenv("IMP")) p.imperfection = (float)std::atof(std::getenv("IMP"));
+        if (std::getenv("INJ")) p.cal.injMode = std::atoi(std::getenv("INJ"));
+        if (std::getenv("TRIG")) p.cal.triggerPattern = std::atoi(std::getenv("TRIG"));
         // diagnostics: part overrides
         if (std::getenv("CABLE")) p.comp.throttleType = ThrottleType::Cable;
         if (std::getenv("OS")) p.oversample = std::atoi(std::getenv("OS"));
@@ -267,6 +269,8 @@ static void survey() {
                 std::printf("  blip+%.2f rpm %5.0f map %5.1f tgt %5.2f duty %.2f lam %.2f %.2f mis %d (lean %d spark %d fouled %d rich %d dil %d) ve %.1f accel %.2f adv %.1f\n",
                             0.05 * (k + 1), t.rpm, t.mapKPa, t.targetAfr, t.injDuty, t.cylLambda[0], t.cylLambda[1], t.misfires, t.misfireCause[0],
                             t.misfireCause[1], t.misfireCause[2], t.misfireCause[3], t.misfireCause[4], t.ecuVe, t.ecuAccel, t.advance);
+                std::printf("      air %.1f g/s fuel %.2f g/s -> AFR %.1f  sync %d%d inj %d\n", t.airFlow, t.fuelFlow, t.fuelFlow > 0 ? t.airFlow / t.fuelFlow : 0.0,
+                            (int)t.crankSync, (int)t.camSync, t.injMode);
             }
         else runSeconds(sim, 0.6);
         sim.getTelemetry(t);

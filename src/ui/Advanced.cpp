@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace es {
 using namespace ui;
@@ -334,6 +335,93 @@ void App::valveDynamicsUi() {
         ImPlot::Annotation(ImPlot::GetPlotLimits().X.Max, ImPlot::GetPlotLimits().Y.Max, ImVec4(0.1f, 0.1f, 0.12f, 0.85f), ImVec2(-8, 8), true, "%s", txt);
         ImPlot::EndPlot();
     }
+}
+
+// ------------------------------------------------------------------ ECU Setup: trigger, injection, ignition (Phase 7)
+void App::ecuConfigUi() {
+    Calibration& c = p_.cal;
+    const Calibration* ref = hasRef_ ? &refCal_ : nullptr;
+    ImGui::SeparatorText("Trigger");
+    ImGui::Combo("Crank trigger wheel", &c.triggerPattern, triggerNames());
+    Help("The crank wheel gives the speed tooth by tooth; the angle is known once a missing-tooth gap has passed\n"
+         "(a few teeth after it). More gaps (36-2-2-2) sync sooner; the 4-tooth wheel needs the cam tooth for its\n"
+         "angle - up to two crank turns of cranking before the first spark.");
+    {
+        bool cam = c.camSensor != 0;
+        if (ImGui::Checkbox("Cam phase sensor", &cam)) c.camSensor = cam ? 1 : 0;
+        Help("With a cam tooth the ECU knows which revolution is the intake one: sequential injection.\n"
+             "Without it (or before it is seen) the injectors fire every revolution with half the fuel.");
+    }
+    if (p_.fuelSystem == FuelSystem::EFI && !isRotary(p_)) {
+        ImGui::SeparatorText("Injection");
+        ImGui::Combo("Injection timing", &c.injMode, injModeNames());
+        Help("Sequential: each injector once per cycle at its own angle (needs the cam phase).\n"
+             "Semi-sequential: each injector at its own angle every revolution, half the fuel each time.\n"
+             "Batch: all injectors together every revolution at one crank angle - some ports get their fuel\n"
+             "while their intake valve is open, others wait a whole cycle on the port wall.");
+    }
+    ImGui::SeparatorText("Ignition");
+    {
+        int ct = (int)p_.comp.coilType;
+        if (ImGui::Combo("Coil type", &ct, coilTypeNames())) p_.comp.coilType = (CoilType)ct;
+    }
+    Help("Distributor: one coil for all cylinders (little time to charge at high rpm). Wasted spark: one coil per\n"
+         "pair, fires every revolution. Coil on plug: one per cylinder, most time to charge.");
+    ImGui::SliderFloat("Max dwell duty", &c.dwellMaxDuty, 0.2f, 0.9f, "%.2f");
+    Help("The coil may charge at most this share of the time between its sparks (it needs the rest to fire\n"
+         "and cool). At high rpm this, not the dwell table, sets the dwell.");
+    {
+        const double full = 3.0 * std::max(0.3f, p_.comp.coilCharge_ms);
+        char b[160];
+        std::snprintf(b, sizeof(b), "%.2f ms now, spark %.0f of %.0f mJ (coil saturates in ~%.1f ms at 14 V)", tel_.dwellMs, tel_.sparkAvail,
+                      p_.comp.coilEnergy_mJ, full / 3.0);
+        ImGui::TextDisabled("%s", b);
+        if (tel_.dwellMs > 2.5 * full) ImGui::TextColored(ImVec4(1, 0.6f, 0.2f, 1), "Dwell far beyond saturation: the coil only heats up.");
+    }
+    curveEd_[kCalDwell].drawCurve("dwell", c.dwell, calCurveInfo(kCalDwell), tel_.snsValue[kSnsBattery], tel_.running, ref ? &ref->dwell : nullptr);
+    Help("Dwell over battery voltage: a low voltage charges the coil more slowly, so it needs a longer dwell.\n"
+         "Too short = a weak spark (misfires under boost / with a wide plug gap).");
+    ImGui::SeparatorText("Hardware");
+    ImGui::TextDisabled("ECU model: one generic standalone ECU (no per-model feature limits).");
+    ImGui::TextDisabled("I/O assignment and CAN bus: not supported - every sensor and actuator is wired directly.");
+}
+
+// ------------------------------------------------------------------ Engine Control > Torque / gear (Phase 7)
+void App::tabTorqueGear() {
+    Calibration& c = p_.cal;
+    const Calibration* ref = hasRef_ ? &refCal_ : nullptr;
+    const bool dbw = p_.comp.throttleType == ThrottleType::DriveByWire;
+    ImGui::PushItemWidth(-260);
+    ImGui::SeparatorText("Torque management");
+    {
+        bool on = c.torqueMgmt != 0;
+        if (ImGui::Checkbox("Torque limit by gear", &on)) c.torqueMgmt = on ? 1 : 0;
+        Help("The ECU estimates the torque from the cylinder air charge (% of a full naturally aspirated charge;\n"
+             "boost goes above 100 %) and holds it under the limit of the gear: gearbox / clutch protection,\n"
+             "traction in the low gears. Drive-by-wire: the throttle is capped (clean); what is still above the\n"
+             "limit is taken off with retard (first ~15 %) and then dropped sparks.");
+    }
+    ImGui::SliderFloat("Max retard##tq", &c.tqMaxRetard, 0, 25, "%.0f deg");
+    ImGui::SliderFloat("Max spark cut##tq", &c.tqMaxCut, 0, 1, "%.2f");
+    if (dbw) ImGui::SliderFloat("Throttle cap rate", &c.tqThrottleRate, 0.002f, 0.1f, "%.3f /s per %%");
+    else ImGui::TextDisabled("Cable throttle: the limit works with retard and spark cut only.");
+    char b[200];
+    std::snprintf(b, sizeof(b), "gear %d   load %.0f %%   limit %s   reduction %.0f %%%s", tel_.gear, tel_.tqLoad,
+                  tel_.tqLimit > 0 ? (std::to_string((int)tel_.tqLimit) + " %").c_str() : "-", tel_.tqReduction * 100,
+                  dbw && tel_.tqThrCap < 0.999f ? ("   throttle cap " + std::to_string((int)(tel_.tqThrCap * 100)) + " %").c_str() : "");
+    ImGui::TextDisabled("Now: %s", b);
+    curveEd_[kCalTqGear].drawCurve("tqgear", c.tqLimitGear, calCurveInfo(kCalTqGear), (float)tel_.gear, tel_.vehicle, ref ? &ref->tqLimitGear : nullptr);
+    ImGui::SeparatorText("Gear-based control");
+    {
+        bool on = c.gearControl != 0;
+        if (ImGui::Checkbox("Rev limit and spark trim by gear", &on)) c.gearControl = on ? 1 : 0;
+        Help("From the gear position sensor: a lower rev limit in the low gears (wheelspin, gearbox), spark trim\n"
+             "per gear. Neutral uses the main limiter.");
+    }
+    ImGui::TextDisabled("Rev limit in effect: %.0f rpm", tel_.gearLimitRpm);
+    curveEd_[kCalGearRev].drawCurve("gearrev", c.gearRevLimit, calCurveInfo(kCalGearRev), (float)tel_.gear, tel_.vehicle, ref ? &ref->gearRevLimit : nullptr);
+    curveEd_[kCalGearSpark].drawCurve("gearspark", c.gearSpark, calCurveInfo(kCalGearSpark), (float)tel_.gear, tel_.vehicle, ref ? &ref->gearSpark : nullptr);
+    ImGui::PopItemWidth();
 }
 
 } // namespace es

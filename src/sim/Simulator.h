@@ -44,6 +44,10 @@ struct Telemetry {
     float compEff = 0, compFlowCorr = 0, turbEff = 0, turbEr = 1, turbUc = 0, turbMfp = 0, surgeMargin = 1, icCoreC = 25;
     bool mapComp = false, mapTurb = false;
     float baroKPa = 101.3f, coolAirKmh = 0;
+    // Phase 7: trigger / injection / dwell, torque management, gear control
+    int injMode = 0;
+    bool crankSync = true, camSync = true;
+    float dwellMs = 0, syncDeg = 0, tqLoad = 0, tqLimit = 0, tqReduction = 0, tqThrCap = 1, gearLimitRpm = 0;
     float loftIn = 0, loftEx = 0, bounceIn = 0, bounceEx = 0, lateCloseIn = 0, lateCloseEx = 0;   // mm, deg
     // vehicle
     bool vehicle = false;

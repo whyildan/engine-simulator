@@ -32,6 +32,9 @@ struct ActuatorCommands {
     // cam control
     bool vtec = false;            // high cam engaged
     double vtcAdvance = 0;        // intake cam advance request, crank deg
+    // Phase 7
+    int injMode = 0;              // InjMode in effect (semi-sequential until the cam is synced)
+    double dwellMs = 3.0;         // coil dwell
 };
 
 class Ecu {
@@ -58,7 +61,15 @@ public:
     double targetAfr = 14.7, injDuty = 0, trim = 1.0, warmup = 0, accel = 0, deadComp_ms = 0, flowComp = 1;
     double baro() const { return ambientPressurePa(p_) * 1e-3; }   // kPa, the ECU's barometric sensor
     double mapUsed = 101.3;
-    double driveFf_ = 0;         // idle valve feed-forward for the drive / transbrake load      // kPa used for the fuel load (sensor or alpha-N fallback)
+    double driveFf_ = 0;         // idle valve feed-forward for the drive / transbrake load
+    // torque management / gear-based control (Phase 7)
+    double tqLoad = 0;           // ECU torque estimate, % of a full naturally aspirated charge
+    double tqLimit = 0;          // active limit (0 = none)
+    double tqReduction = 0;      // share of the torque taken off by retard / cut
+    double tqThrCap = 1;         // DBW throttle cap from the torque limit
+    double gearLimitRpm = 0;     // rev limit in effect
+    double tqRetard_ = 0, tqCut_ = 0;
+    void torqueStep(double dt, const SensorReadings& s, double rpm, double tpsPct, bool dbw, bool running);      // kPa used for the fuel load (sensor or alpha-N fallback)
     double veUsed = 0, loadX = 0, loadY = 0, tpsUsed = 0;   // operating point on the maps
     double airPerCyl = 0;        // g per cylinder event the ECU calculated
     bool closedLoop = false, tuning = false;

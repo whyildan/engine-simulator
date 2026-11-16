@@ -29,12 +29,12 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🔊 **Physics-based sound** | Waveguide intake / exhaust network, per-pipe gas temperature, impulse-response convolution, mechanical noise, afterfire pops. |
 | ⚙️ **Any layout** | Inline, V, boxer, 1–16 cylinders, odd-fire / big-bang, custom firing orders — and **Wankel rotaries** with 1–4 rotors and four porting styles. |
 | 🌀 **The rotary "brap"** | A bridge-ported 13B idles lumpy because exhaust floods back through the port overlap and the diluted charges misfire — modelled, not faked. |
-| 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control. |
+| 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control; trigger wheels (60-2, 36-1, 36-2-2-2 …) with crank / cam sync, sequential / semi-sequential / batch injection, coil dwell table. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
 | 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; compressor / turbine maps (built in or loaded from CSV) with efficiency islands, surge and choke; intercooler heat soak; Roots, twin-screw and centrifugal superchargers. |
 | 📈 **Virtual dyno** | WOT sweeps, steady-state step tests and holds, SAE J1349 / DIN 70020 / ISO 1585 / SAE J607 correction, altitude, cell fan, BSFC / EGT / boost per point, before / after comparison, CSV export. |
 | 🔩 **Valvetrain dynamics** | Spring-mass valves on an elastic train: valve float, loft, late closing and seat bounce past the float speed, from the springs, moving mass and lifter type. |
-| 🏁 **Motorsport** | Launch control (2-step) with pops and bangs, 3-step / flat shift, shift cut, traction control, transbrake, rolling anti-lag, progressive wet / dry nitrous. |
+| 🏁 **Motorsport** | Launch control (2-step) with pops and bangs, 3-step / flat shift, shift cut, traction control, transbrake, rolling anti-lag, progressive wet / dry nitrous, torque management and rev limit / timing by gear. |
 | 🗂️ **Data logging** | 55 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
 | 🎛️ **Custom dashboard** | Your own grid of gauges, digital readouts and bars with warning / alarm thresholds and a sensor status strip. |
 | 🚗 **Drive it** | Car or motorcycle as the load: manual / auto-clutch / automatic gearbox, clutch, tyre slip, 0–100 and 1/4-mile timers. |
@@ -119,11 +119,11 @@ warning lamps) and a 12-section navigation in the style of ECU software:
 1. **Engine Setup** — geometry, valvetrain / rotary ports, exhaust, vehicle, sound, components, and the
    **engine view**: flat cutaways of every cylinder / rotor laid out along the crankshaft in a rotatable 3D
    scene (drag to orbit, wheel to zoom; live valve lift, VTEC cam, spark and gas by stroke)
-2. **ECU Setup** — loop rate, cold start, simulation pause / reset
+2. **ECU Setup** — loop rate, trigger wheel and cam sensor, injection timing, coil type and dwell, cold start, simulation pause / reset
 3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, base map
 4. **Ignition Tuning** — ignition map, corrections, knock control, per-cylinder trims
 5. **Boost Control** — turbo / supercharger hardware (generic or compressor / turbine maps), ECU boost control, anti-lag, nitrous
-6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter, cam control (VTEC / VTC), launch / shift, traction control
+6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter, cam control (VTEC / VTC), launch / shift, traction control, torque limit and rev limit / spark trim by gear
 7. **Sensor Configuration** — true vs measured values, noise, lag, fault injection
 8. **Engine Protection** — protection rules, limp mode, shutdown
 9. **Live Dashboard** — gauges, readouts, scopes (pressure, P-V, boost, fuel map, sound) and a configurable
@@ -290,6 +290,10 @@ build/Release/valve_probe.exe 4     # valvetrain dynamics of a preset: float spe
 ```
 
 ```bash
+build/Release/phase7_test.exe       # trigger wheels / sync, injection modes, dwell, torque management, gear control
+```
+
+```bash
 build/Release/basemap_warm.exe 14   # measure every preset's base map in parallel (fills the cache)
 ```
 
@@ -327,6 +331,7 @@ python tools/analyze_wav.py brap.wav 0 8 900       # level + spectral peaks (eng
 - [x] Phase 4 — configurable dashboard, data logging with CSV export, dyno export
 - [x] Phase 5 — launch control, 2-step / 3-step, flat shift, traction control, transbrake, nitrous
 - [x] Phase 6 — compressor / turbine maps, valvetrain dynamics, altitude, intercooler heat soak, dyno step test and correction
+- [x] Phase 7 — trigger wheels and sync, sequential / semi-sequential / batch injection, coil dwell, torque management, gear-based control
 
 ## Acknowledgements
 

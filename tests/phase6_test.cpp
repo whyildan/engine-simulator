@@ -38,8 +38,9 @@ static void start(Simulator& sim, EngineParams& p) {
 static double wotTorque(Simulator& sim, EngineParams& p, double rpm, double settle = 2.0, Telemetry* last = nullptr) {
     p.dynoMode = DynoMode::Hold; p.dynoHoldRpm = (float)rpm; p.throttle = 1; sim.setParams(p);
     run(sim, settle);
-    const double tq = avg(sim, 1.0, [](const Telemetry& t) { return t.torque; });
-    if (last) *last = tel(sim);
+    float fl = 0;   // float severity swings cycle to cycle once the valves float: keep the worst seen
+    const double tq = avg(sim, 1.0, [&fl](const Telemetry& t) { fl = std::max(fl, std::max(t.floatIn, t.floatEx)); return t.torque; });
+    if (last) { *last = tel(sim); last->floatIn = fl; }
     return tq;
 }
 

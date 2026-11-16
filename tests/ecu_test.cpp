@@ -79,7 +79,7 @@ int main() {
             EngineParams p = makeCalibratedPreset(0);
             p.sensors[kSnsBattery].fault = SensorFault::Stuck;
             p.cal.autoTune = tune; p.cal.closedLoop = 1;
-            Simulator sim(p); startIdle(sim, p, 12.0);
+            Simulator sim(p); startIdle(sim, p, tune ? 20.0 : 12.0);   // auto-tune learns a few % per second at a hunting idle
             int clN = 0, n = 0;   // share of the time in closed loop over the last 2 s (a single sample can hit a transient)
             for (; n < 40; ++n) { run(sim, 0.05); clN += tel(sim).closedLoop ? 1 : 0; }
             Telemetry t = tel(sim);

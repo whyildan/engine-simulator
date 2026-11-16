@@ -4,7 +4,8 @@ Dokumen ini menjawab `tuning-update.md` bagian 19, langkah 1–6: memeriksa kode
 fitur yang sudah ada dan yang belum, lalu membagi pekerjaan per fase. Pekerjaan dilakukan satu fase per
 satu, dengan tes di akhir tiap fase.
 
-Status: **rencana sudah direvisi dan keputusan sudah disepakati (lihat bagian 5); Fase 1 (1a, 1b, 1c) selesai; berikutnya Fase 2.**
+Status: **Fase 1–7 selesai (lihat bagian 4). Yang masih tersisa dari spesifikasi ada di tabel bagian 2 (🟡 / ❌) dan
+diringkas di "Sisa pekerjaan" di bawah tabel.**
 
 ---
 
@@ -33,10 +34,53 @@ Status: **rencana sudah direvisi dan keputusan sudah disepakati (lihat bagian 5)
 
 ## 2. Pemetaan spesifikasi → status
 
-Keterangan: ✅ sudah ada · 🟡 sebagian (perlu dirombak atau diperluas) · ❌ belum ada
+Keterangan: ✅ sudah ada · 🟡 sebagian (perlu dirombak atau diperluas) · ❌ belum ada · ➖ sengaja tidak didukung
+
+Tabel ini menggambarkan kondisi setelah Fase 7 (diperbarui terhadap kode, bukan kondisi awal).
 
 | § | Fitur | Status | Catatan |
 |---|---|---|---|
+| 1 | Arsitektur I3–V12, flat-4/6, rotari | ✅ | Termasuk preset I5 dan flat-6 |
+| 1 | Bore/stroke/rod/CR/firing/limiter/inersia | ✅ | |
+| 1 | Redline terpisah, friksi mekanis yang bisa diatur | ✅ | Fase 7: redline (zona merah tach + lampu shift) dan pengali friksi |
+| 1 | Komponen (piston, rod, crank, cam, pegas katup, manifold, throttle body, injector, coil, busi, pompa oli/air) | ✅ | Fase 1b; valve float dinamis di Fase 6 |
+| 2 | Pemilihan model ECU | ➖ | Ditandai "not supported" di ECU Setup: satu profil ECU generik |
+| 2 | Pola trigger crank, sinkronisasi cam | ✅ | Fase 7: 60-2, 36-1, 36-2-2-2, 24-1, 12-1, 4 gigi + cam; sinkron setelah celah lewat, rpm per gigi |
+| 2 | Mode injeksi sequential / batch / semi-sequential | ✅ | Fase 7, bisa dipilih; tanpa fase cam → semi-sequential |
+| 2 | Konfigurasi pengapian | ✅ | Fase 7: tipe coil di ECU Setup |
+| 2 | Assignment I/O, CAN bus | ➖ | Ditandai "not supported" di ECU Setup |
+| 2 | Speed density / Alpha-N / MAF / hybrid, open / closed loop | ✅ | Fase 2–3 |
+| 3 | Tabel VE, target AFR/λ, injector + dead time, tekanan bahan bakar | ✅ | Fase 2 |
+| 3 | Pengayaan cranking/warm-up/akselerasi, DFCO, after-start, trim | ✅ | Fase 2–3 |
+| 3 | Editor tabel (sel, interpolasi, smoothing, copy/paste, undo/redo, sel aktif, compare, per silinder) | ✅ | Fase 2 |
+| 3 | Permukaan 3D | ✅ | ImPlot3D |
+| 4 | Tabel pengapian, cranking, koreksi per silinder, koreksi suhu/beban | ✅ | Fase 2 |
+| 4 | Dwell time | ✅ | Fase 7: tabel dwell vs tegangan aki + batas duty; energi percikan mengikutinya |
+| 4 | Knock detection + retard | ✅ | Fase 3, per silinder |
+| 5 | Turbo, wastegate, inersia, efisiensi, peta kompresor / turbin | ✅ | Peta tabel + CSV di Fase 6 |
+| 5 | Tabel boost (rpm/gigi/TPS), duty wastegate, PID, overboost, boost cut | ✅ | Fase 3 |
+| 6 | Idle, DBW, soft/hard limiter, launch, 2-step/3-step, flat shift, anti-lag, VVT, VTEC | ✅ | Fase 3, 5, dan setelah Fase 5 |
+| 6 | Torque management | ✅ | Fase 7: batas torsi per gigi lewat throttle DBW, retard, spark cut |
+| 6 | Kontrol berbasis gigi (selain boost) | ✅ | Fase 7: limiter dan trim timing per gigi |
+| 7 | Sensor virtual (tegangan, noise, delay, gagal, fallback) | ✅ | Fase 1c |
+| 8 | Lambda STFT/LTFT, batas, kondisi learning, Auto Tune | ✅ | Fase 3 |
+| 8 | Kontrol knock per silinder, PID boost | ✅ | Fase 3 |
+| 9 | Proteksi dan limp mode | ✅ | Fase 3, 10 aturan |
+| 10 | Launch, TC, rolling anti-lag, flat shift, 2/3-step, boost by gear, nitrous, transbrake | ✅ | Fase 5 |
+| 10 | Torque management (balap) | ✅ | Sama dengan §6 |
+| 11 | Dashboard live yang bisa diatur | ✅ | Fase 4 |
+| 12 | Data logging, grafik, CSV, perbandingan sesi | ✅ | Fase 4, 55 channel |
+| 13 | Dyno steady/sweep, perbandingan, ekspor, satuan | ✅ | Fase 4 + step test dan koreksi di Fase 6 |
+| 14 | Pemisahan fisika / sensor / ECU, frekuensi bisa diatur | ✅ | Fase 1c |
+| 15 | Manajemen kalibrasi (simpan, muat, versi, compare, lock, validasi) | ✅ | Fase 2 |
+| 16 | UI gelap padat, navigasi 12 bagian | ✅ | Fase 1a |
+| 17 | Pause/resume/reset, sesi deterministik | ✅ | Fase 1c |
+
+**Sisa pekerjaan:**
+- Pemilihan model ECU, assignment I/O, CAN bus (§2) — sengaja tidak didukung (ditandai di ECU Setup).
+- Diesel (ditunda; fitur ECU yang menjadi syaratnya sudah selesai di Fase 7).
+
+---|---|---|---|
 | 1 | Arsitektur I3–V12, flat-4/6, rotari | ✅ | Preset I5 dan flat-6 belum ada (tinggal ditambah) |
 | 1 | Bore/stroke/rod/CR/firing/limiter/inersia | ✅ | |
 | 1 | Redline terpisah, friksi yang bisa diatur | 🟡 | Friksi masih rumus tetap |
@@ -427,6 +471,35 @@ Implementasi:
   saat transbrake ditahan. Tanpa itu idle melawan transbrake berayun 400–900 rpm dan bisa mati. Rig base map
   memakai kipas sel default (50 km/h), sama dengan dyno (base map versi 20).
 - Tes: `phase6_test`, alat `valve_probe`.
+
+### Fase 7 – Konfigurasi ECU, torque management, kontrol per gigi ✅ selesai
+- **Trigger** (`Engine::triggerStep`, kalibrasi `trigger_pattern`, `cam_sensor`): roda 60-2, 36-1, 36-2-2-2,
+  24-1, 12-1, atau 4 gigi + gigi cam. Kecepatan CKP diukur per gigi (roda bergigi sedikit = pembacaan lebih
+  jarang). Sudut engkol baru diketahui setelah celah gigi lewat (90° sebelum TMA silinder 1, + 2 gigi untuk
+  mengenali celah); sebelum itu tidak ada percikan / bahan bakar. Fase siklus diketahui setelah gigi cam lewat;
+  sebelum itu (atau tanpa sensor cam) injeksi semi-sequential. K20A: 36-2-2-2 sinkron dalam 50°, 60-2 / 36-1
+  ±290°, roda 4 gigi + cam 780°; semua hidup dalam 0.5–0.7 s.
+- **Injeksi**: sequential, semi-sequential (tiap port dua kali per siklus, setengah), batch (semua injektor
+  bersamaan di satu sudut silinder 1). Rotari tetap sequential.
+- **Pengapian**: tipe coil di ECU Setup; tabel dwell vs tegangan aki (default 1.3 × waktu isi coil × 14/V) dan
+  batas duty dwell. Fisika: energi = E·(1 − e^(−3·dwell/τ)), τ = waktu isi × 14/V, dwell maks = selang antar
+  percikan coil − 1.2 ms. Dwell 0.25 ms pada I4 turbo: 18 mJ, 266 misfire spark, torsi 434 → 236 Nm.
+- **Torque management** (`Ecu::torqueStep`): estimasi torsi = muatan udara silinder / muatan penuh NA (%),
+  batas per gigi. DBW: batas throttle diintegrasikan ke batas (bersih); sisa di atas batas: retard (±15 %
+  pertama) lalu spark cut. K20A gigi 1 batas 60 %: DBW torsi kopling 190 → 63 Nm (beban 58 %), throttle kabel
+  179 → 117 Nm.
+- **Kontrol per gigi**: limiter dan trim timing per gigi dari sensor posisi gigi (gigi 1 dibatasi 5000 rpm →
+  maks 5100 rpm).
+- **Mesin**: pengali friksi (×1.5 → torsi 6000 rpm 237 → 219 Nm) dan redline (zona merah tach, lampu Shift;
+  default limiter − 300).
+- UI: ECU Setup (Trigger, Injection, Ignition + tabel dwell, Hardware: model ECU / I/O / CAN "not supported"),
+  Engine Control › Torque / gear, Engine Setup › Engine (redline, friksi). Base map versi 21. Tes:
+  `phase7_test`.
+- Ikut diperbaiki di tes: severity float berayun antar siklus begitu katup float (tes memakai nilai terburuk),
+  auto-tune VE pada idle yang naik-turun diberi waktu belajar 20 s.
+- Diketahui: pada imperfection 0 (mesin rata sempurna, bukan default) tip-in dari idle bisa jatuh ke misfire kurus
+  beruntun dan mati — bahan bakar ikut lolos saat overlap besar di WOT rpm rendah. Presetnya berpindah tergantung
+  kondisi idle saat gas dibuka (Fase 6: V8 Roots, Fase 7: K20A); imperfection 0.6 / 1 / 2 tidak terpengaruh.
 
 ---
 

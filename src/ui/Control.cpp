@@ -184,12 +184,7 @@ void App::sectionEngineControl() {
         }
         if (ImGui::BeginTabItem("Launch / shift")) { tabLaunch(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Traction control")) { tabTraction(); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Planned")) {
-            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.35f, 1), "Not modelled yet:");
-            ImGui::BulletText("Torque management, gear-based control");
-            ImGui::TextDisabled("Anti-lag and nitrous are in Boost Control; VTEC / VTC hardware in Engine Setup > Valvetrain.");
-            ImGui::EndTabItem();
-        }
+        if (ImGui::BeginTabItem("Torque / gear")) { tabTorqueGear(); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
 }

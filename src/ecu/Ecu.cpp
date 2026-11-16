@@ -129,6 +129,31 @@ void Ecu::knockStep(double dt, const SensorReadings& s, double rpm) {
     knockSeqInit_ = true;
 }
 
+// ---- torque management: the ECU estimates the torque from the cylinder air charge (% of a full naturally
+//      aspirated charge) and holds it under a limit per gear. With drive-by-wire a throttle cap integrates towards
+//      the limit (clean); what is still above it right now is taken off with retard and then spark cuts.
+void Ecu::torqueStep(double dt, const SensorReadings& s, double rpm, double tpsPct, bool dbw, bool running) {
+    const double gear = s.fallback[kSnsGear] ? 0.0 : s.value[kSnsGear];
+    const double full = 101325.0 * vdCyl_ / (kRgas * 298.0);
+    tqLoad = full > 0 ? airEstimate(s, rpm, tpsPct) / full * 100.0 : 0.0;
+    tqLimit = 0; tqReduction = 0; tqRetard_ = 0; tqCut_ = 0;
+    if (!cal_.torqueMgmt || !running || gear < 0.5 || rpm < 1000.0) {
+        tqThrCap = std::min(1.0, tqThrCap + dt * 2.0);
+        return;
+    }
+    tqLimit = std::max(5.0, curveLookup(cal_.tqLimitGear, gear));
+    const double over = tqLoad - tqLimit;
+    if (dbw) tqThrCap = clampv(tqThrCap - over * std::max(0.0f, cal_.tqThrottleRate) * dt, 0.03, 1.0);
+    else tqThrCap = 1.0;
+    const double red = tqLoad > 1.0 ? clampv(over / tqLoad, 0.0, 0.95) : 0.0;
+    tqReduction = red;
+    // retard takes off the first ~15 % (a full retard costs about that much torque), dropped sparks the rest
+    // (each dropped spark removes its cylinder's share)
+    const double byRetard = std::min(red, 0.15);
+    tqRetard_ = byRetard / 0.15 * std::max(0.0f, cal_.tqMaxRetard);
+    tqCut_ = std::min(std::max(0.0, (red - byRetard) / (1.0 - byRetard)), clampv((double)cal_.tqMaxCut, 0.0, 1.0));
+}
+
 // ---- boost control: target from rpm x throttle (x gear), feed-forward from the wastegate spring + PID on the
 //      MAP sensor -> solenoid duty. Overboost and boost cut work as fuel cuts.
 void Ecu::boostStep(double dt, const SensorReadings& s, double rpm, double tpsPct) {
@@ -293,7 +318,15 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     const bool efi = p_.fuelSystem == FuelSystem::EFI;
     const bool carb = !efi;
     cmd.syncLost = s.fallback[kSnsCKP];
-    cmd.batchFire = s.fallback[kSnsCMP];
+    // trigger decoder: no crank sync -> no spark / fuel; no cycle phase (cam not synced, no cam sensor or it failed)
+    // -> injection twice per cycle (semi-sequential) unless batch fire is what the calibration asks for anyway
+    cmd.syncLost = cmd.syncLost || !s.in.crankSync;
+    {
+        const bool phase = !s.fallback[kSnsCMP] && s.in.camSync;
+        const int want = clampv((int)cal_.injMode, 0, kInjModeCount - 1);
+        cmd.injMode = want == kInjBatch ? kInjBatch : (phase ? want : kInjSemiSequential);
+    }
+    cmd.batchFire = cmd.injMode != kInjSequential;
     const double rpm = s.value[kSnsCKP];
     const double pedal = s.value[kSnsAPP] * 0.01;
     const double tpsPct = s.value[kSnsTPS];
@@ -355,10 +388,17 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     } else cmd.vtec = false;
     cmd.vtcAdvance = p_.vtc ? clampv(tableLookup(cal_.vtcMap, rpm, mapUsed), 0.0, (double)std::max(0.0f, p_.vtcRange)) : 0.0;
 
+    // ---- gear-based control: rev limit and spark trim per gear (gear position sensor)
+    const double gear = s.fallback[kSnsGear] ? 0.0 : s.value[kSnsGear];
+    const bool gearCtl = cal_.gearControl && gear >= 0.5;
+    double revLim = p_.revLimit;
+    if (gearCtl) { const double gl = curveLookup(cal_.gearRevLimit, gear); if (gl > 500.0) revLim = std::min(revLim, gl); }
+    gearLimitRpm = revLim;
+
     // ---- rev limiter: hard limit at the rev limit, plus an rpm cap for fuel limitation / limp mode
     //      (and for a throttle limitation the cable throttle cannot do)
-    if (rpm > p_.revLimit) limiterOn_ = true;
-    else if (rpm < p_.revLimit - 150) limiterOn_ = false;
+    if (rpm > revLim) limiterOn_ = true;
+    else if (rpm < revLim - 150) limiterOn_ = false;
     const bool capWanted = actFuel_ || limp || (actThrottle_ && !dbw);
     const double cap = std::max(1500.0f, cal_.limpRpm);
     if (capWanted && rpm > cap) capLimiter_ = true;
@@ -370,11 +410,12 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     cmd.sparkCut = (limiterOn_ && !limFuel) || shutdown || (carb && otherCut);
     // soft limiter: retard and a growing share of cut sparks over the last band before the hard limit
     const double band = cal_.softLimitBand;
-    const double soft = band > 1.0 ? clampv((rpm - (p_.revLimit - band)) / band, 0.0, 1.0) : 0.0;
+    const double soft = band > 1.0 ? clampv((rpm - (revLim - band)) / band, 0.0, 1.0) : 0.0;
     cmd.cutFraction = soft * clampv((double)cal_.softLimitCut, 0.0, 1.0);
     // launch / shift limiters, traction control, nitrous
     motorsportStep(dt, s, rpm, tpsPct, running);
-    cmd.cutFraction = std::max(cmd.cutFraction, std::max(msCut_, tcCut));
+    torqueStep(dt, s, rpm, tpsPct, dbw, running);
+    cmd.cutFraction = std::max(cmd.cutFraction, std::max(std::max(msCut_, tcCut), tqCut_));
 
     // ---- spark: ignition map + temperature corrections (per-cylinder trims added by the engine)
     double adv;
@@ -388,7 +429,8 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     adv -= soft * cal_.softLimitRetard;
     if (actRetard_ || limp) adv -= cal_.protRetard;
     if (msTimingOn_ && rpm >= 400) adv = msTiming_;              // launch / 3-step / rolling anti-lag timing
-    if (rpm >= 400) adv -= msRetard_ + tcRetard + cal_.n2oRetard * cmd.n2oDuty;
+    if (rpm >= 400) adv -= msRetard_ + tcRetard + cal_.n2oRetard * cmd.n2oDuty + tqRetard_;
+    if (gearCtl && rpm >= 400) adv += curveLookup(cal_.gearSpark, gear);
     // anti-lag on lift-off: very late spark + a cracked throttle keep the turbine fed
     if (pedal > 0.3) alsTimer_ = 0; else if (pedal < 0.05) alsTimer_ += dt;
     cmd.antiLag = p_.antiLag && p_.induction == Induction::Turbo && p_.ignition && pedal < 0.05 && rpm > cal_.alsMinRpm &&
@@ -397,14 +439,18 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     if (cmd.antiLag) adv = cal_.alsTiming;
     if (launchState == kLaunchRollingAls) cmd.antiLag = true;
     cmd.sparkAdvance = adv;
+    // coil dwell from the battery voltage, never more than the allowed share of the time between its sparks
+    cmd.dwellMs = std::min(curveLookup(cal_.dwell, s.value[kSnsBattery]),
+                           clampv((double)cal_.dwellMaxDuty, 0.05, 0.95) * ComponentModel::coilInterval(p_, std::max(rpm, 100.0)) * 1e3);
     knockStep(dt, s, rpm);
 
     // ---- drive-by-wire: pedal map and throttle limitation (protection / limp mode)
     throttleLimited = dbw && (actThrottle_ || limp);
     cmd.throttleTarget = -1;
-    if (dbw && !holdIac && (!dbwIdentity_ || throttleLimited || s.fallback[kSnsAPP])) {
+    if (dbw && !holdIac && (!dbwIdentity_ || throttleLimited || s.fallback[kSnsAPP] || tqThrCap < 0.999)) {
         double req = s.fallback[kSnsAPP] ? 0.0 : curveLookup(cal_.dbwMap, s.value[kSnsAPP]) * 0.01;   // failed pedal: idle only
         if (throttleLimited) req = std::min(req, cal_.limpThrottle * 0.01);
+        req = std::min(req, tqThrCap);
         cmd.throttleTarget = clampv(req, 0.0, 1.0);
     }
 

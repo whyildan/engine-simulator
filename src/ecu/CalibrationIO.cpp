@@ -216,6 +216,12 @@ const ScalarDef kScalars[] = {
     {"n2o_lean_lambda", &Calibration::n2oLeanLambda, nullptr},
     {"dfco_resume_above", &Calibration::dfcoResumeAbove, nullptr}, {"dfco_anticipate", &Calibration::dfcoAnticipate, nullptr},
     {"dfco_delay", &Calibration::dfcoDelay, nullptr},
+    // ECU configuration, torque management, gear-based control (Phase 7)
+    {"trigger_pattern", nullptr, &Calibration::triggerPattern}, {"cam_sensor", nullptr, &Calibration::camSensor},
+    {"injection_mode", nullptr, &Calibration::injMode}, {"dwell_max_duty", &Calibration::dwellMaxDuty, nullptr},
+    {"torque_mgmt", nullptr, &Calibration::torqueMgmt}, {"tq_max_retard", &Calibration::tqMaxRetard, nullptr},
+    {"tq_max_cut", &Calibration::tqMaxCut, nullptr}, {"tq_throttle_rate", &Calibration::tqThrottleRate, nullptr},
+    {"gear_control", nullptr, &Calibration::gearControl},
 };
 const char* kActKeys[kActCount] = {"warn", "retard", "boost_reduce", "throttle_limit", "fuel_limit", "limp", "shutdown"};
 const char* kLoadModeNames[] = {"speed_density", "alpha_n", "maf", "hybrid"};

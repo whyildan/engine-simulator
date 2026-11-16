@@ -67,6 +67,8 @@ struct EngineParams {
     float mechAdvanceRpm;
     float vacuumAdvance;      // extra deg at high vacuum (part load)
     float revLimit;
+    float redline;            // tach red zone / shift light (0 = 300 rpm below the rev limit)
+    float frictionMult;       // mechanical friction multiplier (1 = as built)
     Limiter limiter;
 
     // ---------------------------------------------------------- intake
@@ -237,6 +239,10 @@ inline double starterReleaseRpm(const EngineParams& p, double coolantC = 88.0) {
 }
 
 inline bool isBoosted(const EngineParams& p) { return p.induction != Induction::Natural; }
+// redline (tach red zone / shift light): set, or 300 rpm below the rev limiter
+inline float redlineRpm(const EngineParams& p) { return p.redline > 500.0f ? p.redline : p.revLimit - 300.0f; }
+// mechanical friction multiplier (1 = the friction model as built)
+inline double frictionScale(const EngineParams& p) { return p.frictionMult > 0.05f ? p.frictionMult : 1.0; }
 // ambient pressure in Pa (sea level when unset)
 inline double ambientPressurePa(const EngineParams& p) { return p.baro_kPa > 30.0f ? p.baro_kPa * 1000.0 : 101325.0; }
 // standard atmosphere: pressure (kPa) at an altitude (m) and back

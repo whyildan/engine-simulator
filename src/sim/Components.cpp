@@ -120,18 +120,22 @@ double ComponentModel::extraFmep(const EngineParams& p, double rpm, double Sp, d
     return fmep;
 }
 
-double ComponentModel::sparkEnergy(const EngineParams& p, double rpm) const {
+double ComponentModel::coilInterval(const EngineParams& p, double rpm) {
+    const double rev = 60.0 / std::max(30.0, rpm);
+    switch (p.comp.coilType) {
+    case CoilType::Distributor: return (isRotary(p) ? rev : 2.0 * rev) / std::max(1, (int)p.cylinders);
+    case CoilType::WastedSpark: return rev;
+    case CoilType::CoilOnPlug: default: return isRotary(p) ? rev : 2.0 * rev;
+    }
+}
+
+// the coil charges for the dwell the ECU commands (never longer than the time between its sparks minus the ~1 ms
+// spark); its current rises more slowly at a low battery voltage
+double ComponentModel::sparkEnergy(const EngineParams& p, double rpm, double dwellMs, double volts) const {
     const ComponentSet& c = p.comp;
     if (rpm < 30) return c.coilEnergy_mJ;
-    double rev = 60.0 / rpm;
-    double interval;
-    switch (c.coilType) {
-    case CoilType::Distributor: interval = (isRotary(p) ? rev : 2.0 * rev) / std::max(1, (int)p.cylinders); break;
-    case CoilType::WastedSpark: interval = rev; break;
-    case CoilType::CoilOnPlug: default: interval = isRotary(p) ? rev : 2.0 * rev; break;
-    }
-    double dwell = std::max(0.0, interval - 1.2e-3);     // the spark itself burns ~1 ms
-    double tc = std::max(0.3, (double)c.coilCharge_ms) * 1e-3;
+    const double dwell = std::max(0.0, std::min(dwellMs * 1e-3, coilInterval(p, rpm) - 1.2e-3));
+    const double tc = std::max(0.3, (double)c.coilCharge_ms) * 1e-3 * 14.0 / clampv(volts, 6.0, 16.0);
     return c.coilEnergy_mJ * (1.0 - std::exp(-3.0 * dwell / tc));
 }
 

@@ -168,6 +168,9 @@ private:
     void turboMapPlot(float height);
     void rebuildMapView();
     void valveDynamicsUi();
+    // Phase 7 (Advanced.cpp)
+    void ecuConfigUi();
+    void tabTorqueGear();
     std::string turboMsg_;
     CompressorModel mapView_;
     uint64_t mapViewKey_ = 0;

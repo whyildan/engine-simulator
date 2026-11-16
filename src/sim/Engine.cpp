@@ -121,6 +121,39 @@ double Engine::camLift(const ValveSpec& lo, const ValveSpec& hi, double phi, boo
     return L;
 }
 
+// trigger decoder: the crank wheel's teeth give the speed (one reading per tooth); the angle is only known once
+// a missing-tooth gap has passed (a few teeth after it), the cycle phase once the cam tooth has passed after that.
+// The gaps sit 90 deg before TDC of cylinder 1 (+ every 360 / gaps), the cam tooth at 600 deg of the 720 deg cycle.
+void Engine::triggerStep(double dTheta, double dt) {
+    const TriggerInfo& tr = triggerInfo(p_.cal.triggerPattern);
+    const double spacing = 360.0 / std::max(1, tr.teeth);
+    const double rpmNow = omega_ * 60.0 / (2.0 * kPi);
+    // speed from the tooth period
+    toothAcc_ += std::fabs(dTheta);
+    toothT_ += dt;
+    if (toothAcc_ >= spacing) { ckpRpm_ = toothAcc_ / std::max(1e-6, toothT_) / 6.0; toothAcc_ = 0; toothT_ = 0; }
+    else if (toothT_ > 0.25) ckpRpm_ = std::min(ckpRpm_, toothAcc_ / toothT_ / 6.0);   // stopping: no more teeth
+    if (rpmNow < 15.0) {   // stopped: the decoder starts over
+        syncArmed_ = crankSync_ = camSync_ = false;
+        return;
+    }
+    if (!syncArmed_) {
+        syncArmed_ = true; syncTravel_ = 0;
+        const double confirm = 2.0 * spacing;                // a couple of teeth to recognise the gap
+        constexpr double kCamTooth = 600.0;
+        const double toCam = wrapPos(kCamTooth - theta_, 720.0);
+        if (tr.camRef) syncNeedCrank_ = toCam + confirm;
+        else syncNeedCrank_ = wrapPos(270.0 - theta_, 360.0 / std::max(1, tr.gaps)) + confirm;
+        syncNeedCam_ = toCam + confirm;
+        while (syncNeedCam_ < syncNeedCrank_) syncNeedCam_ += 720.0;
+        if (tr.camRef) syncNeedCam_ = syncNeedCrank_;
+    }
+    syncTravel_ += std::fabs(dTheta);
+    if (!crankSync_ && syncTravel_ >= syncNeedCrank_) { crankSync_ = true; lastSyncDeg = syncTravel_; }
+    // the cycle phase: from the cam tooth (a rotor's eccentric shaft carries the whole cycle per wheel turn)
+    camSync_ = crankSync_ && (geom_.rotary || (p_.cal.camSensor && syncTravel_ >= syncNeedCam_));
+}
+
 // valvetrain dynamics: the valve motion of each cam profile at the current speed, recomputed when the speed
 // (or the profile) has moved on. Below ~1500 rpm every valvetrain follows its cam.
 void Engine::updateValveDynamics(double rpm) {
@@ -201,7 +234,9 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     t.v[kSnsIAT] = isBoosted(p_) ? intake.inlet(0).T - 273.15 : thermal.iatC;
     t.v[kSnsECT] = thermal.coolantC;
     t.v[kSnsO2] = t.v[kSnsWideband] = lamFast_;
-    t.v[kSnsCKP] = rpm;
+    t.v[kSnsCKP] = ckpRpm_;
+    t.in.crankSync = crankSync_;
+    t.in.camSync = camSync_;
     t.v[kSnsCMP] = 1.0;
     t.v[kSnsKnock] = knockMax;
     for (int i = 0; i < (int)cyls_.size(); ++i) {
@@ -406,10 +441,17 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     // ---- injection event (EFI)
     {
         const double ia = wrapPos(p_.injectionAngle, cycle_);
-        // no cam signal: the ECU can't tell the cycle phase -> batch fire on every revolution
-        const bool batch = ecu.cmd.batchFire && !geom_.rotary;
-        if (crossed(phiPrev, phi, ia)) injectPort(port, rpm, batch ? 0.5 : 1.0);
-        if (batch && crossed(phiPrev, phi, wrapPos(ia + 360.0, cycle_))) injectPort(port, rpm, 0.5);
+        const int mode = geom_.rotary ? kInjSequential : ecu.cmd.injMode;
+        if (mode == kInjSequential) {
+            if (crossed(phiPrev, phi, ia)) injectPort(port, rpm, 1.0);
+        } else {
+            // semi-sequential: each port at its own angle, twice per cycle (half each - the ECU doesn't know which
+            // revolution is the intake one); batch: every injector at once, at an angle of cylinder 1's cycle
+            const double sh = mode == kInjBatch ? c.phase - cyls_[0].phase : 0.0;
+            const double a = wrapPos(phiPrev + sh, cycle_), b = wrapPos(phi + sh, cycle_);
+            if (crossed(a, b, ia)) injectPort(port, rpm, 0.5);
+            if (crossed(a, b, wrapPos(ia + 360.0, cycle_))) injectPort(port, rpm, 0.5);
+        }
     }
 
     // ---- spark
@@ -569,7 +611,7 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     pedal = std::max(pedal, cmd.throttleCrack);
 
     // ---- hardware components: valve float, spark energy, plug temperature, health
-    sparkAvail = comp_.sparkEnergy(p_, rpm);
+    sparkAvail = comp_.sparkEnergy(p_, rpm, ecu.cmd.dwellMs, elec.volts);
     sparkMargin = std::min(9.0, sparkMargin + dt * 0.5);      // recovers slowly, dips on weak sparks
     updateHealth(dt, rpm, mapPa);
     if (failure) spark = false;
@@ -592,6 +634,7 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
 
     // ---- cylinders
     const double dTheta = omega_ * dt / kDeg;
+    triggerStep(dTheta, dt);
     const double thetaNew = theta_ + dTheta;
     torqueInst_ = 0;
     for (int i = 0; i < n; ++i) {
@@ -653,7 +696,8 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     const double Sp = 2.0 * geom_.strokeEq * rpm / 60.0;
     const double fmep = geom_.rotary ? (70e3 + 5.0e3 * Sp + 0.15e3 * Sp * Sp)   // no valvetrain / rods
                                      : (88e3 + 6.0e3 * Sp + 0.12e3 * Sp * Sp);
-    const double fmepAll = std::max(0.4 * fmep, fmep + comp_.extraFmep(p_, rpm, Sp, perRev)) * thermal.viscosityFriction();
+    const double fmepAll = std::max(0.4 * fmep, fmep + comp_.extraFmep(p_, rpm, Sp, perRev)) * thermal.viscosityFriction() *
+                           frictionScale(p_);
     double tFric = (fmepAll * perRev / (2.0 * kPi) + 4.0) * std::tanh(omega_ / 3.0);
     if (failure) tFric += 600.0 * std::tanh(omega_ / 3.0);     // broken parts: the engine locks up
     lastFricW_ = tFric * omega_;

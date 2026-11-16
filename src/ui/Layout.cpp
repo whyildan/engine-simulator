@@ -79,7 +79,7 @@ void App::headerBar() {
     char b[48];
     const ImVec4 white(0.92f, 0.92f, 0.92f, 1), dim(0.55f, 0.55f, 0.6f, 1);
     std::snprintf(b, sizeof(b), "%5.0f", tel_.rpm);
-    readout("RPM", b, tel_.rpm > p_.revLimit * 0.97f ? ImVec4(1, 0.35f, 0.3f, 1) : ImVec4(1, 0.7f, 0.3f, 1));
+    readout("RPM", b, tel_.rpm > redlineRpm(p_) ? ImVec4(1, 0.35f, 0.3f, 1) : ImVec4(1, 0.7f, 0.3f, 1));
     std::snprintf(b, sizeof(b), "%5.1f kPa", tel_.mapKPa);
     readout("MAP", b, white);
     std::snprintf(b, sizeof(b), "%5.2f", tel_.afr);
@@ -101,6 +101,7 @@ void App::headerBar() {
     // status lamps
     Lamp("Run", tel_.running, col(0.2f, 0.9f, 0.3f)); ImGui::SameLine();
     Lamp("Lim", tel_.limiter, col(1.0f, 0.2f, 0.2f)); ImGui::SameLine();
+    Lamp("Shift", tel_.rpm >= redlineRpm(p_), col(0.3f, 0.6f, 1.0f)); ImGui::SameLine();
     Lamp("Knock", tel_.knock > 1.0f, col(1.0f, 0.5f, 0.1f)); ImGui::SameLine();
     Lamp("Float", std::max(tel_.floatIn, tel_.floatEx) > 0.1f, col(1.0f, 0.6f, 0.2f)); ImGui::SameLine();
     Lamp("Oil", tel_.running && tel_.snsValue[kSnsOilP] < 0.7f, col(1.0f, 0.25f, 0.2f)); ImGui::SameLine();
@@ -315,8 +316,7 @@ void App::sectionEcuSetup() {
         bool tuned = p_.veLearning != 0;
         if (ImGui::Checkbox("Calibrated VE map (tuned ECU)", &tuned)) p_.veLearning = tuned ? 1 : 0;
         Help("On: the VE map matches this engine and the wideband closed loop is active.\n"
-             "Off: a generic VE guess, open loop - the mixture wanders with load and rpm.\n"
-             "(The editable VE / lambda / ignition tables arrive in Phase 2.)");
+             "Off: a generic VE guess, open loop - the mixture wanders with load and rpm.");
     }
     if (p_.fuelSystem == FuelSystem::EFI) {
         int inj = (int)p_.injection;
@@ -325,9 +325,8 @@ void App::sectionEcuSetup() {
     } else {
         ImGui::TextDisabled("Carburettor: the ECU is the ignition module only (curve + limiter).");
     }
-    ImGui::TextDisabled("Load calculation: speed density (MAP x VE). Alpha-N / MAF / hybrid: Phase 2.");
-    ImGui::TextDisabled("Injection: sequential; lost cam signal -> automatic batch fire.");
-    ImGui::TextDisabled("Trigger: crank tooth wheel + cam phase sensor (see Sensor Configuration).");
+    ImGui::TextDisabled("Load calculation: speed density / alpha-N / MAF / hybrid (Fuel Tuning).");
+    ecuConfigUi();
 
     ImGui::SeparatorText("Simulation");
     {
@@ -362,7 +361,14 @@ void App::sectionEcuSetup() {
     kv("Spark advance", "%.1f deg BTDC", tel_.advance);
     kv("Idle air valve", "%.0f %%", tel_.iac);
     kv("Rev limiter", "%s", tel_.limiter ? "CUTTING" : "-");
-    kv("Injection mode", "%s", tel_.batchFire ? "batch fire (no cam signal)" : "sequential");
+    {
+        static const char* im[] = {"sequential", "semi-sequential", "batch fire"};
+        kv("Injection mode", "%s%s", im[clampv(tel_.injMode, 0, 2)],
+           tel_.injMode != p_.cal.injMode && tel_.injMode == 1 ? "  (no cycle phase: cam not synced)" : "");
+        kv("Trigger", "%s   crank %s, cam %s (synced after %.0f deg)", triggerInfo(p_.cal.triggerPattern).name,
+           tel_.crankSync ? "sync" : "NO SYNC", tel_.camSync ? "sync" : "-", tel_.syncDeg);
+        kv("Coil dwell", "%.2f ms   spark %.0f / %.0f mJ", tel_.dwellMs, tel_.sparkAvail, p_.comp.coilEnergy_mJ);
+    }
     int nf = 0;
     for (int k = 0; k < kSensorCount; ++k) nf += tel_.snsFallback[k] ? 1 : 0;
     ImGui::SeparatorText("Diagnostics");

@@ -194,3 +194,9 @@ endif()
 
 add_executable(valve_probe tests/valve_probe.cpp)
 target_link_libraries(valve_probe PRIVATE enginesim_core)
+
+add_executable(phase7_test tests/phase7_test.cpp)
+target_link_libraries(phase7_test PRIVATE enginesim_core)
+if(MSVC)
+  target_link_options(phase7_test PRIVATE /STACK:16777216)
+endif()

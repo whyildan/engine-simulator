@@ -31,6 +31,18 @@ const TableInfo kCurves[kCalCurveCount] = {
     {"dbw_map",   "Throttle (DBW) map",     "pedal %",    "", "%",   0, 100, 1},
     {"boost_gear", "Boost by gear",         "gear",       "", "%",   0, 200, 1},
     {"tc_slip",   "Traction control slip target", "speed km/h", "", "%", 0, 100, 0.5f},
+    {"dwell",     "Coil dwell",             "battery V",  "", "ms",  0.5f, 12, 0.05f},
+    {"tq_gear",   "Torque limit by gear",   "gear",       "", "%",   10, 250, 1},
+    {"gear_rev",  "Rev limit by gear",      "gear",       "", "rpm", 1000, 20000, 50},
+    {"gear_spark", "Spark trim by gear",    "gear",       "", "deg", -15, 10, 0.5f},
+};
+const TriggerInfo kTriggers[kTrigCount] = {
+    {"60-2 (Bosch)", 60, 1, false},
+    {"36-1", 36, 1, false},
+    {"36-2-2-2 (fast sync)", 36, 3, false},
+    {"24-1", 24, 1, false},
+    {"12-1", 12, 1, false},
+    {"4 teeth + cam tooth (distributor style)", 4, 0, true},
 };
 const ProtInfo kProts[kProtCount] = {
     {"over_rev",   "Over-rev",               "rpm",   true,  0, 20000},
@@ -48,6 +60,9 @@ const char* kActNames[kActCount] = {"Warning only", "Ignition retard", "Boost re
                                     "Limp mode", "Engine shutdown"};
 } // namespace
 
+const TriggerInfo& triggerInfo(int pattern) { return kTriggers[clampv(pattern, 0, kTrigCount - 1)]; }
+const char* triggerNames() { return "60-2 (Bosch)\0" "36-1\0" "36-2-2-2 (fast sync)\0" "24-1\0" "12-1\0" "4 teeth + cam tooth (distributor style)\0"; }
+const char* injModeNames() { return "Sequential\0Semi-sequential\0Batch fire\0"; }
 const TableInfo& calTableInfo(int id) { return kTables[clampv(id, 0, kCalTableCount - 1)]; }
 const TableInfo& calCurveInfo(int id) { return kCurves[clampv(id, 0, kCalCurveCount - 1)]; }
 const ProtInfo& protInfo(int id) { return kProts[clampv(id, 0, kProtCount - 1)]; }
@@ -67,6 +82,8 @@ Curve1D& calCurve(Calibration& c, int id) {
     case kCalIatSpark: return c.iatSpark; case kCalEctSpark: return c.ectSpark; case kCalDeadTime: return c.deadTime;
     case kCalIdleTarget: return c.idleTarget; case kCalDbwMap: return c.dbwMap; case kCalBoostGear: return c.boostGear;
     case kCalTcSlip: return c.tcSlipTarget;
+    case kCalDwell: return c.dwell; case kCalTqGear: return c.tqLimitGear; case kCalGearRev: return c.gearRevLimit;
+    case kCalGearSpark: return c.gearSpark;
     default: return c.crankAfr;
     }
 }
@@ -323,6 +340,22 @@ void generateCalibration(EngineParams& p) {
     c.n2oLeanLambda = 0.95f;
     c.dfcoResumeAbove = 1000; c.dfcoAnticipate = 0.3f;
     c.dfcoDelay = 0.25f;   // a quick lift or a blip does not cut the fuel (and so needs no recovery)
+
+    // ---- ECU configuration (Phase 7): a 36-1 wheel + cam sensor, sequential injection (carburettor / rotary: no
+    //      injection timing to choose); dwell = 1.3 x the coil's charge time, longer as the battery sags
+    c.triggerPattern = isRotary(p) ? kTrig36_1 : (p.fuelSystem == FuelSystem::Carburetor ? kTrig4Cam : kTrig36_1);
+    c.camSensor = 1;
+    c.injMode = kInjSequential;
+    setCurve(c.dwell, {8, 10, 12, 13, 14, 15, 16}, [](double v, const EngineParams& q) {
+        return 1.3 * std::max(0.3, (double)q.comp.coilCharge_ms) * 14.0 / v; }, p);
+    c.dwellMaxDuty = 0.7f;
+    // ---- torque management / gear-based control: off, limits wide open
+    c.torqueMgmt = 0;
+    setCurve(c.tqLimitGear, {1, 2, 3, 4, 5, 6}, [](double, const EngineParams& q) { return isBoosted(q) ? 250.0 : 150.0; }, p);
+    c.tqMaxRetard = 12; c.tqMaxCut = 0.8f; c.tqThrottleRate = 0.02f;
+    c.gearControl = 0;
+    setCurve(c.gearRevLimit, {1, 2, 3, 4, 5, 6}, [](double, const EngineParams& q) { return (double)q.revLimit; }, p);
+    setCurve(c.gearSpark, {1, 2, 3, 4, 5, 6}, [](double, const EngineParams&) { return 0.0; }, p);
 }
 
 } // namespace es

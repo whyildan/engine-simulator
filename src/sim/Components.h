@@ -79,8 +79,10 @@ struct ComponentModel {
     // extra friction mean effective pressure (Pa) of rings, valve springs and pumps versus a
     // standard engine (the base friction model already contains standard parts)
     double extraFmep(const EngineParams& p, double rpm, double meanPistonSpeed, double displacementTotal) const;
-    // spark energy available (mJ) at this rpm
-    double sparkEnergy(const EngineParams& p, double rpm) const;
+    // spark energy available (mJ) at this rpm with this dwell (ms, as the ECU commands it) and battery voltage
+    double sparkEnergy(const EngineParams& p, double rpm, double dwellMs = 1e9, double volts = 14.0) const;
+    // time (s) between two sparks of one coil
+    static double coilInterval(const EngineParams& p, double rpm);
     // spark energy needed (mJ) to ignite at this cylinder pressure and mixture
     static double sparkNeeded(const EngineParams& p, double cylPressurePa, double lambda);
     // oil pressure (bar) at this rpm and oil temperature

@@ -16,7 +16,7 @@ const SensorDef kDefs[kSensorCount] = {
     {"O2 narrowband",         "V",     0,   1.1,   0.01,  120,  0.45, true,  "backup closed loop if the wideband fails"},
     {"Wideband lambda",       "lambda", 0.6, 1.6,  0.004,  50,     1, true,  "closed-loop fuel trim"},
     {"CKP crank position",    "rpm",   0, 20000,   0,       0,     0, false, "engine speed and angle: no signal = no spark / fuel"},
-    {"CMP cam position",      "sync",  0,     1,   0,       0,     1, false, "cycle phase: lost = batch injection"},
+    {"CMP cam position",      "sync",  0,     1,   0,       0,     1, false, "cycle phase: lost = semi-sequential injection"},
     {"Knock sensor",          "index", 0,     5,   0.05,   10,     0, true,  "monitoring (knock control: Phase 3)"},
     {"EGT exhaust temp",      "C",     0,  1250,   2,     400,     0, true,  "monitoring (protection: Phase 3)"},
     {"Oil pressure",          "bar",   0,    10,   0.03,   50,     3, true,  "oil warning lamp (protection: Phase 3)"},

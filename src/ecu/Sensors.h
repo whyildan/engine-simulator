@@ -17,6 +17,8 @@ struct DigitalInputs {
     bool rollingAls = false;    // rolling anti-lag button
     bool shift = false;         // gear-change signal (gearbox actuator / shift switch)
     double wheelKmh = 0;        // driven wheel speed
+    bool crankSync = true;      // trigger decoder: crank angle known (a gap / the cam tooth has passed)
+    bool camSync = true;        // cycle phase known (cam tooth seen): sequential injection possible
 };
 
 struct SensorTruth {

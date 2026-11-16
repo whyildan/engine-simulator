@@ -233,6 +233,10 @@ void Simulator::render(float* out, int frames) {
     t.compEff = (float)e.boost.compEff; t.compFlowCorr = (float)(e.boost.compFlowCorr * 1000.0); t.turbEff = (float)e.boost.turbEff;
     t.turbEr = (float)e.boost.turbEr; t.turbUc = (float)e.boost.turbUc; t.turbMfp = (float)e.boost.turbMfp;
     t.surgeMargin = (float)e.boost.surgeMargin; t.icCoreC = (float)(e.boost.icCoreT - 273.15);
+    t.injMode = e.ecu.cmd.injMode; t.crankSync = e.crankSynced(); t.camSync = e.camSynced();
+    t.dwellMs = (float)e.ecu.cmd.dwellMs; t.syncDeg = (float)e.lastSyncDeg;
+    t.tqLoad = (float)e.ecu.tqLoad; t.tqLimit = (float)e.ecu.tqLimit; t.tqReduction = (float)e.ecu.tqReduction;
+    t.tqThrCap = (float)e.ecu.tqThrCap; t.gearLimitRpm = (float)e.ecu.gearLimitRpm;
     t.mapComp = e.boost.mapCompressor(); t.mapTurb = e.boost.mapTurbine();
     t.baroKPa = (float)(ambientPressurePa(e.params()) * 1e-3); t.coolAirKmh = (float)(e.coolingAirMs() * 3.6);
     {

@@ -19,7 +19,11 @@ public:
     Engine(const EngineParams& p, double fs);
 
     void apply(const EngineParams& p);                  // live (non structural) changes
-    void setCrank(double omega, double thetaDeg) { omega_ = omega; theta_ = thetaDeg; }
+    // (a rebuild while running / a motoring rig: the ECU keeps its trigger sync)
+    void setCrank(double omega, double thetaDeg) {
+        omega_ = omega; theta_ = thetaDeg;
+        if (omega > 2.0) { syncArmed_ = crankSync_ = camSync_ = true; ckpRpm_ = omega * 60.0 / (2.0 * kPi); }
+    }
 
     // pedal 0..1, loadTorque = absorber (dyno) torque opposing rotation
     // signedLoad: the load can also drive the crank (clutch to a rolling car)
@@ -94,6 +98,10 @@ public:
     const EngineParams& params() const { return p_; }
     const float* phases() const { return phase_; }
     double vtecEngaged() const { return vtecBlend_; }   // 0 low cam .. 1 high cam
+    // trigger decoder (Phase 7)
+    bool crankSynced() const { return crankSync_; }
+    bool camSynced() const { return camSync_; }
+    double lastSyncDeg = 0;       // crank degrees from the first movement to crank sync (last start)
     double vtcAdvance() const { return vtcNow_; }       // intake cam advance now, crank deg
 
 private:
@@ -108,6 +116,11 @@ private:
     ValvetrainSpec vtIn_, vtEx_;
     ValveDynamics vdIn_, vdEx_, vdInHi_, vdExHi_;
     double baroPa_ = 101325.0;
+    // trigger decoder: crank degrees travelled since the crank started moving, needed for crank / cam sync
+    void triggerStep(double dTheta, double dt);
+    bool syncArmed_ = false, crankSync_ = false, camSync_ = false;
+    double syncTravel_ = 0, syncNeedCrank_ = 0, syncNeedCam_ = 0;
+    double toothAcc_ = 0, toothT_ = 0, ckpRpm_ = 0;
     ValveSpec vinHi_, vexHi_;     // VTEC high-cam profiles
     double vtecBlend_ = 0, vtcNow_ = 0;
     void updateHealth(double dt, double rpm, double mapPa);

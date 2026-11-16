@@ -58,7 +58,7 @@ void App::panelDashboard() {
     float maxRpm = std::ceil((p_.revLimit + 1000.0f) / 1000.0f) * 1000.0f;
 
     ImGui::BeginGroup();
-    Gauge("tach", tel_.rpm, 0, maxRpm, p_.revLimit, "RPM x1000", "%.0f rpm", gsize, (int)(maxRpm / 1000), 0.001f);
+    Gauge("tach", tel_.rpm, 0, maxRpm, redlineRpm(p_), "RPM x1000", "%.0f rpm", gsize, (int)(maxRpm / 1000), 0.001f);
     ImGui::EndGroup();
     ImGui::SameLine();
     ImGui::BeginGroup();
@@ -452,6 +452,13 @@ void App::panelIgnition() {
     SliderF("Vacuum advance", &p_.vacuumAdvance, 0, 20, "%.1f deg", "Extra advance at light load (high manifold vacuum).");
     ImGui::SeparatorText("Rev limiter");
     SliderF("Rev limit", &p_.revLimit, 1500, 16000, "%.0f rpm");
+    {
+        float rl = redlineRpm(p_);
+        if (SliderF("Redline", &rl, 1000, std::max(1500.0f, p_.revLimit), "%.0f rpm", "Start of the tach red zone and the shift light (default: 300 rpm below the limiter)."))
+            p_.redline = rl;
+    }
+    SliderF("Friction", &p_.frictionMult, 0.5f, 2.0f, "x%.2f", "Mechanical friction multiplier on top of the parts (rings, springs, pumps, oil\n"
+            "temperature): < 1 = a freshly built race engine, > 1 = worn / tight / heavy oil.");
     Combo("Limiter type", &p_.limiter, "Ignition cut (pops & bangs)\0Fuel cut (EFI only)\0");
     Help("Ignition cut keeps fuel flowing: unburned fuel ignites in the hot header = crackles.\nCarbureted engines always use ignition cut.");
     ImGui::PopItemWidth();
