@@ -13,6 +13,8 @@ static inline bool crossed(double prev, double cur, double target) {
 
 Engine::Engine(const EngineParams& p, double fs) : p_(p), fs_(fs) {
     ambT_ = 273.15 + p.ambientTemp_C;
+    baroPa_ = ambientPressurePa(p_);
+    kPatm = baroPa_;
     geom_.set(p_);
     cycle_ = cycleDeg(p_);
     const int n = clampv(p_.cylinders, 1, geom_.rotary ? 4 : kMaxCyl);
@@ -20,6 +22,7 @@ Engine::Engine(const EngineParams& p, double fs) : p_(p), fs_(fs) {
     computePhases(p_, phase_);
     updateValves();
     comp_.build(p_);
+    vtIn_ = valvetrainSpec(p_, true); vtEx_ = valvetrainSpec(p_, false);
     repairSeen_ = p_.comp.repairCount;
     cyls_.assign(geom_.rotary ? 3 * n : n, Cylinder());
     setupChambers();
@@ -107,10 +110,36 @@ void Engine::updateValves() {
 
 // lift with VTEC: once the rockers are locked onto the high cam it sets the lift (it encloses the low profile);
 // while the pin slides the two are blended
-double Engine::camLift(const ValveSpec& lo, const ValveSpec& hi, double phi, double fl) const {
-    double L = valveLift(lo, phi, fl);
-    if (vtecBlend_ > 0) { const double H = valveLift(hi, phi, fl); L += vtecBlend_ * (std::max(H, L) - L); }
+double Engine::camLift(const ValveSpec& lo, const ValveSpec& hi, double phi, bool intake) const {
+    double L = valveLift(lo, phi, intake ? vdIn_ : vdEx_);
+    if (vtecBlend_ > 0) {
+        // locked onto the high cam: the high rocker drives the valve (its dynamics); the low lobe only matters
+        // where its profile is above the high one (kinematically)
+        const double H = std::max(valveLift(hi, phi, intake ? vdInHi_ : vdExHi_), lo.liftAt(phi));
+        L += vtecBlend_ * (H - L);
+    }
     return L;
+}
+
+// valvetrain dynamics: the valve motion of each cam profile at the current speed, recomputed when the speed
+// (or the profile) has moved on. Below ~1500 rpm every valvetrain follows its cam.
+void Engine::updateValveDynamics(double rpm) {
+    if (geom_.rotary || rpm < 1500.0) {
+        vdIn_.clear(); vdEx_.clear(); vdInHi_.clear(); vdExHi_.clear();
+        floatIn = floatEx = 0;
+        return;
+    }
+    auto upd = [rpm](ValveDynamics& d, const ValvetrainSpec& s, const ValveSpec& v) {
+        if (!d.active() || std::fabs(rpm - d.rpmKey) > 0.015 * rpm || d.liftKey != v.lift || d.durKey != v.dur)
+            d.compute(s, v.lift, v.dur, rpm);
+    };
+    upd(vdIn_, vtIn_, vin_);
+    upd(vdEx_, vtEx_, vex_);
+    if (p_.vtec) { upd(vdInHi_, vtIn_, vinHi_); upd(vdExHi_, vtEx_, vexHi_); }
+    else { vdInHi_.clear(); vdExHi_.clear(); }
+    const double b = p_.vtec ? vtecBlend_ : 0.0;
+    floatIn = (1.0 - b) * vdIn_.severity(vin_.lift) + b * vdInHi_.severity(vinHi_.lift);
+    floatEx = (1.0 - b) * vdEx_.severity(vex_.lift) + b * vdExHi_.severity(vexHi_.lift);
 }
 
 void Engine::apply(const EngineParams& p) {
@@ -121,6 +150,9 @@ void Engine::apply(const EngineParams& p) {
     computePhases(p_, phase_);
     updateValves();
     comp_.build(p_);
+    vtIn_ = valvetrainSpec(p_, true); vtEx_ = valvetrainSpec(p_, false);
+    vdIn_.clear(); vdEx_.clear(); vdInHi_.clear(); vdExHi_.clear();
+    baroPa_ = ambientPressurePa(p_);
     if (p_.comp.repairCount != repairSeen_) { repairSeen_ = p_.comp.repairCount; damage = 0; failure = 0; }
     setupChambers();
     for (Cylinder& c : cyls_) {
@@ -149,10 +181,12 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     ti.fuelPowerW = fuelKgs * kLHV;
     ti.frictionPowerW = lastFricW_;
     ti.airflowKgs = std::max(0.0, intake.airFlow());
-    ti.speedMs = vehSpeed_;
+    ti.speedMs = coolingAirMs();
     ti.rpm = rpm;
     ti.ambientC = p_.ambientTemp_C;
     thermal.step(h, ti, p_);
+    boost.setCoolingAir(coolingAirMs());
+    updateValveDynamics(rpm);
     intake.setInletTemp(thermal.iatC + 273.15);
     intake.setColdWalls(thermal.coldFactor());
     // the actual injector flow / dead time follow the rail pressure and battery voltage
@@ -258,16 +292,12 @@ void Engine::apexLeakage(double dt) {
     }
 }
 
-// valve lift including valve float: past the float rpm the spring can't keep the follower on the
-// cam - the valve lofts, closes late and bounces off its seat
-double Engine::valveLift(const ValveSpec& v, double phi, double fl) const {
-    double L = v.liftAt(phi);
-    if (fl <= 0) return L;
-    const double lag = 30.0 * fl;
-    L = std::max(L, std::min(v.lift * 1.15, v.liftAt(phi - lag) * (1.0 + 0.15 * fl)));
-    double d = wrapSym(phi - (v.center + v.dur * 0.5) - lag, 720.0);
-    if (d > 0 && d < 25.0) L += fl * 0.12 * v.lift * std::sin(kPi * d / 25.0);
-    return L;
+// valve lift including the valvetrain dynamics: past the float rpm the spring can't keep the follower on the
+// cam - the valve lofts, closes late and bounces off its seat (see Valvetrain.h)
+double Engine::valveLift(const ValveSpec& v, double phi, const ValveDynamics& dyn) const {
+    const double L = v.liftAt(phi);
+    if (!dyn.active()) return L;
+    return std::max(0.0, L + dyn.dev(wrapSym(phi - v.center, 720.0)));
 }
 
 double Engine::burnDuration(const Cylinder& c, double rpm, double lambda) {
@@ -302,7 +332,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     // ---- valves
     double Ai, Ae;
     if (geom_.rotary) { Ai = pin_.areaAt(phi); Ae = pex_.areaAt(phi); }
-    else { Ai = vin_.area(camLift(vin_, vinHi_, phi, floatIn)); Ae = vex_.area(camLift(vex_, vexHi_, phi, floatEx)); }
+    else { Ai = vin_.area(camLift(vin_, vinHi_, phi, true)); Ae = vex_.area(camLift(vex_, vexHi_, phi, false)); }
     // no two ports flow the same (casting, seat, valve-to-guide spread)
     const double imp = effImperfection(p_);
     Ai *= 1.0 + 0.02 * imp * sprPort_[0][port];
@@ -517,6 +547,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
 }
 
 void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
+    kPatm = baroPa_;   // ambient pressure of this engine (per thread)
     const double rpm = this->rpm();
     const int n = (int)cyls_.size();
 
@@ -538,8 +569,6 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     pedal = std::max(pedal, cmd.throttleCrack);
 
     // ---- hardware components: valve float, spark energy, plug temperature, health
-    floatIn = comp_.floatSeverity(rpm, true);
-    floatEx = comp_.floatSeverity(rpm, false);
     sparkAvail = comp_.sparkEnergy(p_, rpm);
     sparkMargin = std::min(9.0, sparkMargin + dt * 0.5);      // recovers slowly, dips on weak sparks
     updateHealth(dt, rpm, mapPa);

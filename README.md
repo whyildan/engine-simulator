@@ -31,10 +31,11 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🌀 **The rotary "brap"** | A bridge-ported 13B idles lumpy because exhaust floods back through the port overlap and the diluted charges misfire — modelled, not faked. |
 | 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
-| 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; Roots, twin-screw and centrifugal superchargers. |
-| 📈 **Virtual dyno** | WOT sweeps and steady-state holds, before / after comparison with deltas, metric or imperial units, CSV export. |
+| 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; compressor / turbine maps (built in or loaded from CSV) with efficiency islands, surge and choke; intercooler heat soak; Roots, twin-screw and centrifugal superchargers. |
+| 📈 **Virtual dyno** | WOT sweeps, steady-state step tests and holds, SAE J1349 / DIN 70020 / ISO 1585 / SAE J607 correction, altitude, cell fan, BSFC / EGT / boost per point, before / after comparison, CSV export. |
+| 🔩 **Valvetrain dynamics** | Spring-mass valves on an elastic train: valve float, loft, late closing and seat bounce past the float speed, from the springs, moving mass and lifter type. |
 | 🏁 **Motorsport** | Launch control (2-step) with pops and bangs, 3-step / flat shift, shift cut, traction control, transbrake, rolling anti-lag, progressive wet / dry nitrous. |
-| 🗂️ **Data logging** | 50 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
+| 🗂️ **Data logging** | 55 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
 | 🎛️ **Custom dashboard** | Your own grid of gauges, digital readouts and bars with warning / alarm thresholds and a sensor status strip. |
 | 🚗 **Drive it** | Car or motorcycle as the load: manual / auto-clutch / automatic gearbox, clutch, tyre slip, 0–100 and 1/4-mile timers. |
 | 🧪 **Virtual sensors** | Lag, noise, 10-bit ADC, transport delay, faults (open / short / stuck / noisy) and the ECU's fallbacks. |
@@ -121,14 +122,14 @@ warning lamps) and a 12-section navigation in the style of ECU software:
 2. **ECU Setup** — loop rate, cold start, simulation pause / reset
 3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, base map
 4. **Ignition Tuning** — ignition map, corrections, knock control, per-cylinder trims
-5. **Boost Control** — turbo / supercharger hardware, ECU boost control, anti-lag, nitrous
+5. **Boost Control** — turbo / supercharger hardware (generic or compressor / turbine maps), ECU boost control, anti-lag, nitrous
 6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter, cam control (VTEC / VTC), launch / shift, traction control
 7. **Sensor Configuration** — true vs measured values, noise, lag, fault injection
 8. **Engine Protection** — protection rules, limp mode, shutdown
 9. **Live Dashboard** — gauges, readouts, scopes (pressure, P-V, boost, fuel map, sound) and a configurable
    *Custom* dashboard (layout saved to `dashboard.cfg` next to the exe)
 10. **Data Logging** — record channels, markers, graphs vs time / rpm, CSV export / import, session compare
-11. **Virtual Dyno** — sweeps, holds, before / after comparison, Nm / kW or lb-ft / hp, CSV export
+11. **Virtual Dyno** — sweeps, step tests, holds, correction standards, cell fan, before / after comparison, Nm / kW or lb-ft / hp, CSV export
 12. **Calibration Manager** — files, versions, compare, validation
 
 <details>
@@ -150,12 +151,14 @@ warning lamps) and a 12-section navigation in the style of ECU software:
   listener position (tailpipe / engine bay / cabin), *imperfection* (cylinder-to-cylinder and cycle-to-cycle
   spread).
 - **Components** — every part has a physical effect: piston / rod / crank material and mass (inertia, safe rpm),
-  ring tension (friction), lifters and springs (**valve float**), throttle type, injectors, coils and plugs
+  ring tension (friction), lifters and springs (**valve float** from a spring-mass valvetrain model, with a valve
+  motion plot at any rpm), throttle type, injectors, coils and plugs
   (misfire, pre-ignition, fouling), oil and water pumps. Optional **mechanical failure** when parts are
   overloaded, the engine knocks hard or valves hit pistons.
 - **Separate ECU + virtual sensors**: TPS, pedal, MAP, MAF, IAT, ECT, narrowband O2, wideband, CKP, CMP, knock,
   EGT, oil pressure / temperature, fuel pressure, speed, gear, battery — with lag, noise, ADC, faults and
   out-of-range fallbacks (MAP failure → alpha-N limp, CMP lost → batch fire, CKP lost → engine stops).
+- **Ambient**: temperature and altitude (barometric pressure from the standard atmosphere; the ECU reads it).
 - **Thermal, fuel supply, electrics**: coolant / oil / intake temperatures, thermostat, radiator and fan;
   rail pressure from pump + regulator; battery and alternator (injector dead time follows the voltage).
 - **ECU calibration**: VE maps (speed density and alpha-N), target lambda, ignition, cranking / warm-up /
@@ -219,7 +222,13 @@ rebuild the engine with a short sound crossfade, without stopping it.
   revert into the intake at idle; the diluted charges misfire, the next one fires on fresh charge and the
   unburned mixture pops in the exhaust — the "brap brap" of a ported rotary.
 - **Forced induction**: centrifugal compressor maps with surge and choke, turbine power from the exhaust energy,
-  shaft dynamics (natural lag), positive-displacement blowers with leakage, intercooler.
+  shaft dynamics (natural lag), positive-displacement blowers with leakage. With map tables the compressor runs
+  on corrected speed and flow (speed lines resampled along their length, interpolated between lines, fan laws
+  outside them) and the turbine on its reduced flow vs expansion ratio and efficiency vs blade speed ratio.
+  The intercooler is a heat exchanger against a core that soaks heat and sheds it to the air blown through it.
+- **Valvetrain**: one valve event integrated per rpm: mass on its spring, driven through an elastic train
+  (stiffness by lifter type), landing on an elastic seat. The deviation from the cam lift (loft, late closing,
+  seat bounce) goes straight into the valve flow area.
 - **ECU**: a separate controller at its own loop rate (100–5000 Hz) that only reads the sensor layer;
   injection by crank angle, X-tau wall-film compensation, asynchronous tip-in fuel.
 - **Vehicle**: friction clutch with stick / slip, gearbox, wheel inertia, Pacejka-like tyre slip curve,
@@ -273,6 +282,14 @@ build/Release/motorsport_test.exe   # 2-step, flat shift, shift cut, traction co
 ```
 
 ```bash
+build/Release/phase6_test.exe       # turbo maps + CSV, valve float, altitude, intercooler heat soak, dyno step test / correction
+```
+
+```bash
+build/Release/valve_probe.exe 4     # valvetrain dynamics of a preset: float speed, loft / bounce over rpm
+```
+
+```bash
 build/Release/basemap_warm.exe 14   # measure every preset's base map in parallel (fills the cache)
 ```
 
@@ -309,7 +326,7 @@ python tools/analyze_wav.py brap.wav 0 8 900       # level + spectral peaks (eng
 - [x] Phase 3 — closed-loop trims, knock control, idle / DBW, ECU boost control, engine protection
 - [x] Phase 4 — configurable dashboard, data logging with CSV export, dyno export
 - [x] Phase 5 — launch control, 2-step / 3-step, flat shift, traction control, transbrake, nitrous
-- [ ] Phase 6 — loadable compressor / turbine maps, refined thermal and dyno models
+- [x] Phase 6 — compressor / turbine maps, valvetrain dynamics, altitude, intercooler heat soak, dyno step test and correction
 
 ## Acknowledgements
 

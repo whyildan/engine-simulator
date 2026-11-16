@@ -40,6 +40,11 @@ struct Telemetry {
     // forced induction
     float boostBar = 0, shaftRpm = 0, speedFrac = 0, pr = 1, compFlow = 0, wastegate = 0, chargeT = 25, fiPowerKw = 0;
     bool surging = false, bovOpen = false, antiLag = false;
+    // Phase 6: map operating point, intercooler core, ambient, valvetrain dynamics
+    float compEff = 0, compFlowCorr = 0, turbEff = 0, turbEr = 1, turbUc = 0, turbMfp = 0, surgeMargin = 1, icCoreC = 25;
+    bool mapComp = false, mapTurb = false;
+    float baroKPa = 101.3f, coolAirKmh = 0;
+    float loftIn = 0, loftEx = 0, bounceIn = 0, bounceEx = 0, lateCloseIn = 0, lateCloseEx = 0;   // mm, deg
     // vehicle
     bool vehicle = false;
     int gear = 0;

@@ -30,6 +30,7 @@ int main(int argc, char** argv) {
     if (env("PRIM", v)) { for (int i = 0; i < kMaxCyl; ++i) p.primaryLen_mm[i] = v; changed = true; }
     if (env("THROTTLE", v)) { p.throttleBore_mm = v; changed = true; }
     if (env("MECH", v)) { p.mechAdvance = v; changed = true; }
+    if (env("SPRING", v)) { p.comp.springOpen_N *= v; p.comp.springSeat_N *= v; }   // springs only: same base map
     if (changed) generateCalibration(p);
     if (env("VTC_SCALE", v)) for (auto& row : p.cal.vtcMap.v) for (float& x : row) x *= v;
     Calibration c = p.cal;
@@ -58,7 +59,8 @@ int main(int argc, char** argv) {
         if (kw > pkP) { pkP = kw; pkPr = r; }
         std::printf("  %5.0f  %7.1f   %6.1f (%5.1f)  %5.2f  %5.1f  %4.2f  %4.1f  %5.1f  %5.1f  %4.2f ", r, tq, kw, kw * 1.3596, afr, adv, vt, vc, map, ve * 100, kn);
         for (int k = 0; k < kProtCount; ++k) if (last.protState[k]) std::printf(" %s=%d", protInfo(k).key, last.protState[k]);
-        std::printf("%s\n", last.limp ? " LIMP" : "");
+        std::printf("%s  [rpm %.0f float %.2f loft %.2f mm]\n", last.limp ? " LIMP" : "", last.rpm, std::max(last.floatIn, last.floatEx),
+                    std::max(last.loftIn, last.loftEx));
         // a short cool-down at light load between the points (a real dyno pull does not hold WOT for a minute)
         p.dynoHoldRpm = 2500; p.throttle = 0.1f; sim.setParams(p); run(sim, 1.5);
     }

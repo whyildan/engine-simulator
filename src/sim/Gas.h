@@ -8,7 +8,9 @@ constexpr double kR = 287.0;          // J/(kg K)
 constexpr double kGamma = 1.35;       // average for air / combustion products
 constexpr double kCv = kR / (kGamma - 1.0);
 constexpr double kCp = kCv + kR;
-constexpr double kPatm = 101325.0;
+// ambient pressure (Pa). Set by Engine from EngineParams::baro_kPa on the thread that steps it (the base map
+// rig steps its own engine on another thread), so it is per thread.
+inline thread_local double kPatm = 101325.0;
 constexpr double kStoich = 14.7;      // gasoline AFR
 constexpr double kLHV = 44.0e6;       // J/kg gasoline
 

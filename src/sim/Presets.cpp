@@ -46,6 +46,7 @@ static EngineParams base() {
     EngineParams p;
     std::memset(&p, 0, sizeof(p));
     std::snprintf(p.name, sizeof(p.name), "Custom");
+    p.baro_kPa = 101.325f; p.coolingFan_kmh = 50; p.stepRpm = 500; p.stepHold_s = 1.5f;
     p.cylinders = 4; p.layout = Layout::Inline; p.bankAngle = 90;
     p.bore_mm = 86; p.stroke_mm = 86; p.rod_mm = 145; p.compression = 10.5f;
     p.flywheel = 0.12f;

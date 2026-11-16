@@ -2,10 +2,12 @@
 #include "sim/Components.h"
 #include "ecu/SensorDefs.h"
 #include "ecu/Calibration.h"
+#include "sim/TurboMap.h"
 #include <algorithm>
 // All user-tweakable parameters. Plain-old-data so it can be copied between the
 // UI thread and the simulation thread cheaply and compared with memcmp.
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 
 namespace es {
@@ -20,7 +22,7 @@ enum class Crossover : int32_t { TrueDual = 0, HPipe = 1, XPipe = 2, MergeY = 3 
 enum class Muffler : int32_t { None = 0, StraightThrough = 1, Chambered = 2, Turbo = 3 };
 enum class Limiter : int32_t { IgnitionCut = 0, FuelCut = 1 };
 enum class ListenerPos : int32_t { Tailpipe = 0, EngineBay = 1, Cabin = 2 };
-enum class DynoMode : int32_t { Off = 0, Hold = 1, Sweep = 2 };
+enum class DynoMode : int32_t { Off = 0, Hold = 1, Sweep = 2, Step = 3 };
 enum class Environment : int32_t { OpenRoad = 0, Garage = 1, DynoCell = 2, Tunnel = 3 };
 enum class EngineType : int32_t { Piston = 0, Rotary = 1 };
 enum class Induction : int32_t { Natural = 0, Turbo = 1, Supercharger = 2 };
@@ -111,6 +113,7 @@ struct EngineParams {
     int32_t ignition;         // key on
     int32_t starter;          // cranking
     float ambientTemp_C;
+    float baro_kPa;           // ambient (barometric) pressure, from the altitude; 0 = sea level
 
     // ---------------------------------------------------------- audio
     ListenerPos listener;
@@ -121,7 +124,10 @@ struct EngineParams {
     DynoMode dynoMode;
     float dynoHoldRpm;
     float sweepStartRpm, sweepEndRpm, sweepRate; // rpm/s
-    int32_t sweepRequest;     // incremented by UI to start a sweep
+    int32_t sweepRequest;     // incremented by UI to start a sweep (sweep or step test)
+    float stepRpm;            // step test: rpm between the held points
+    float stepHold_s;         // step test: averaging time at each point (after it has settled)
+    float coolingFan_kmh;     // dyno cell fan: air speed blown at the radiator / intercooler when not driving
 
     // ---------------------------------------------------------- rotary (Wankel)
     // In rotary mode `cylinders` is the number of rotors (1..4). Every rotor has 3 chambers
@@ -155,6 +161,7 @@ struct EngineParams {
     float scDisplacement_L;   // positive displacement blower: litres per blower revolution
     float scRatio;            // blower : crank drive ratio (centrifugal: impeller : crank)
     int32_t scBypass;         // PD blower bypass valve at part throttle
+    TurboMaps turbo;          // compressor / turbine maps (Phase 6); used when turbo.useMaps is set
 
     // ---------------------------------------------------------- vehicle / drivetrain
     int32_t vehicle;          // driving mode: the car is the load (dyno disabled)
@@ -230,6 +237,11 @@ inline double starterReleaseRpm(const EngineParams& p, double coolantC = 88.0) {
 }
 
 inline bool isBoosted(const EngineParams& p) { return p.induction != Induction::Natural; }
+// ambient pressure in Pa (sea level when unset)
+inline double ambientPressurePa(const EngineParams& p) { return p.baro_kPa > 30.0f ? p.baro_kPa * 1000.0 : 101325.0; }
+// standard atmosphere: pressure (kPa) at an altitude (m) and back
+inline double baroAtAltitude(double m) { return 101.325 * std::pow(std::max(0.0, 1.0 - 2.25577e-5 * m), 5.25588); }
+inline double altitudeOfBaro(double kPa) { return (1.0 - std::pow(std::max(1.0, kPa) / 101.325, 1.0 / 5.25588)) / 2.25577e-5; }
 
 // Nitrous oxide is modelled as extra intake charge: 1 kg of N2O carries the oxygen of 1.57 kg of air and
 // releases its decomposition heat on top, so it is fed to the ports as this much air-equivalent mass (and

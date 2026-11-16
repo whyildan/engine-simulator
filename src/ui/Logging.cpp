@@ -96,15 +96,20 @@ void App::dynoExportCsv() {
     if (!fileDialog(true, "dyno.csv", path, L"CSV (*.csv)\0*.csv\0All files\0*.*\0", L"csv", L"Export dyno runs")) return;
     FILE* f = nullptr;
     if (_wfopen_s(&f, std::filesystem::u8path(path).wstring().c_str(), L"wb") != 0 || !f) return;   // UTF-8 path from the dialog
-    std::fprintf(f, "run,label,engine,calibration,calibration_revision,rpm,torque_Nm,torque_lbft,power_kW,power_hp,afr,ve\n");
+    const DynoCorrection corr = (DynoCorrection)dynoCorr_;
+    std::fprintf(f, "# correction: %s\n", dynoCorrectionName(corr));
+    std::fprintf(f, "run,label,engine,calibration,calibration_revision,ambient_C,baro_kPa,correction_factor,rpm,torque_Nm,torque_lbft,"
+                    "power_kW,power_hp,afr,ve,boost_bar,egt_C,advance_deg,iat_C,bsfc_g_kWh\n");
     for (size_t i = 0; i < runs_.size(); ++i) {
         const DynoRun& r = runs_[i];
         if (!r.visible) continue;
         auto cell = [](std::string s) { for (char& c : s) if (c == ',' || c == '"' || c == '\n' || c == '\r') c = ';'; return s; };
         const std::string label = cell(r.label), engine = cell(r.engine), cal = cell(r.calName);
+        const float cf = (float)dynoCorrectionFactor(corr, r.ambientC, r.baroKPa);
         for (const DynoPoint& d : r.pts)
-            std::fprintf(f, "%zu,%s,%s,%s,%d,%.0f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f\n", i + 1, label.c_str(), engine.c_str(), cal.c_str(),
-                         r.calRev, d.rpm, d.torque, d.torque * 0.737562f, d.powerKw, d.powerKw * 1.341022f, d.afr, d.ve);
+            std::fprintf(f, "%zu,%s,%s,%s,%d,%.1f,%.2f,%.4f,%.0f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f,%.0f,%.1f,%.1f,%.0f\n", i + 1, label.c_str(),
+                         engine.c_str(), cal.c_str(), r.calRev, r.ambientC, r.baroKPa, cf, d.rpm, d.torque * cf, d.torque * cf * 0.737562f,
+                         d.powerKw * cf, d.powerKw * cf * 1.341022f, d.afr, d.ve, d.boostBar, d.egtC, d.advance, d.iatC, d.bsfc);
     }
     std::fclose(f);
 }

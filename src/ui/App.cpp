@@ -38,6 +38,9 @@ void App::loadPreset(int i) {
     p_.oversample = keep.oversample;
     p_.dynoMode = DynoMode::Off;
     p_.sweepRequest = keep.sweepRequest;
+    // ambient air, dyno cell and test settings belong to the "test bench", not the engine
+    p_.baro_kPa = keep.baro_kPa; p_.coolingFan_kmh = keep.coolingFan_kmh;
+    p_.stepRpm = keep.stepRpm; p_.stepHold_s = keep.stepHold_s;
     // stay in the car: keep driving mode and the transmission choice
     p_.vehicle = keep.vehicle;
     p_.transMode = keep.transMode;
@@ -125,7 +128,7 @@ void App::keyboard(float dt) {
     bool sDown = ImGui::IsKeyDown(ImGuiKey_S);
     if (sDown) { p_.starter = 1; starterKey = true; }
     else if (starterKey) { p_.starter = 0; starterKey = false; }
-    if (ImGui::IsKeyPressed(ImGuiKey_D, false)) { p_.dynoMode = DynoMode::Sweep; p_.sweepRequest++; }
+    if (ImGui::IsKeyPressed(ImGuiKey_D, false)) { if (p_.dynoMode != DynoMode::Step) p_.dynoMode = DynoMode::Sweep; p_.sweepRequest++; }
     if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { if (logRec_ >= 0) logStop(); else logStart(); }
     if (ImGui::IsKeyPressed(ImGuiKey_M, false)) logMarker("marker");
     if (ImGui::IsKeyPressed(ImGuiKey_L, false)) { p_.listener = (ListenerPos)(((int)p_.listener + 1) % 3); }
@@ -171,6 +174,9 @@ void App::pullDyno() {
         r.calName = calMeta_.name.empty() ? "(unsaved)" : calMeta_.name;
         r.calRev = calMeta_.revision;
         r.label += " | cal " + r.calName + " r" + std::to_string(r.calRev);
+        if (p_.dynoMode == DynoMode::Step) r.label += " | step test";
+        r.ambientC = p_.ambientTemp_C; r.baroKPa = (float)(ambientPressurePa(p_) * 1e-3);
+        if (r.baroKPa < 100.0f) { char b3[48]; std::snprintf(b3, sizeof(b3), " | %.0f m", altitudeOfBaro(r.baroKPa)); r.label += b3; }
         const float* c = palette[runs_.size() % 8];
         r.color[0] = c[0]; r.color[1] = c[1]; r.color[2] = c[2]; r.color[3] = 1;
         runs_.push_back(r);

@@ -5,6 +5,7 @@
 #include "sim/Boost.h"
 #include "sim/Components.h"
 #include "sim/Thermal.h"
+#include "sim/Valvetrain.h"
 #include "ecu/Sensors.h"
 #include "ecu/Ecu.h"
 #include "audio/Filters.h"
@@ -79,6 +80,10 @@ public:
     const ComponentModel& components() const { return comp_; }
     double stress = 0;            // peak inertia load / limit of the weakest part
     double floatIn = 0, floatEx = 0;  // valve float severity 0..1
+    // valvetrain dynamics of the cam profiles now in use (intake / exhaust, base cam; high cam with VTEC)
+    const ValveDynamics& valveDyn(bool intake, bool hi = false) const { return intake ? (hi ? vdInHi_ : vdIn_) : (hi ? vdExHi_ : vdEx_); }
+    // air blown through the radiator / intercooler (vehicle speed, or the dyno cell fan)
+    double coolingAirMs() const { return p_.vehicle ? vehSpeed_ : std::max(vehSpeed_, std::max(0.0, (double)p_.coolingFan_kmh) / 3.6); }
     double sparkMargin = 9;       // lowest available / needed spark energy over the last moments
     double sparkAvail = 0;        // mJ available at the current rpm
     double oilBar = 0;            // oil pressure
@@ -97,8 +102,12 @@ private:
     void updateValves();
     void setupChambers();
     void apexLeakage(double dt);
-    double valveLift(const ValveSpec& v, double phi, double fl) const;
-    double camLift(const ValveSpec& lo, const ValveSpec& hi, double phi, double fl) const;
+    double valveLift(const ValveSpec& v, double phi, const ValveDynamics& dyn) const;
+    double camLift(const ValveSpec& lo, const ValveSpec& hi, double phi, bool intake) const;
+    void updateValveDynamics(double rpm);
+    ValvetrainSpec vtIn_, vtEx_;
+    ValveDynamics vdIn_, vdEx_, vdInHi_, vdExHi_;
+    double baroPa_ = 101325.0;
     ValveSpec vinHi_, vexHi_;     // VTEC high-cam profiles
     double vtecBlend_ = 0, vtcNow_ = 0;
     void updateHealth(double dt, double rpm, double mapPa);

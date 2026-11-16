@@ -230,6 +230,19 @@ void Simulator::render(float* out, int frames) {
     t.cylinders = e.cylinders();
     t.boostBar = (float)e.boost.boostBar; t.shaftRpm = (float)e.boost.shaftRpm; t.speedFrac = (float)e.boost.speedFrac;
     t.pr = (float)e.boost.pr; t.compFlow = (float)(e.boost.compFlow * 1000.0); t.wastegate = (float)e.boost.wastegate;
+    t.compEff = (float)e.boost.compEff; t.compFlowCorr = (float)(e.boost.compFlowCorr * 1000.0); t.turbEff = (float)e.boost.turbEff;
+    t.turbEr = (float)e.boost.turbEr; t.turbUc = (float)e.boost.turbUc; t.turbMfp = (float)e.boost.turbMfp;
+    t.surgeMargin = (float)e.boost.surgeMargin; t.icCoreC = (float)(e.boost.icCoreT - 273.15);
+    t.mapComp = e.boost.mapCompressor(); t.mapTurb = e.boost.mapTurbine();
+    t.baroKPa = (float)(ambientPressurePa(e.params()) * 1e-3); t.coolAirKmh = (float)(e.coolingAirMs() * 3.6);
+    {
+        const double b = e.params().vtec ? e.vtecEngaged() : 0.0;
+        auto mix = [b](double lo, double hi) { return (float)((1.0 - b) * lo + b * hi); };
+        const ValveDynamics &il = e.valveDyn(true), &ih = e.valveDyn(true, true), &xl = e.valveDyn(false), &xh = e.valveDyn(false, true);
+        t.loftIn = mix(il.loft, ih.loft) * 1000.0f; t.loftEx = mix(xl.loft, xh.loft) * 1000.0f;
+        t.bounceIn = mix(il.bounce, ih.bounce) * 1000.0f; t.bounceEx = mix(xl.bounce, xh.bounce) * 1000.0f;
+        t.lateCloseIn = mix(il.lateClose, ih.lateClose); t.lateCloseEx = mix(xl.lateClose, xh.lateClose);
+    }
     t.chargeT = (float)(e.boost.chargeT - 273.15); t.fiPowerKw = (float)e.boost.powerKw;
     if (t.ltftSeq != e.ecu.ltftSeq || t.calLtft.nx == 0) { t.calLtft = e.ecu.cal().ltft; t.ltftSeq = e.ecu.ltftSeq; }
     t.ecuStft = (float)e.ecu.stft; t.ecuLtft = (float)e.ecu.ltftNow;

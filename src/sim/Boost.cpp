@@ -1,4 +1,5 @@
 #include "sim/Boost.h"
+#include <cstring>
 
 namespace es {
 
@@ -7,11 +8,28 @@ static constexpr double kTurboMaxRpm = 190000; // turbo wheel speed at "100 %"
 static constexpr double kImpellerMaxRpm = 60000;
 static constexpr double kCpAir = 1005, kCpExh = 1150;
 
+void ForcedInduction::refreshMaps() {
+    const bool turbo = p_.induction == Induction::Turbo;
+    const bool centrifugal = turbo || p_.scType == Supercharger::Centrifugal;
+    const bool use = p_.turbo.useMaps != 0;
+    if (use != (useSrc_ == 1) || std::memcmp(&compSrc_, &p_.turbo.comp, sizeof(compSrc_)) != 0 ||
+        std::memcmp(&turbSrc_, &p_.turbo.turb, sizeof(turbSrc_)) != 0) {
+        compSrc_ = p_.turbo.comp; turbSrc_ = p_.turbo.turb; useSrc_ = use ? 1 : 0;
+        if (use) { cm_.build(compSrc_); tm_.build(turbSrc_); }
+    }
+    mapC_ = use && centrifugal && cm_.valid();
+    mapT_ = use && turbo && tm_.valid();
+    nMaxC_ = mapC_ ? cm_.maxSpeed() : (turbo ? kTurboMaxRpm : kImpellerMaxRpm);
+    sizeKgs_ = mapC_ ? cm_.maxFlow() : std::max(1e-4, p_.compFlow_gs * 1e-3);
+}
+
 void ForcedInduction::init(const EngineParams& p, double fs) {
     p_ = p;
     fs_ = fs;
     ambT_ = 273.15 + p.ambientTemp_C;
     chargeT = ambT_;
+    icCoreT = ambT_;
+    refreshMaps();
     omegaT_ = 0;
     whooshBp_.bandpass(2200, 1.1, fs);
     bovHiss_.bandpass(4800, 0.9, fs);
@@ -65,21 +83,37 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     if (centrifugal) {
         double rpm = p_.induction == Induction::Turbo ? omegaT_ * 60.0 / (2 * kPi)
                                                       : engineRpm * std::max(1.0f, p_.scRatio);
-        double nMax = p_.induction == Induction::Turbo ? kTurboMaxRpm : kImpellerMaxRpm;
-        speedFrac = clampv(rpm / nMax, 0.0, 1.3);
+        speedFrac = clampv(rpm / nMaxC_, 0.0, 1.3);
         shaftRpm = rpm;
-        m = compressor(speedFrac, pr, eta);
+        double chokeNow;
+        if (mapC_) {
+            // table map: corrected speed and flow (inlet at ambient pressure and temperature)
+            const double sq = std::sqrt(kMapTref / ambT_);
+            const double corrM = pIn / kMapPref * sq;
+            const CompPoint cp = cm_.eval(rpm * sq, pr);
+            chokeNow = cp.chokeFlow * corrM;
+            eta = cp.eff;
+            if (speedFrac < 0.02) { m = 0; eta = 0.4; }
+            else if (cp.surge) m = speedFrac < 0.15 ? 0.0 : -0.35 * cp.surgeFlow * corrM * std::sqrt(std::min(1.0, (pr - cp.surgePr) / cp.surgePr));
+            else m = cp.flow * corrM;
+            surgeMargin = cp.surgePr > 1.0 ? 1.0 - (pr - 1.0) / (cp.surgePr - 1.0) : 1.0;
+        } else {
+            m = compressor(speedFrac, pr, eta);
+            chokeNow = chokeFlow(speedFrac);
+            const double pr0 = prAtZeroFlow(speedFrac);
+            surgeMargin = pr0 > 1.0 ? 1.0 - (pr - 1.0) / (pr0 - 1.0) : 1.0;
+        }
         // surge: the throttle is shut, so the compressor can only push a trickle against high
         // pressure (left of the surge line). The flow then stalls and reverses in bursts.
         bool leftOfSurgeLine = speedFrac > 0.15 && pr > 1.2 && throttle < 0.08 &&
-                               std::max(0.0, m) < 0.25 * chokeFlow(speedFrac) + 1e-4;
+                               std::max(0.0, m) < 0.25 * chokeNow + 1e-4;
         surging = leftOfSurgeLine || (m < 0 && pr > 1.05);
         if (surging) {
             double rate = 7.0 + 26.0 * speedFrac;                 // stall cycles per second
             flutterPh_ += dt * rate;
             if (flutterPh_ >= 1) flutterPh_ -= 1;
             // short reverse-flow burst each cycle, then the wheel re-pressurises
-            double back = 0.45 * chokeFlow(speedFrac) * clampv((pr - 1.0) / 0.8, 0.0, 1.5);
+            double back = 0.45 * chokeNow * clampv((pr - 1.0) / 0.8, 0.0, 1.5);
             m = flutterPh_ < 0.28 ? -back : std::max(m, 0.0) * 0.4;
         }
     } else {
@@ -97,13 +131,26 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     double tau = std::pow(std::max(pr, 0.5), 0.2857) - 1.0;
     double T2 = ambT_ * (1.0 + std::max(0.0, tau) / std::max(0.3, eta));
     double powerC = std::max(0.0, m) * kCpAir * ambT_ * std::max(0.0, tau) / std::max(0.3, eta);
-    double Tcharge = p_.intercooler ? T2 - clampv((double)p_.icEfficiency, 0.0, 1.0) * (T2 - ambT_) : T2;
+    // intercooler: effectiveness against its core temperature; the core takes the heat and gives it to the air
+    // blown through it (vehicle speed / dyno fan) - parked or on a dyno without a fan it heat-soaks
+    double Tcharge = T2;
+    if (p_.intercooler) {
+        const double eps = clampv((double)p_.icEfficiency, 0.0, 1.0);
+        Tcharge = T2 - eps * (T2 - icCoreT);
+        const double size = std::max(0.4, sizeKgs_ / 0.25);
+        const double cCore = 5400.0 * size;                                   // ~6 kg of aluminium
+        const double ua = (60.0 + 175.0 * std::pow(std::max(0.0, coolAir_), 0.8)) * size;
+        const double q = std::max(0.0, m) * kCpAir * (T2 - Tcharge);
+        icCoreT += dt * (q - ua * (icCoreT - ambT_)) / cCore;
+    } else icCoreT = ambT_;
+    compEff = eta;
+    compFlowCorr = m / (pIn / kMapPref * std::sqrt(kMapTref / ambT_));
 
     // passive path through the (stopped or slow) compressor wheel: a plain orifice, smooth in
     // both directions - this is how the engine breathes before the turbo spools
     if (centrifugal) {
         double slow = 1.0 - clampv(speedFrac, 0.0, 1.0);
-        double aPass = 1.2 * std::max(0.05, p_.compFlow_gs * 1e-3) / 236.0 * slow * slow;
+        double aPass = 1.2 * std::max(0.05, sizeKgs_) / 236.0 * slow * slow;
         double fp = limitedFlow(aPass, pIn, ambT_, 1e3, charge.p(), charge.T, charge.V, dt, 0.4);
         // a spinning wheel blocks reverse flow (that only happens as surge); a stopped one doesn't
         if (fp < 0 && speedFrac > 0.08) fp = 0;
@@ -171,6 +218,14 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         double wgTarget = clampv((actBar - p_.wastegateBar + 0.08) / 0.3 + wgTrim_ + 0.12 * boostRate_ * (ecuWg ? 0.0 : 1.0), 0.0, 1.0);
         wgPos_ += (wgTarget - wgPos_) * std::min(1.0, dt / 0.12);
         wastegate = wgPos_;
+        const double erNow = std::max(1.0, tin.p() / std::max(1.0, tout.p()));
+        if (mapT_) {
+            // table map: the reduced flow at this expansion ratio as an equivalent nozzle area
+            const double er = std::max(erNow, 1.02);
+            const double mMap = tm_.mfp(er) * tin.p() * 1e-3 / std::sqrt(std::max(300.0, tin.T));
+            const double unit = orificeFlow(1.0, tin.p(), tin.T, tin.p() / er);
+            if (unit > 1e-12) aT = std::max(1e-6, mMap / unit);
+        }
         double aWg = wgPos_ * aT * 1.3;
         double flow = limitedFlow(aT + aWg, tin.p(), tin.T, tin.V, tout.p(), tout.T, tout.V, dt, 0.35);
         double qf = flow * dt;
@@ -183,13 +238,23 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         double mt = std::max(0.0, flow) * aT / (aT + aWg);
         double prt = std::max(1.0, tin.p() / std::max(1.0, tout.p()));
         double Tin = std::max(600.0, egtK);
-        double powerT = mt * kCpExh * Tin * 0.68 * (1.0 - std::pow(prt, -0.248));
+        const double dh = kCpExh * Tin * (1.0 - std::pow(prt, -0.248));
+        double etaT = 0.68;
+        if (mapT_) {
+            const double U = omegaT_ * tm_.wheelDia() * 0.5e-3;
+            const double Cs = std::sqrt(2.0 * std::max(0.0, dh));
+            turbUc = Cs > 1.0 ? U / Cs : 0.0;
+            etaT = Cs > 1.0 ? tm_.eff(turbUc) : 0.3;
+        } else turbUc = 0;
+        turbEff = etaT; turbEr = erNow;
+        turbMfp = mt * std::sqrt(std::max(300.0, tin.T)) / std::max(1.0, tin.p() * 1e-3);
+        double powerT = mt * dh * etaT;
         // ---- shaft
         double J = std::max(0.02f, p_.turboInertia) * 1e-4;
         double w = std::max(omegaT_, 400.0);
         double fric = 1.5e-6 * omegaT_ + 2e-4;
         omegaT_ += ((powerT - powerC) / w - fric) / J * dt;
-        omegaT_ = clampv(omegaT_, 0.0, kTurboMaxRpm * 1.25 * 2 * kPi / 60.0);
+        omegaT_ = clampv(omegaT_, 0.0, nMaxC_ * 1.25 * 2 * kPi / 60.0);
         powerKw = powerC / 1000.0;
     } else if (p_.induction == Induction::Supercharger) {
         double drag = 150.0 + 4e-3 * shaftRpm * shaftRpm * 1e-3;   // bearing / gear losses (W)
@@ -202,14 +267,14 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     // ---- sound (Pa @ 1 m). Synthesised from the physical state: shaft speed, flow, pressure
     // ratio, vent flow and surge cycles - so it only appears when the hardware is working.
     double snd = 0;
-    const double flowFrac = clampv(std::max(0.0, m) / std::max(1e-4, p_.compFlow_gs * 1e-3), 0.0, 1.2);
+    const double flowFrac = clampv(std::max(0.0, m) / std::max(1e-4, sizeKgs_), 0.0, 1.2);
     const double prLoad = clampv((pr - 1.0) / 1.2, 0.0, 1.5);
     const double noise = rng_.bipolar();
     if (centrifugal) {
         const bool turbo = p_.induction == Induction::Turbo;
         // spool whistle: pitch follows wheel speed (190k rpm -> ~5 kHz), loudness follows how
         // hard the compressor works (flow x pressure ratio)
-        double f1 = shaftRpm / 60.0 * (turbo ? 1.6 : 4.0);
+        double f1 = shaftRpm / 60.0 * (turbo ? 1.6 : 4.0) * (turbo ? kTurboMaxRpm : kImpellerMaxRpm) / nMaxC_;
         double wob = 1.0 + 0.004 * wobble_.lp(noise * 40.0);
         phase_ += 2 * kPi * std::min(f1 * wob, 12000.0) * dt;
         phase2_ += 2 * kPi * std::min(f1 * 1.503 * wob, 16000.0) * dt;

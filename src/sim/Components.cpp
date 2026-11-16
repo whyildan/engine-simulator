@@ -209,7 +209,9 @@ void applyComponentDefaults(EngineParams& p) {
         need = std::max(mi * accelPerRpm2(p.intakeLift_mm, p.intakeDuration), me * accelPerRpm2(p.exhaustLift_mm, p.exhaustDuration)) *
                target * target;
     }
-    c.springOpen_N = (float)std::max(250.0, need * 1.05);
+    // margin over the rigid-train estimate: a long pushrod train is elastic and floats earlier (Valvetrain.h)
+    static const double kSpringMargin[] = {1.30, 1.25, 1.05, 1.10};
+    c.springOpen_N = (float)std::max(250.0, need * kSpringMargin[clampv((int)c.lifter, 0, 3)]);
     c.springSeat_N = c.springOpen_N * 0.45f;
 }
 

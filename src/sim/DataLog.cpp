@@ -48,7 +48,7 @@ const LogChannel kChannels[] = {
     {"limiter",      "Rev limiter",         "on",    "Ignition", [](const Telemetry& t) { return t.limiter ? 1.0f : 0.0f; }},
     {"iac",          "Idle valve",          "%",     "Control", [](const Telemetry& t) { return t.iac; }},
     {"idle_target",  "Idle target",         "rpm",   "Control", [](const Telemetry& t) { return t.idleTarget; }},
-    {"boost",        "Boost",               "bar",   "Boost",   [](const Telemetry& t) { return t.mapKPa / 101.325f - 1.0f; }},
+    {"boost",        "Boost",               "bar",   "Boost",   [](const Telemetry& t) { return (t.mapKPa - t.baroKPa) / 100.0f; }},
     {"boost_target", "Boost target",        "bar",   "Boost",   [](const Telemetry& t) { return t.boostTargetBar; }},
     {"wg_duty",      "Wastegate duty",      "%",     "Boost",   [](const Telemetry& t) { return std::max(0.0f, t.wgDuty) * 100.0f; }},
     {"wastegate",    "Wastegate position",  "%",     "Boost",   [](const Telemetry& t) { return t.wastegate * 100.0f; }},
@@ -72,6 +72,11 @@ const LogChannel kChannels[] = {
     {"n2o_bottle",   "Nitrous bottle",      "kg",    "Motorsport", [](const Telemetry& t) { return t.n2oBottleKg; }},
     {"vtec",         "VTEC high cam",       "on",    "Control", [](const Telemetry& t) { return t.vtecEngaged; }},
     {"vtc",          "Intake cam advance (VTC)", "deg", "Control", [](const Telemetry& t) { return t.vtcAdvance; }},
+    {"comp_eff",     "Compressor efficiency", "%",   "Boost",   [](const Telemetry& t) { return t.compEff * 100.0f; }},
+    {"ic_core",      "Intercooler core temp", "C",   "Boost",   [](const Telemetry& t) { return t.icCoreC; }},
+    {"charge_temp",  "Charge air temp",     "C",     "Boost",   [](const Telemetry& t) { return t.chargeT; }},
+    {"valve_float",  "Valve float",         "%",     "Engine",  [](const Telemetry& t) { return std::max(t.floatIn, t.floatEx) * 100.0f; }},
+    {"valve_loft",   "Valve loft (max)",    "mm",    "Engine",  [](const Telemetry& t) { return std::max(t.loftIn, t.loftEx); }},
 };
 constexpr int kCount = (int)(sizeof(kChannels) / sizeof(kChannels[0]));
 } // namespace

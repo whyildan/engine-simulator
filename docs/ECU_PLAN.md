@@ -391,12 +391,42 @@ Implementasi:
 - Kamera: drag = putar, klik kanan/tengah = geser, roda = zoom, klik ganda = reset; tombol Front / Side / 3/4 dan
   slider tebal potongan. Menampilkan lift katup, VTEC (lobe cam tinggi) dan VTC langsung dari telemetri.
 
-### Fase 6 – Simulasi lanjutan
+### Fase 6 – Simulasi lanjutan ✅ selesai
 - Peta efisiensi kompresor dan turbin yang bisa dimuat.
 - Model valve float dari pegas katup dan massa komponen.
 - Perbaikan model termal dan dyno.
 
-Sebagian besar isi fase ini (simulasi per silinder, dinamika turbo, drivetrain) sudah ada.
+Implementasi:
+- **Peta turbo** (`src/sim/TurboMap.*`): peta kompresor = garis kecepatan (maks 10 × 12 titik) berisi aliran
+  terkoreksi (298 K / 101.325 kPa), rasio tekanan, dan efisiensi; peta turbin = aliran tereduksi
+  m·√T/p terhadap rasio ekspansi + efisiensi terhadap U/C + diameter roda. Tiap garis di-resample sepanjang
+  panjangnya, diinterpolasi antar garis, dan di luar garis memakai fan law. Titik di atas puncak garis = surge,
+  di bawah ujung garis = choke. Turbin dari peta dijadikan luas nosel ekuivalen (stabil seperti model lama).
+  Bawaan: 6 kompresor (44–76 mm + kepala supercharger sentrifugal) dan 4 turbin (sintetis, bentuk realistis).
+  Muat / simpan CSV (`speed,flow,pr,eff`; flow juga `flow_gs` / `flow_lbmin`; turbin `er,mfp` + `uc,eff`).
+  Model generik (slider ukuran) tetap default; peta dipilih di Boost Control. UI: peta dengan pulau efisiensi
+  (marching squares), garis surge, jejak titik operasi, kurva efisiensi turbin.
+- **Valvetrain dinamis** (`src/sim/Valvetrain.*`): katup = massa pada pegas, digerakkan lewat train elastis
+  (kekakuan per tipe lifter: pushrod ±5 kN/mm, bucket 12 kN/mm), mendarat di dudukan elastis (restitusi ±0.45).
+  Satu event katup diintegrasi per rpm (dihitung ulang tiap rpm berubah 1.5 %), hasilnya tabel deviasi dari
+  lift cam yang langsung masuk ke luas aliran katup. Penggeraknya profil pengganti (1 − x²)³(1 + 1.15x²) dengan
+  kelengkungan hidung sama: profil asli tidak punya ramp sehingga train ikut bergetar. Telemetri: loft,
+  bounce, terlambat menutup. Pegas default pushrod diberi margin lebih (train elastis float lebih awal).
+  K20A: float ±9300 rpm (limiter 8600); pegas 60 % → float ±7400 rpm dan torsi di 7800 rpm hilang.
+- **Ambient**: tekanan udara dari ketinggian (atmosfer standar), per thread simulasi (`kPatm`), dibaca ECU
+  sebagai sensor baro (alpha-N, boost gauge, tekanan injektor, overboost). Base map diukur di tekanan itu.
+- **Intercooler**: efektivitas terhadap suhu inti; inti menyerap panas kompresor dan membuangnya ke udara yang
+  ditiup (kecepatan kendaraan atau kipas sel dyno) → heat soak saat diam / dyno tanpa kipas.
+- **Dyno**: mode step test (tahan tiap rpm sampai stabil lalu dirata-rata), kipas sel (radiator + intercooler),
+  faktor koreksi SAE J1349 / DIN 70020 / ISO 1585 / SAE J607 dari suhu dan tekanan saat run, data per titik
+  bertambah (boost, EGT, timing, IAT, BSFC), ekspor CSV memuat semuanya. Channel log baru: efisiensi kompresor,
+  suhu inti intercooler, suhu charge, valve float, loft.
+- Ikut diperbaiki: lift VTEC memakai dinamika cam tinggi saja (cam rendah hanya kinematis saat terkunci).
+  Sebelumnya, cam rendah yang float ikut terbawa walaupun rocker sudah dikunci ke cam tinggi. ECU kini punya
+  kompensasi beban "drive": katup idle dibuka lebih dulu saat transmisi otomatis masuk gigi, dan lebih lebar
+  saat transbrake ditahan. Tanpa itu idle melawan transbrake berayun 400–900 rpm dan bisa mati. Rig base map
+  memakai kipas sel default (50 km/h), sama dengan dyno (base map versi 20).
+- Tes: `phase6_test`, alat `valve_probe`.
 
 ---
 

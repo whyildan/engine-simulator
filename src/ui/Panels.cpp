@@ -489,6 +489,7 @@ void App::panelFuelIntake() {
     SliderF("Runner diameter", &p_.runnerDia_mm, 20, 70, "%.0f mm");
     SliderF("Air filter restriction", &p_.airFilter, 0, 1, "%.2f", "0 = open velocity stacks (loud), 1 = restrictive stock airbox.");
     SliderF("Ambient temp", &p_.ambientTemp_C, -20, 45, "%.0f C");
+    altitudeUi("Altitude");
 
     ImGui::SeparatorText("Fuel system");
     int fs = (int)p_.fuelSystem;
@@ -580,8 +581,11 @@ void App::panelBoost() {
     }
     if (p_.induction == Induction::Turbo) {
         ImGui::SeparatorText("Turbocharger");
-        SliderF("Compressor size", &p_.compFlow_gs, 60, 900, "%.0f g/s max flow", "Bigger compressor = more top-end power, but needs more exhaust energy to spin (lag).");
-        SliderF("Turbine A/R", &p_.turbineAR, 0.3f, 1.4f, "%.2f", "Small A/R: spools early, chokes up top (backpressure).\nLarge A/R: lazy spool, big top end.");
+        turboModelUi();
+        if (!p_.turbo.useMaps) {
+            SliderF("Compressor size", &p_.compFlow_gs, 60, 900, "%.0f g/s max flow", "Bigger compressor = more top-end power, but needs more exhaust energy to spin (lag).");
+            SliderF("Turbine A/R", &p_.turbineAR, 0.3f, 1.4f, "%.2f", "Small A/R: spools early, chokes up top (backpressure).\nLarge A/R: lazy spool, big top end.");
+        }
         SliderF("Rotor inertia", &p_.turboInertia, 0.03f, 0.8f, "%.2f kg cm2", "Heavier wheels = more lag.");
         SliderF("Wastegate (boost)", &p_.wastegateBar, 0.2f, 2.5f, "%.2f bar", "Boost target: the wastegate opens and bypasses the turbine above this.");
         Check("Blow-off valve", &p_.bov);
@@ -595,7 +599,8 @@ void App::panelBoost() {
         if (ImGui::Combo("Type", &t, "Roots blower\0Twin-screw\0Centrifugal\0")) applyInductionDefaults(p_, Induction::Supercharger, (Supercharger)t);
         Help("Roots: instant boost, classic whine, inefficient (hot).\nTwin-screw: instant boost, more efficient.\nCentrifugal: boost rises with rpm like a belt-driven turbo.");
         if (p_.scType == Supercharger::Centrifugal) {
-            SliderF("Compressor size", &p_.compFlow_gs, 60, 900, "%.0f g/s max flow");
+            turboModelUi();
+            if (!p_.turbo.useMaps) SliderF("Compressor size", &p_.compFlow_gs, 60, 900, "%.0f g/s max flow");
             SliderF("Drive ratio", &p_.scRatio, 4, 16, "x%.1f", "Impeller speed / crank speed (pulley x internal step-up).");
         } else {
             SliderF("Blower size", &p_.scDisplacement_L, 0.3f, 6, "%.2f L/rev");
@@ -606,7 +611,13 @@ void App::panelBoost() {
     }
     ImGui::SeparatorText("Charge air & tune");
     Check("Intercooler", &p_.intercooler);
-    if (p_.intercooler) { ImGui::SameLine(); ImGui::SetNextItemWidth(160); ImGui::SliderFloat("efficiency", &p_.icEfficiency, 0.3f, 0.95f, "%.2f"); }
+    if (p_.intercooler) {
+        ImGui::SameLine(); ImGui::SetNextItemWidth(160); ImGui::SliderFloat("efficiency", &p_.icEfficiency, 0.3f, 0.95f, "%.2f");
+        ImGui::SameLine(); ImGui::TextDisabled("core %.0f C", tel_.icCoreC);
+        Help("The core takes the compressor heat and gives it to the air blown through it (vehicle speed, or the\n"
+             "dyno cell fan in Virtual Dyno). Parked or on a dyno without a fan it heat-soaks: charge temperature\n"
+             "climbs over a long pull.");
+    }
     SliderF("Charge pipe volume", &p_.chargeVolume_L, 0.5f, 15, "%.1f L", "More piping + intercooler volume = slower boost response.");
     SliderF("Boost retard", &p_.boostRetard, 0, 12, "%.1f deg/bar", "Pull ignition timing under boost to avoid knock.");
     SliderF("AFR at 1 bar", &p_.afrBoost, 10, 13, "%.1f", "ECU enrichment under boost (cooler, safer).");
@@ -624,7 +635,9 @@ void App::panelBoost() {
     Lamp("Knock", tel_.knock > 1, rgba(1.0f, 0.4f, 0.1f));
 
     bool centrifugal = p_.induction == Induction::Turbo || p_.scType == Supercharger::Centrifugal;
-    if (centrifugal) {
+    if (centrifugal && p_.turbo.useMaps) {
+        turboMapPlot(std::max(220.0f, ImGui::GetContentRegionAvail().y));
+    } else if (centrifugal) {
         // operating point trail
         mapTrailX_.push_back(tel_.compFlow); mapTrailY_.push_back(tel_.pr);
         if (mapTrailX_.size() > 400) { mapTrailX_.erase(mapTrailX_.begin()); mapTrailY_.erase(mapTrailY_.begin()); }
@@ -793,8 +806,12 @@ void App::panelDyno() {
     int mode = (int)p_.dynoMode;
     ImGui::RadioButton("Free rev", &mode, 0); ImGui::SameLine();
     ImGui::RadioButton("Hold RPM", &mode, 1); ImGui::SameLine();
-    ImGui::RadioButton("WOT sweep", &mode, 2);
+    ImGui::RadioButton("WOT sweep", &mode, 2); ImGui::SameLine();
+    ImGui::RadioButton("WOT step test", &mode, 3);
+    Help("Step test: holds every step at full throttle until rpm has settled, then averages it - steady-state\n"
+         "points without the inertia / sweep-rate effects of a sweep (slower, closer to a brake dyno).");
     p_.dynoMode = (DynoMode)mode;
+    const bool stepMode = p_.dynoMode == DynoMode::Step;
     ImGui::PushItemWidth(150);
     if (p_.dynoMode == DynoMode::Hold) {
         ImGui::SameLine();
@@ -802,13 +819,30 @@ void App::panelDyno() {
     }
     ImGui::SliderFloat("Start", &p_.sweepStartRpm, 800, 6000, "%.0f rpm"); ImGui::SameLine();
     ImGui::SliderFloat("End", &p_.sweepEndRpm, 2000, 16000, "%.0f rpm"); ImGui::SameLine();
-    ImGui::SliderFloat("Ramp", &p_.sweepRate, 100, 2000, "%.0f rpm/s");
-    ImGui::PopItemWidth();
-    if (ImGui::Button("RUN SWEEP [D]")) { p_.dynoMode = DynoMode::Sweep; p_.sweepRequest++; if (!tel_.running) { autoStart_ = true; autoStartTimer_ = 0; } }
+    if (stepMode) {
+        ImGui::SliderFloat("Step", &p_.stepRpm, 100, 1000, "%.0f rpm"); ImGui::SameLine();
+        ImGui::SliderFloat("Average", &p_.stepHold_s, 0.5f, 5.0f, "%.1f s");
+    } else ImGui::SliderFloat("Ramp", &p_.sweepRate, 100, 2000, "%.0f rpm/s");
+    ImGui::SliderFloat("Cell fan", &p_.coolingFan_kmh, 0, 120, "%.0f km/h");
+    Help("Air blown at the radiator and intercooler while on the dyno (not when driving).\n"
+         "No fan: the coolant runs hotter and an intercooler heat-soaks over long pulls.");
     ImGui::SameLine();
-    const char* st[] = {"idle", "holding", "settling at start rpm", "sweeping...", "done"};
-    ImGui::Text("Absorber: %s  load %.0f Nm", st[clampv(tel_.dynoState, 0, 4)], tel_.dynoLoad);
-    if (tel_.dynoState == 3) { ImGui::SameLine(); ImGui::ProgressBar(tel_.dynoProgress, ImVec2(-1, 0)); }
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 13);
+    ImGui::Combo("Correction", &dynoCorr_, dynoCorrectionNames());
+    Help("Corrects every run to the standard's reference air from the air it was run in (temperature and\n"
+         "pressure, see Altitude / Ambient temp): SAE J1349 25 C / 99 kPa, DIN 70020 20 C / 1013 mbar,\n"
+         "ISO 1585 / EEC 25 C / 99 kPa, SAE J607 15.6 C / 29.92 inHg. Observed = as measured.");
+    if (dynoCorr_ > 0) { ImGui::SameLine(); ImGui::TextDisabled("CF now %.3f", dynoCorrectionFactor((DynoCorrection)dynoCorr_, p_.ambientTemp_C, ambientPressurePa(p_) * 1e-3)); }
+    ImGui::PopItemWidth();
+    if (ImGui::Button(stepMode ? "RUN STEP TEST [D]" : "RUN SWEEP [D]")) {
+        if (!stepMode) p_.dynoMode = DynoMode::Sweep;
+        p_.sweepRequest++;
+        if (!tel_.running) { autoStart_ = true; autoStartTimer_ = 0; }
+    }
+    ImGui::SameLine();
+    const char* st[] = {"idle", "holding", "settling at start rpm", "sweeping...", "done", "stepping..."};
+    ImGui::Text("Absorber: %s  load %.0f Nm", st[clampv(tel_.dynoState, 0, 5)], tel_.dynoLoad);
+    if (tel_.dynoState == 3 || tel_.dynoState == 5) { ImGui::SameLine(); ImGui::ProgressBar(tel_.dynoProgress, ImVec2(-1, 0)); }
 
     bool& kw = dynoKw_;
     ImGui::SameLine();
@@ -844,6 +878,7 @@ void App::panelDyno() {
         r.calName = calMeta_.name.empty() ? "(unsaved)" : calMeta_.name;
         r.calRev = calMeta_.revision;
         r.label += " | cal " + r.calName + " r" + std::to_string(r.calRev);
+        r.ambientC = p_.ambientTemp_C; r.baroKPa = (float)(ambientPressurePa(p_) * 1e-3);
         static const float pal[][3] = {{0.95f, 0.85f, 0.3f}, {0.3f, 0.9f, 0.85f}, {0.9f, 0.3f, 0.7f}, {0.6f, 0.5f, 1.0f}};
         const float* col = pal[runs_.size() % 4];
         r.color[0] = col[0]; r.color[1] = col[1]; r.color[2] = col[2]; r.color[3] = 1;
@@ -861,7 +896,9 @@ void App::panelDyno() {
     // fixed, readable axes: rpm 0..limit, torque / power from what has been seen so far
     float tqTop = 50, pwTop = 30;
     for (int b = 0; b < kPeakBins; ++b) { tqTop = std::max(tqTop, peakTq_[b]); pwTop = std::max(pwTop, peakPw_[b]); }
-    for (auto& r : runs_) if (r.visible) for (auto& d : r.pts) { tqTop = std::max(tqTop, d.torque); pwTop = std::max(pwTop, d.powerKw); }
+    const DynoCorrection corr = (DynoCorrection)dynoCorr_;
+    auto cfOf = [corr](const DynoRun& r) { return (float)dynoCorrectionFactor(corr, r.ambientC, r.baroKPa); };
+    for (auto& r : runs_) if (r.visible) { const float cf = cfOf(r); for (auto& d : r.pts) { tqTop = std::max(tqTop, d.torque * cf); pwTop = std::max(pwTop, d.powerKw * cf); } }
     tqTop = std::max(tqTop, tel_.torque);
     pwTop = std::max(pwTop, tel_.powerKw);
     const float pwScale = kw ? 1.0f : 1.341f;
@@ -880,7 +917,8 @@ void App::panelDyno() {
             DynoRun& r = runs_[i];
             if (!r.visible || r.pts.empty()) continue;
             std::vector<float> x, t, pw;
-            for (auto& d : r.pts) { x.push_back(d.rpm); t.push_back(d.torque * tqScale); pw.push_back(d.powerKw * pwScale); }
+            const float cf = cfOf(r);
+            for (auto& d : r.pts) { x.push_back(d.rpm); t.push_back(d.torque * tqScale * cf); pw.push_back(d.powerKw * pwScale * cf); }
             ImVec4 cc(r.color[0], r.color[1], r.color[2], 1);
             char id[32];
             std::snprintf(id, sizeof(id), "Run %zu torque", i + 1);
@@ -961,6 +999,7 @@ void App::panelDyno() {
     // before / after: every visible run minus the baseline, over the rpm they share
     if (delta && ImPlot::BeginPlot("##dyno_delta", ImVec2(-1, 160))) {
         const DynoRun& base = runs_[dynoBase_];
+        const float cfB = cfOf(base);
         ImPlot::SetupAxes("rpm", imperial_ ? "delta torque (lb-ft)" : "delta torque (N m)", 0, ImPlotAxisFlags_AutoFit);
         ImPlot::SetupAxis(ImAxis_Y2, kw ? "delta power (kW)" : "delta power (hp)", ImPlotAxisFlags_AuxDefault | ImPlotAxisFlags_AutoFit);
         ImPlot::SetupAxisLimits(ImAxis_X1, 0, std::ceil((p_.revLimit + 700) / 500.0) * 500.0, ImPlotCond_Always);
@@ -977,7 +1016,7 @@ void App::panelDyno() {
                     const DynoPoint &a = base.pts[k - 1], &b = base.pts[k];
                     const float u = b.rpm > a.rpm ? (rpm - a.rpm) / (b.rpm - a.rpm) : 0.0f;
                     ok = !steep(base, k);
-                    return power ? a.powerKw + (b.powerKw - a.powerKw) * u : a.torque + (b.torque - a.torque) * u;
+                    return cfB * (power ? a.powerKw + (b.powerKw - a.powerKw) * u : a.torque + (b.torque - a.torque) * u);
                 }
             return 0.0f;
         };
@@ -987,6 +1026,7 @@ void App::panelDyno() {
         for (size_t i = 0; i < runs_.size(); ++i) {
             const DynoRun& r = runs_[i];
             if ((int)i == dynoBase_ || !r.visible) continue;
+            const float cf = cfOf(r);
             std::vector<float> x, dt, dp;
             for (size_t k = 0; k < r.pts.size(); ++k) {
                 const DynoPoint& d = r.pts[k];
@@ -994,7 +1034,7 @@ void App::panelDyno() {
                 const float bt = baseAt(d.rpm, false, ok1), bp = baseAt(d.rpm, true, ok2);
                 if (!ok1 || !ok2) continue;
                 if ((k > 0 && steep(r, k)) || (k + 1 < r.pts.size() && steep(r, k + 1))) continue;
-                x.push_back(d.rpm); dt.push_back((d.torque - bt) * tqScale); dp.push_back((d.powerKw - bp) * pwScale);
+                x.push_back(d.rpm); dt.push_back((d.torque * cf - bt) * tqScale); dp.push_back((d.powerKw * cf - bp) * pwScale);
             }
             if (x.size() < 2) continue;
             const ImVec4 cc(r.color[0], r.color[1], r.color[2], 1);
@@ -1027,12 +1067,15 @@ void App::panelDyno() {
             ImGui::TableNextColumn();
             ImGui::TextWrapped("%s", r.label.c_str());   // long labels (engine | cal name rev) wrap instead of being cut
             ImGui::TableNextColumn();
-            ImGui::Text("%.0f %s @%.0f  %.0f hp @%.0f", r.peakTorque * tqScale, tqUnit, r.peakTorqueRpm, r.peakPower, r.peakPowerRpm);
+            const float cfR = cfOf(r);
+            ImGui::Text("%.0f %s @%.0f  %.0f hp @%.0f%s", r.peakTorque * tqScale * cfR, tqUnit, r.peakTorqueRpm, r.peakPower * cfR, r.peakPowerRpm,
+                        corr != DynoCorrection::None ? " (corr.)" : "");
             if (delta && (int)i != dynoBase_) {
                 const DynoRun& b = runs_[dynoBase_];
-                const float dT = (r.peakTorque - b.peakTorque) * tqScale, dP = r.peakPower - b.peakPower;
+                const float cfB2 = cfOf(b);
+                const float dT = (r.peakTorque * cfR - b.peakTorque * cfB2) * tqScale, dP = r.peakPower * cfR - b.peakPower * cfB2;
                 ImGui::TextColored(dP >= 0 ? ImVec4(0.45f, 0.9f, 0.45f, 1) : ImVec4(1, 0.45f, 0.4f, 1), "vs Run %d: %+.1f %s  %+.1f hp (%+.1f %%)",
-                                   dynoBase_ + 1, dT, tqUnit, dP, b.peakPower > 0 ? 100.0f * dP / b.peakPower : 0.0f);
+                                   dynoBase_ + 1, dT, tqUnit, dP, b.peakPower > 0 ? 100.0f * dP / (b.peakPower * cfB2) : 0.0f);
             } else if ((int)i == dynoBase_) ImGui::TextDisabled("baseline");
             ImGui::TableNextColumn();
             if (ImGui::SmallButton("x")) del = (int)i;
@@ -1167,8 +1210,8 @@ void App::recordScope(float dt) {
         histAccum_ = 0;
         auto push = [](std::vector<float>& v, float x) { v.push_back(x); };
         push(hist_.t, hist_.now);
-        push(hist_.boost, tel_.boostBar != 0 || isBoosted(p_) ? tel_.boostBar : (tel_.mapKPa - 101.3f) / 100.0f);
-        if (!isBoosted(p_)) hist_.boost.back() = (tel_.mapKPa - 101.3f) / 100.0f;
+        push(hist_.boost, tel_.boostBar != 0 || isBoosted(p_) ? tel_.boostBar : (tel_.mapKPa - tel_.baroKPa) / 100.0f);
+        if (!isBoosted(p_)) hist_.boost.back() = (tel_.mapKPa - tel_.baroKPa) / 100.0f;
         push(hist_.target, p_.induction == Induction::Turbo ? p_.wastegateBar : 0.0f);
         push(hist_.shaft, tel_.shaftRpm / 1000.0f);
         push(hist_.wg, tel_.wastegate * 100.0f);
@@ -1435,6 +1478,7 @@ void App::panelComponents() {
         double fl = std::min(m.floatRpmIn, m.floatRpmEx);
         Judged("Valve float from", b, fl > lim * 1.05, fl > lim);
         Meter("Valve float now", std::max(tel_.floatIn, tel_.floatEx) * 100, 0, 100, "%.0f %%", rgba(1, 0.6f, 0.2f));
+        valveDynamicsUi();
         ImGui::TextDisabled("Cam profile (duration, lift, timing): Valvetrain tab.");
     } else {
         ImGui::SeparatorText("Rotating assembly / valvetrain");

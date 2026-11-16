@@ -55,6 +55,8 @@ add_library(enginesim_core STATIC
   src/sim/Engine.cpp
   src/sim/Dyno.cpp
   src/sim/Boost.cpp
+  src/sim/TurboMap.cpp
+  src/sim/Valvetrain.cpp
   src/sim/Components.cpp
   src/sim/Thermal.cpp
   src/ecu/Sensors.cpp
@@ -102,6 +104,7 @@ add_executable(enginesim WIN32
   src/ui/CalManager.cpp
   src/ui/Control.cpp
   src/ui/Motorsport.cpp
+  src/ui/Advanced.cpp
   src/ui/FileDialog.cpp
   src/ui/Logging.cpp
   src/ui/Dashboard.cpp
@@ -182,3 +185,12 @@ target_link_libraries(misfire_probe PRIVATE enginesim_core)
 
 add_executable(dyno_sweep tests/dyno_sweep.cpp)
 target_link_libraries(dyno_sweep PRIVATE enginesim_core)
+
+add_executable(phase6_test tests/phase6_test.cpp)
+target_link_libraries(phase6_test PRIVATE enginesim_core)
+if(MSVC)
+  target_link_options(phase6_test PRIVATE /STACK:16777216)
+endif()
+
+add_executable(valve_probe tests/valve_probe.cpp)
+target_link_libraries(valve_probe PRIVATE enginesim_core)

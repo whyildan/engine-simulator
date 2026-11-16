@@ -337,6 +337,7 @@ void App::sectionEcuSetup() {
              "vaporisation -> the ECU adds cranking / warm-up enrichment and fast idle; carburettors use\n"
              "the automatic choke and fast-idle cam.");
         ImGui::SliderFloat("Ambient temperature", &p_.ambientTemp_C, -30, 45, "%.0f C");
+        altitudeUi("Altitude##sim");
     }
     bool paused = sim_->paused();
     if (ImGui::Button(paused ? "Resume" : "Pause")) sim_->setPaused(!paused);

@@ -6,6 +6,7 @@
 #include "sim/DataLog.h"
 #include "ui/TableEditor.h"
 #include "ui/EngineView3D.h"
+#include "sim/Valvetrain.h"
 #include <atomic>
 #include <thread>
 #include <memory>
@@ -35,6 +36,7 @@ struct DynoRun {
     float peakTorque = 0, peakTorqueRpm = 0, peakPower = 0, peakPowerRpm = 0;
     std::string engine, calName;   // what the run was made with (before / after tuning)
     int calRev = 0;
+    float ambientC = 25, baroKPa = 101.325f;   // inlet air of the run (for the correction standards)
 };
 
 class App {
@@ -160,6 +162,23 @@ private:
     void panelEngineView();
     void panelAudio();
     void panelComponents();
+    // Phase 6 (Advanced.cpp)
+    void altitudeUi(const char* label);
+    void turboModelUi();
+    void turboMapPlot(float height);
+    void rebuildMapView();
+    void valveDynamicsUi();
+    std::string turboMsg_;
+    CompressorModel mapView_;
+    uint64_t mapViewKey_ = 0;
+    std::vector<std::vector<float>> mapIsoX_, mapIsoY_, mapLinesX_, mapLinesY_;
+    std::vector<float> mapIsoLevel_, mapLineSpeed_, mapSurgeX_, mapSurgeY_;
+    uint64_t vtKey_ = 0;
+    float vtFloat_[4] = {};
+    float vtPreviewRpm_ = 0, vtTraceRpm_ = -1;
+    bool vtShowHi_ = false, vtTraceHi_ = false;
+    ValveDynamics vtPrevIn_, vtPrevEx_;
+    int dynoCorr_ = 0;   // DynoCorrection for the displayed curves
     void keyboard(float dt);
     void pullDyno();
     void loadPreset(int i);

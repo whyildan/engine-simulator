@@ -20,7 +20,13 @@ static void dump(const char* title, const Table2D& t) {
 int main(int argc, char** argv) {
     int idx = argc > 1 ? std::atoi(argv[1]) : 0;
     EngineParams g = makePreset(idx);
-    EngineParams c = makeCalibratedPreset(idx);
+    EngineParams c = makePreset(idx);
+    if (std::getenv("IMP")) c.imperfection = (float)std::atof(std::getenv("IMP"));
+    {
+        Calibration cal = c.cal;
+        if (!loadCachedBaseMap(c, cal)) { measureBaseMap(c, cal); saveCachedBaseMap(c, cal); }
+        c.cal.veMap = cal.veMap; c.cal.veTps = cal.veTps;
+    }
     dump("generic VE", g.cal.veMap);
     dump("measured base VE", c.cal.veMap);
     return 0;

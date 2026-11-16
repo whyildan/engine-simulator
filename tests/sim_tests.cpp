@@ -264,8 +264,9 @@ static void survey() {
         if (std::getenv("BLIPTRACE"))
             for (int k = 0; k < 12; ++k) {
                 runSeconds(sim, 0.05); sim.getTelemetry(t);
-                std::printf("  blip+%.2f rpm %5.0f map %5.1f tgt %5.2f duty %.2f lam %.2f %.2f mis %d fail %d sync %d fuelP %.2f\n", 0.05 * (k + 1), t.rpm, t.mapKPa,
-                            t.targetAfr, t.injDuty, t.cylLambda[0], t.cylLambda[1], t.misfires, t.failure, (int)t.syncLost, t.fuelBar, t.ecuVe, t.ecuAccel, t.iac, t.ecuWarmup);
+                std::printf("  blip+%.2f rpm %5.0f map %5.1f tgt %5.2f duty %.2f lam %.2f %.2f mis %d (lean %d spark %d fouled %d rich %d dil %d) ve %.1f accel %.2f adv %.1f\n",
+                            0.05 * (k + 1), t.rpm, t.mapKPa, t.targetAfr, t.injDuty, t.cylLambda[0], t.cylLambda[1], t.misfires, t.misfireCause[0],
+                            t.misfireCause[1], t.misfireCause[2], t.misfireCause[3], t.misfireCause[4], t.ecuVe, t.ecuAccel, t.advance);
             }
         else runSeconds(sim, 0.6);
         sim.getTelemetry(t);

@@ -16,7 +16,7 @@ void Ecu::init(const EngineParams& p, double vdCyl, int ports, double revsPerEve
     evapAcc_.assign(ports, 0.0);
     lastInjT_.assign(ports, -1.0); lastAir_.assign(ports, 0.0); lastAfr_.assign(ports, 14.7);
     asyncFuel.assign(ports, 0.0);
-    iacI_ = 0.35; cmd = ActuatorCommands();
+    iacI_ = 0.35; driveFf_ = 0; cmd = ActuatorCommands();
 }
 
 // take the new calibration - except VE tables the tuner did not touch (they may hold auto-tune results)
@@ -49,11 +49,11 @@ void Ecu::protectionStep(double dt, const SensorReadings& s, double rpm, double 
     const double load = std::max(mapUsed / 101.325, tpsPct * 0.01);
     double v[kProtCount];
     v[kProtOverRev] = rpm;
-    v[kProtOverboost] = mapUsed / 101.325 - 1.0;
+    v[kProtOverboost] = (mapUsed - baro()) / 100.0;
     v[kProtCoolant] = s.value[kSnsECT];
     v[kProtOilTemp] = s.value[kSnsOilT];
     v[kProtOilPress] = s.value[kSnsOilP];
-    v[kProtFuelPress] = s.value[kSnsFuelP] - (mapUsed - 101.325) / 100.0;     // pressure across the injectors
+    v[kProtFuelPress] = s.value[kSnsFuelP] - (mapUsed - baro()) / 100.0;     // pressure across the injectors
     v[kProtLean] = s.value[kSnsWideband];
     double kr = 0;
     for (int i = 0; i < ports_ && i < kMaxCyl; ++i) kr = std::max(kr, knockRetard[i]);
@@ -132,7 +132,7 @@ void Ecu::knockStep(double dt, const SensorReadings& s, double rpm) {
 // ---- boost control: target from rpm x throttle (x gear), feed-forward from the wastegate spring + PID on the
 //      MAP sensor -> solenoid duty. Overboost and boost cut work as fuel cuts.
 void Ecu::boostStep(double dt, const SensorReadings& s, double rpm, double tpsPct) {
-    boostBar = mapUsed / 101.325 - 1.0;
+    boostBar = (mapUsed - baro()) / 100.0;
     const double rate = (boostBar - prevBoost_) / std::max(1e-4, dt);
     prevBoost_ = boostBar;
     boostRate_ += (rate - boostRate_) * std::min(1.0, dt / 0.03);
@@ -301,7 +301,7 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
 
     // ---- MAP: sensor, or an alpha-N estimate from the throttle when it is implausible
     if (!s.fallback[kSnsMAP]) mapUsed = s.value[kSnsMAP];
-    else mapUsed = 101.3 * clampv(0.25 + 0.95 * std::pow(tpsPct * 0.01, 0.6), 0.2, 1.0);
+    else mapUsed = baro() * clampv(0.25 + 0.95 * std::pow(tpsPct * 0.01, 0.6), 0.2, 1.0);
 
     // ---- transients: throttle opening rate (acceleration enrichment), MAP rate (auto-tune steadiness)
     tpsRate_ += ((tpsPct - prevTps_) / std::max(1e-4, dt) - tpsRate_) * (1.0 - std::exp(-dt / 0.03));
@@ -422,6 +422,14 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
         // throttle-angle (alpha-N) map describes the total air path
         cmd.iac = kIacNominal;
     } else if (efi) {
+        // drive load: an automatic in gear loads the idle through its converter, against the transbrake like a
+        // converter at stall - the ECU opens the idle valve ahead of the dip (neutral / drive switch)
+        double ffTarget = 0;
+        if (p_.vehicle && s.value[kSnsGear] > 0.5) {
+            if (p_.transMode == TransMode::Automatic) ffTarget = 0.05;
+            if (s.in.transbrake && p_.transMode != TransMode::Manual) ffTarget = 0.22;
+        }
+        driveFf_ += (ffTarget - driveFf_) * std::min(1.0, dt / 0.12);
         if (!running) { iacI_ = 0.35; cmd.iac = 0.35; }
         else if (pedal < 0.02) {
             double err = clampv(idleTarget - rpm, -500.0, 500.0);
@@ -430,7 +438,7 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
             dash_ *= std::exp(-dt / 0.9);
             double floor = std::max(iacI_ * 0.75, dash_);
             // proportional term stronger when the revs are low (stall side) than when they are high
-            cmd.iac = clampv(iacI_ + cal_.idleKp * (err > 0 ? 1.0 : 0.43) * err - cal_.idleKd * rpmRate_, floor, 1.0);
+            cmd.iac = clampv(iacI_ + driveFf_ + cal_.idleKp * (err > 0 ? 1.0 : 0.43) * err - cal_.idleKd * rpmRate_, floor + driveFf_, 1.0);
         } else {
             dash_ = std::max(dash_, std::min(1.0, 0.4 + pedal));
             sinceRelease_ = 0;
@@ -506,7 +514,7 @@ double Ecu::airEstimate(const SensorReadings& s, double rpm, double tpsPct) {
     const double mapPa = mapUsed * 1000.0;
     const double airT = s.value[kSnsIAT] + 273.15 + 15.0;
     const double airSD = (veOverride > 0 ? veOverride : tableLookup(cal_.veMap, rpm, mapUsed)) * 0.01 * mapPa * vdCyl_ / (kRgas * airT);
-    const double airAN = tableLookup(cal_.veTps, rpm, tpsPct) * 0.01 * 101325.0 * vdCyl_ / (kRgas * airT);
+    const double airAN = tableLookup(cal_.veTps, rpm, tpsPct) * 0.01 * baro() * 1000.0 * vdCyl_ / (kRgas * airT);
     const LoadMode mode = s.fallback[kSnsMAP] && cal_.loadMode != LoadMode::Maf ? LoadMode::AlphaN : cal_.loadMode;
     switch (mode) {
     case LoadMode::AlphaN: return airAN;
@@ -522,7 +530,7 @@ double Ecu::airEstimate(const SensorReadings& s, double rpm, double tpsPct) {
 double Ecu::pulseFor(double fuel, const SensorReadings& s) {
     if (fuel <= 0) return 0;
     const double rated = std::max(10.0, (double)cal_.injFlow) * kFuelDensity * 1e-3 / 60.0;
-    const double mapGauge = (mapUsed - 101.325) / 100.0;
+    const double mapGauge = (mapUsed - baro()) / 100.0;
     double rail = s.fallback[kSnsFuelP] ? p_.comp.fuelPressure_bar + (p_.comp.fuelRegulator == FuelRegulator::MapReferenced ? mapGauge : 0.0)
                                         : s.value[kSnsFuelP];
     double fc = std::sqrt(std::max(0.3, rail - mapGauge) / 3.0);
@@ -555,7 +563,7 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     // ---- air per cylinder event from the load model
     const double airT = s.value[kSnsIAT] + 273.15 + 15.0;                // port air a bit warmer than the inlet
     const double airSD = (veOverride > 0 ? veOverride : tableLookup(cal_.veMap, rpm, mapUsed)) * 0.01 * mapPa * vdCyl_ / (kRgas * airT);
-    const double airAN = tableLookup(cal_.veTps, rpm, tpsPct) * 0.01 * 101325.0 * vdCyl_ / (kRgas * airT);
+    const double airAN = tableLookup(cal_.veTps, rpm, tpsPct) * 0.01 * baro() * 1000.0 * vdCyl_ / (kRgas * airT);
     double air;
     // a failed MAP sensor: limp home on the throttle-angle (alpha-N) map
     const LoadMode mode = s.fallback[kSnsMAP] && cal_.loadMode != LoadMode::Maf ? LoadMode::AlphaN : cal_.loadMode;
@@ -614,7 +622,7 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     // ---- fuel mass -> pulse width with the ECU's injector data
     const double cyc = rpm > 30 ? 60.0 * revsPerEvent_ / rpm : 1.0;
     const double rated = std::max(10.0, (double)cal_.injFlow) * kFuelDensity * 1e-3 / 60.0;   // kg/s at 3 bar
-    const double mapGauge = (mapUsed - 101.325) / 100.0;
+    const double mapGauge = (mapUsed - baro()) / 100.0;
     double rail = s.fallback[kSnsFuelP] ? p_.comp.fuelPressure_bar + (p_.comp.fuelRegulator == FuelRegulator::MapReferenced ? mapGauge : 0.0)
                                         : s.value[kSnsFuelP];
     double dP = std::max(0.3, rail - mapGauge);

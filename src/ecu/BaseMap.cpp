@@ -35,6 +35,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
     EngineParams p = pIn;
     p.vehicle = 0; p.dynoMode = DynoMode::Off; p.ignition = 1; p.starter = 0; p.coldStart = 0;
     p.clutchPedal = 0; p.n2oArm = 0; p.transbrake = 0; p.rollingAlsButton = 0;   // no launch limiter / nitrous on the rig
+    p.coolingFan_kmh = 50;    // the default cell fan: the engine bay / intercooler as it runs on the dyno
     p.cal.autoTune = 0; p.cal.closedLoop = 0;
     // the calibration rig measures the bare engine: no knock retard, trims, soft limiter or protection actions
     p.cal.knockControl = 0; p.cal.ltftLearn = 0; p.cal.softLimitBand = 0;
@@ -168,7 +169,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
 // ------------------------------------------------------------------ on-disk cache
 // Keyed by everything that defines the engine (driver inputs, sound, dyno, vehicle and the VE maps
 // themselves are left out). Bump kBaseMapVersion when the physics changes.
-static constexpr uint32_t kBaseMapVersion = 17;   // 17: VTEC crossover columns, afterfire needs oxygen   // 16: afterfire heat in the exhaust (Phase 5)   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
+static constexpr uint32_t kBaseMapVersion = 20;   // 20: valvetrain dynamics, turbo maps, intercooler core, cell fan (Phase 6)   // 17: VTEC crossover columns, afterfire needs oxygen   // 16: afterfire heat in the exhaust (Phase 5)   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
 static std::string g_cacheDir;
 void setBaseMapCacheDir(const std::string& dir) { g_cacheDir = dir; }
 
@@ -179,6 +180,10 @@ static uint64_t engineKey(const EngineParams& in) {
     std::memset(p.name, 0, sizeof(p.name));
     p.throttle = 0; p.ignition = 0; p.starter = 0; p.listener = ListenerPos::Tailpipe; p.volume = 0;
     p.dynoMode = DynoMode::Off; p.dynoHoldRpm = 0; p.sweepRequest = 0; p.sweepStartRpm = p.sweepEndRpm = p.sweepRate = 0;
+    p.stepRpm = p.stepHold_s = p.coolingFan_kmh = 0;
+    if (!p.turbo.useMaps) std::memset(&p.turbo, 0, sizeof(p.turbo));   // unused tables do not matter
+    std::memset(p.turbo.compName, 0, sizeof(p.turbo.compName)); std::memset(p.turbo.turbName, 0, sizeof(p.turbo.turbName));
+    p.turbo.compChoice = p.turbo.turbChoice = 0;
     p.vehicle = 0; p.gear = 0; p.clutchPedal = 0; p.brake = 0;
     p.nitrous = 0; p.n2oShotHp = 0; p.n2oWet = 0; p.n2oBottleKg = 0; p.n2oRefill = 0;
     p.n2oArm = 0; p.transbrake = 0; p.rollingAlsButton = 0;

@@ -56,7 +56,9 @@ public:
     int learnSeq = 0;            // bumps whenever auto-tune changed a VE table
     // diagnostics / telemetry
     double targetAfr = 14.7, injDuty = 0, trim = 1.0, warmup = 0, accel = 0, deadComp_ms = 0, flowComp = 1;
-    double mapUsed = 101.3;      // kPa used for the fuel load (sensor or alpha-N fallback)
+    double baro() const { return ambientPressurePa(p_) * 1e-3; }   // kPa, the ECU's barometric sensor
+    double mapUsed = 101.3;
+    double driveFf_ = 0;         // idle valve feed-forward for the drive / transbrake load      // kPa used for the fuel load (sensor or alpha-N fallback)
     double veUsed = 0, loadX = 0, loadY = 0, tpsUsed = 0;   // operating point on the maps
     double airPerCyl = 0;        // g per cylinder event the ECU calculated
     bool closedLoop = false, tuning = false;
