@@ -607,6 +607,21 @@ Implementasi:
   2.5× luas turbin (sebelumnya 1.3×: boost merayap 0.4 bar di atas pegas). Transbrake: beban converter naik dalam
   ±0.3 s (paket kopling terisi tekanan oli) dan feed-forward katup idle saat transbrake 35 %.
 
+### Setelah Fase 7 – Simpan / bagikan mesin
+- **Engine Setup → Engine → Save / share this engine**: simpan mesin sendiri ke *My engines* (muncul di daftar
+  preset, header dan tab Engine), **Export file...** ke satu file `.engine.json` untuk dibagikan, **Import file...**
+  memuat file orang lain dan menyimpan salinannya di *My engines*, **Delete** dengan konfirmasi. Author dan notes ikut
+  tersimpan (tooltip di daftar).
+- Isi file (`src/ecu/EngineFile.h`, implementasi di `CalibrationIO.cpp`): format `enginesim-engine` versi 1, semua
+  parameter hardware ditulis per nama (geometri, valvetrain, VTEC/VTC, intake, bahan bakar, exhaust, rotari, forced
+  induction termasuk peta turbo, kendaraan, nitrous, karakter suara, komponen) plus kalibrasi ECU yang sedang
+  dipakai. Kondisi bench (gas, kunci kontak, dyno, udara sekitar, sensor rusak, listener) tidak ikut, jadi tetap
+  saat ganti mesin.
+- Field yang tidak ada di file memakai nilai mesin yang sedang aktif; nilai di luar batas di-clamp, firing order
+  rusak diganti default. File tanpa kalibrasi → kalibrasi dasar dibuat dan base map diukur seperti preset.
+- Disimpan di folder `engines/` di samping exe. Uji: `engine_file_test` (24 preset round trip identik, peta turbo,
+  file sebagian / rusak, clamp, simpan / daftar / muat / export / hapus, mesin hasil import bisa idle).
+
 ---
 
 ## 5. Keputusan (sudah disepakati)

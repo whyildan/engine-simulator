@@ -3,6 +3,7 @@
 #include "audio/AudioOutput.h"
 #include "ecu/BaseMap.h"
 #include "ecu/CalibrationIO.h"
+#include "ecu/EngineFile.h"
 #include "sim/DataLog.h"
 #include "ui/TableEditor.h"
 #include "ui/EngineView3D.h"
@@ -171,6 +172,16 @@ private:
     // Phase 7 (Advanced.cpp)
     void ecuConfigUi();
     void tabTorqueGear();
+    // engine files (EngineFiles.cpp)
+    void switchEngine(const EngineParams& next, int presetIdx, bool fileCalibration);
+    bool loadEngineFrom(const std::string& path, bool keepCopy);
+    const char* engineLabel() const;
+    void presetCombo(const char* id);
+    void engineFileUi();
+    std::vector<EngineFileInfo> engList_;
+    bool engListDirty_ = true, engMsgErr_ = false;
+    std::string engMsg_;
+    char engAuthor_[64] = {}, engNotes_[512] = {};
     std::string turboMsg_;
     CompressorModel mapView_;
     uint64_t mapViewKey_ = 0;

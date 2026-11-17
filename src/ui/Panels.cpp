@@ -175,13 +175,11 @@ void App::panelDashboard() {
 // ======================================================================= engine
 void App::panelEngine() {
     ImGui::PushItemWidth(-170);
-    if (ImGui::BeginCombo("Preset", presetName(presetIdx_))) {
-        for (int i = 0; i < presetCount(); ++i)
-            if (ImGui::Selectable(presetName(i), i == presetIdx_)) loadPreset(i);
-        ImGui::EndCombo();
-    }
-    Help("Loading a preset while the engine runs swaps the engine live (the sound crossfades).");
+    presetCombo("Preset");
+    Help("Loading a preset while the engine runs swaps the engine live (the sound crossfades).\n"
+         "My engines: engines you saved or imported (Save / share this engine below).");
     ImGui::InputText("Name", p_.name, sizeof(p_.name));
+    engineFileUi();
     {
         int et = (int)p_.engineType;
         if (ImGui::Combo("Engine type", &et, "Piston (reciprocating)\0Rotary (Wankel)\0")) {

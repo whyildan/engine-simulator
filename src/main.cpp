@@ -2,6 +2,7 @@
 #include "ui/App.h"
 #include "ecu/BaseMap.h"
 #include "ecu/CalibrationIO.h"
+#include "ecu/EngineFile.h"
 #include <string>
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
@@ -157,6 +158,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
             CreateDirectoryW((root + L"\\basemaps").c_str(), nullptr);
             es::setBaseMapCacheDir(utf8(root + L"\\basemaps"));
             es::setCalibrationDir(utf8(root + L"\\calibrations"));   // created on the first save
+            es::setEngineDir(utf8(root + L"\\engines"));             // your own / imported engines
         }
         es::App app(startPreset);
         if (startSection >= 1 && startSection <= es::App::kSectionCount) app.setSection(startSection - 1);

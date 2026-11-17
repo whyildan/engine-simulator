@@ -1,4 +1,6 @@
 #include "ecu/CalibrationIO.h"
+#include "ecu/EngineFile.h"
+#include "core/MathUtil.h"
 #include "sim/EngineParams.h"
 #include <algorithm>
 #include <cmath>
@@ -6,6 +8,7 @@
 #include <cctype>
 #include <cstring>
 #include <ctime>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -286,6 +289,7 @@ std::string calibrationToJson(const Calibration& c, const CalMeta& m) {
     return o;
 }
 
+static void calibrationFromRoot(const JVal& root, Calibration& c, CalMeta& m);
 bool calibrationFromJson(const std::string& text, Calibration& c, CalMeta& m, std::string& err) {
     Parser ps{text.data(), text.data() + text.size(), {}};
     JVal root;
@@ -293,6 +297,11 @@ bool calibrationFromJson(const std::string& text, Calibration& c, CalMeta& m, st
     if (root.kind != JVal::Obj) { err = "not a calibration file"; return false; }
     const JVal* f = root.get("format");
     if (!f || f->str != "enginesim-calibration") { err = "not an enginesim calibration (missing \"format\")"; return false; }
+    calibrationFromRoot(root, c, m);
+    return true;
+}
+
+static void calibrationFromRoot(const JVal& root, Calibration& c, CalMeta& m) {
     Calibration n = c;
     if (const JVal* j = root.get("name")) m.name = j->str;
     if (const JVal* j = root.get("engine")) m.engine = j->str;
@@ -328,7 +337,6 @@ bool calibrationFromJson(const std::string& text, Calibration& c, CalMeta& m, st
     if (const JVal* t = root.get("curves"))
         for (int i = 0; i < kCalCurveCount; ++i) readCurve(t->get(calCurveInfo(i).key), calCurve(n, i));
     c = n;
-    return true;
 }
 
 // ------------------------------------------------------------------ validation
@@ -590,6 +598,314 @@ bool deleteCalibrationFile(const std::string& engine, const std::string& name) {
     bool ok = fs::remove(dir / fs::u8path(name + ".json"), ec);
     fs::remove_all(dir / fs::u8path(name + ".history"), ec);
     return ok;
+}
+
+// ================================================================== engine files
+namespace {
+enum class EfType { F, I, FA, IA };
+struct EngineField { const char* key; size_t off; EfType t; int n; };
+#define EF(k, m) {k, offsetof(EngineParams, m), EfType::F, 1}
+#define EI(k, m) {k, offsetof(EngineParams, m), EfType::I, 1}
+#define EFA(k, m, n) {k, offsetof(EngineParams, m), EfType::FA, n}
+#define EIA(k, m, n) {k, offsetof(EngineParams, m), EfType::IA, n}
+#define CF(k, m) {k, offsetof(EngineParams, comp) + offsetof(ComponentSet, m), EfType::F, 1}
+#define CI(k, m) {k, offsetof(EngineParams, comp) + offsetof(ComponentSet, m), EfType::I, 1}
+// the engine and the car, not the test bench (throttle, key, dyno, ambient air, listener, sensor faults ...)
+const EngineField kEngineFields[] = {
+    // geometry / crank
+    EI("engine_type", engineType), EI("cylinders", cylinders), EI("layout", layout), EF("bank_angle", bankAngle),
+    EF("bore_mm", bore_mm), EF("stroke_mm", stroke_mm), EF("rod_mm", rod_mm), EF("compression", compression),
+    EF("flywheel", flywheel), EIA("firing_order", firingOrder, kMaxCyl), EI("even_fire", evenFire),
+    EFA("phase", phase, kMaxCyl), EIA("bank", bank, kMaxCyl), EF("imperfection", imperfection),
+    // valvetrain
+    EI("intake_valves", intakeValves), EI("exhaust_valves", exhaustValves),
+    EF("intake_valve_dia_mm", intakeValveDia_mm), EF("exhaust_valve_dia_mm", exhaustValveDia_mm),
+    EF("intake_duration", intakeDuration), EF("exhaust_duration", exhaustDuration),
+    EF("intake_lift_mm", intakeLift_mm), EF("exhaust_lift_mm", exhaustLift_mm),
+    EF("intake_centerline", intakeCenterline), EF("exhaust_centerline", exhaustCenterline),
+    EF("intake_cam_advance", intakeCamAdvance), EF("exhaust_cam_advance", exhaustCamAdvance), EF("valve_lash_mm", valveLash_mm),
+    EI("vtec", vtec), EF("vtec_in_duration", vtecInDuration), EF("vtec_in_lift_mm", vtecInLift_mm),
+    EF("vtec_ex_duration", vtecExDuration), EF("vtec_ex_lift_mm", vtecExLift_mm), EI("vtc", vtc), EF("vtc_range", vtcRange),
+    // ignition / limiter
+    EF("base_advance", baseAdvance), EF("mech_advance", mechAdvance), EF("mech_advance_rpm", mechAdvanceRpm),
+    EF("vacuum_advance", vacuumAdvance), EF("rev_limit", revLimit), EF("redline", redline), EF("friction_mult", frictionMult),
+    EI("limiter", limiter),
+    // intake
+    EF("throttle_bore_mm", throttleBore_mm), EI("itb", itb), EF("plenum_l", plenum_L), EF("runner_len_mm", runnerLen_mm),
+    EF("runner_dia_mm", runnerDia_mm), EF("air_filter", airFilter),
+    // fuel
+    EI("fuel_system", fuelSystem), EI("injection", injection), EF("injector_ccmin", injector_ccmin), EF("afr_cruise", afrCruise),
+    EF("afr_wot", afrWot), EI("ve_learning", veLearning), EF("injection_angle", injectionAngle), EF("idle_target_rpm", idleTargetRpm),
+    EI("carb_barrels", carbBarrels), EF("venturi_mm", venturi_mm), EF("main_jet", mainJet), EF("idle_mixture", idleMixture),
+    EF("idle_screw", idleScrew), EF("accel_pump", accelPump), EF("choke", choke),
+    // exhaust
+    EI("header", header), EFA("primary_len_mm", primaryLen_mm, kMaxCyl), EF("primary_dia_mm", primaryDia_mm),
+    EF("secondary_len_mm", secondaryLen_mm), EF("collector_len_mm", collectorLen_mm), EF("collector_dia_mm", collectorDia_mm),
+    EI("crossover", crossover), EF("pipe_dia_mm", pipeDia_mm), EF("midpipe_len_mm", midpipeLen_mm), EI("cat", cat),
+    EI("resonator", resonator), EI("muffler", muffler), EF("tailpipe_len_mm", tailpipeLen_mm),
+    // rotary
+    EF("rotor_radius_mm", rotorRadius_mm), EF("eccentricity_mm", eccentricity_mm), EF("rotor_width_mm", rotorWidth_mm),
+    EF("r_intake_open", rIntakeOpen), EF("r_intake_close", rIntakeClose), EF("r_intake_area_cm2", rIntakeArea_cm2),
+    EF("r_exhaust_open", rExhaustOpen), EF("r_exhaust_close", rExhaustClose), EF("r_exhaust_area_cm2", rExhaustArea_cm2),
+    EF("apex_leak", apexLeak),
+    // forced induction
+    EI("induction", induction), EI("sc_type", scType), EF("comp_flow_gs", compFlow_gs), EF("turbine_ar", turbineAR),
+    EF("turbo_inertia", turboInertia), EF("wastegate_bar", wastegateBar), EI("intercooler", intercooler),
+    EF("ic_efficiency", icEfficiency), EF("charge_volume_l", chargeVolume_L), EI("bov", bov), EI("anti_lag", antiLag),
+    EF("boost_retard", boostRetard), EF("afr_boost", afrBoost), EF("sc_displacement_l", scDisplacement_L),
+    EF("sc_ratio", scRatio), EI("sc_bypass", scBypass),
+    // vehicle
+    EI("trans_mode", transMode), EI("gears", gears), EFA("gear_ratio", gearRatio, kMaxGears), EF("final_drive", finalDrive),
+    EF("mass_kg", mass_kg), EF("cda", cdA), EF("crr", crr), EF("tire_radius_mm", tireRadius_mm), EF("grip", grip),
+    EF("drive_frac", driveFrac), EF("clutch_torque", clutchTorque), EF("driveline_eff", drivelineEff),
+    // nitrous hardware
+    EI("nitrous", nitrous), EF("n2o_shot_hp", n2oShotHp), EI("n2o_wet", n2oWet), EF("n2o_bottle_kg", n2oBottleKg),
+    // sound character
+    EF("exhaust_rasp", exhaustRasp), EF("exhaust_punch", exhaustPunch), EF("exhaust_steep", exhaustSteep),
+    EI("sound_style", soundStyle), EF("pressure_mix", pressureMix), EF("smooth_hz", smoothHz), EI("ir_choice", irChoice),
+    EF("ir_mix", irMix),
+    // ECU hardware
+    EF("ecu_rate_hz", ecuRateHz),
+    // components
+    CI("piston_type", pistonType), CF("piston_mass_g", pistonMass_g), CF("ring_tension", ringTension), CI("rod_type", rodType),
+    CF("rod_mass_g", rodMass_g), CI("crank_type", crankType), CI("lifter", lifter), CF("spring_seat_n", springSeat_N),
+    CF("spring_open_n", springOpen_N), CI("throttle_type", throttleType), CF("dbw_response_ms", dbwResponse_ms),
+    CF("inj_dead_time_ms", injDeadTime_ms), CF("fuel_pressure_bar", fuelPressure_bar), CI("fuel_regulator", fuelRegulator),
+    CF("fuel_pump_lph", fuelPumpLph), CI("coil_type", coilType), CF("coil_energy_mj", coilEnergy_mJ),
+    CF("coil_charge_ms", coilCharge_ms), CI("plug_heat_range", plugHeatRange), CF("plug_gap_mm", plugGap_mm),
+    CF("oil_pump_capacity", oilPumpCapacity), CF("oil_relief_bar", oilRelief_bar), CF("water_pump_capacity", waterPumpCapacity),
+};
+#undef EF
+#undef EI
+#undef EFA
+#undef EIA
+#undef CF
+#undef CI
+static_assert(sizeof(Layout) == 4 && sizeof(EngineType) == 4 && sizeof(Induction) == 4 && sizeof(PistonType) == 4 &&
+              sizeof(int) == 4, "engine file fields assume 32-bit enums");
+
+std::string g_engineDir = "engines";
+
+std::string arrI(const int32_t* a, int n) {
+    std::string o = "[";
+    for (int i = 0; i < n; ++i) { if (i) o += ", "; o += std::to_string(a[i]); }
+    return o + "]";
+}
+std::string turboJson(const TurboMaps& t) {
+    std::string o = "{\n";
+    o += "    \"use_maps\": " + std::to_string(t.useMaps) + ",\n";
+    o += "    \"compressor_name\": \"" + esc(t.compName) + "\",\n";
+    o += "    \"turbine_name\": \"" + esc(t.turbName) + "\",\n";
+    o += "    \"compressor_choice\": " + std::to_string(t.compChoice) + ", \"turbine_choice\": " + std::to_string(t.turbChoice) + ",\n";
+    const CompressorMap& c = t.comp;
+    const int nl = std::clamp((int)c.nLines, 0, kCompLines);
+    o += "    \"compressor\": { \"speed\": " + arr(c.speed, nl) + ", \"points\": " + arrI(c.nPts, nl) + ",\n";
+    std::string fl = "[", pr = "[", ef = "[";
+    for (int k = 0; k < nl; ++k) {
+        const int np = std::clamp((int)c.nPts[k], 0, kCompPts);
+        if (k) { fl += ", "; pr += ", "; ef += ", "; }
+        fl += arr(c.flow[k], np); pr += arr(c.pr[k], np); ef += arr(c.eff[k], np);
+    }
+    o += "      \"flow\": " + fl + "],\n      \"pr\": " + pr + "],\n      \"eff\": " + ef + "] },\n";
+    const TurbineMap& b = t.turb;
+    const int nf = std::clamp((int)b.nFlow, 0, kTurbPts), ne = std::clamp((int)b.nEff, 0, kTurbPts);
+    o += "    \"turbine\": { \"er\": " + arr(b.er, nf) + ", \"mfp\": " + arr(b.mfp, nf) + ", \"uc\": " + arr(b.uc, ne) +
+         ", \"eff\": " + arr(b.eff, ne) + ", \"wheel_dia_mm\": " + num(b.wheelDia_mm) + " }\n  }";
+    return o;
+}
+void readTurbo(const JVal* j, TurboMaps& t) {
+    if (!j || j->kind != JVal::Obj) return;
+    if (const JVal* v = j->get("use_maps")) t.useMaps = (int32_t)v->num;
+    if (const JVal* v = j->get("compressor_name")) std::snprintf(t.compName, sizeof(t.compName), "%s", v->str.c_str());
+    if (const JVal* v = j->get("turbine_name")) std::snprintf(t.turbName, sizeof(t.turbName), "%s", v->str.c_str());
+    if (const JVal* v = j->get("compressor_choice")) t.compChoice = (int32_t)v->num;
+    if (const JVal* v = j->get("turbine_choice")) t.turbChoice = (int32_t)v->num;
+    if (const JVal* c = j->get("compressor"); c && c->kind == JVal::Obj) {
+        CompressorMap m; std::memset(&m, 0, sizeof(m));
+        int nl = 0, np = 0;
+        float pts[kCompLines] = {};
+        readArr(c->get("speed"), m.speed, kCompLines, nl);
+        readArr(c->get("points"), pts, kCompLines, np);
+        const JVal *fl = c->get("flow"), *pr = c->get("pr"), *ef = c->get("eff");
+        bool ok = nl >= 2 && np == nl && fl && pr && ef && fl->kind == JVal::Arr && pr->kind == JVal::Arr && ef->kind == JVal::Arr &&
+                  (int)fl->arr.size() >= nl && (int)pr->arr.size() >= nl && (int)ef->arr.size() >= nl;
+        for (int k = 0; ok && k < nl; ++k) {
+            int a = 0, b = 0, d = 0;
+            readArr(&fl->arr[k], m.flow[k], kCompPts, a); readArr(&pr->arr[k], m.pr[k], kCompPts, b); readArr(&ef->arr[k], m.eff[k], kCompPts, d);
+            m.nPts[k] = std::min(std::min(a, b), std::min(d, (int)pts[k]));
+        }
+        if (ok) { m.nLines = nl; t.comp = m; }
+    }
+    if (const JVal* b = j->get("turbine"); b && b->kind == JVal::Obj) {
+        TurbineMap m; std::memset(&m, 0, sizeof(m));
+        int a = 0, c = 0, d = 0, e = 0;
+        readArr(b->get("er"), m.er, kTurbPts, a); readArr(b->get("mfp"), m.mfp, kTurbPts, c);
+        readArr(b->get("uc"), m.uc, kTurbPts, d); readArr(b->get("eff"), m.eff, kTurbPts, e);
+        m.nFlow = std::min(a, c); m.nEff = std::min(d, e);
+        if (const JVal* v = b->get("wheel_dia_mm")) m.wheelDia_mm = (float)v->num;
+        if (m.nFlow >= 2 && m.nEff >= 1) t.turb = m;
+    }
+}
+std::string nowStamp() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char ts[32]; std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm);
+    return ts;
+}
+} // namespace
+
+std::string engineToJson(const EngineParams& p, const EngineMeta& m, bool withCalibration) {
+    const char* base = reinterpret_cast<const char*>(&p);
+    std::string o = "{\n";
+    o += "  \"format\": \"enginesim-engine\",\n  \"format_version\": 1,\n";
+    o += "  \"name\": \"" + esc(p.name) + "\",\n";
+    o += "  \"author\": \"" + esc(m.author) + "\",\n";
+    o += "  \"notes\": \"" + esc(m.notes) + "\",\n";
+    o += "  \"saved\": \"" + esc(m.saved) + "\",\n";
+    o += "  \"app\": \"" + esc(m.app) + "\",\n";
+    o += "  \"engine\": {\n";
+    for (const EngineField& f : kEngineFields) {
+        o += "    \"" + std::string(f.key) + "\": ";
+        switch (f.t) {
+        case EfType::F: o += num(*reinterpret_cast<const float*>(base + f.off)); break;
+        case EfType::I: o += std::to_string(*reinterpret_cast<const int32_t*>(base + f.off)); break;
+        case EfType::FA: o += arr(reinterpret_cast<const float*>(base + f.off), f.n); break;
+        case EfType::IA: o += arrI(reinterpret_cast<const int32_t*>(base + f.off), f.n); break;
+        }
+        o += ",\n";
+    }
+    o += "    \"turbo_maps\": " + turboJson(p.turbo) + "\n  }";
+    if (withCalibration) {
+        CalMeta cm; cm.name = "engine file"; cm.engine = p.name;
+        std::string cal = calibrationToJson(p.cal, cm);
+        while (!cal.empty() && (cal.back() == '\n' || cal.back() == ' ')) cal.pop_back();
+        // indent the embedded object by two spaces
+        std::string ind;
+        for (char ch : cal) { ind += ch; if (ch == '\n') ind += "  "; }
+        o += ",\n  \"calibration\": " + ind;
+    }
+    o += "\n}\n";
+    return o;
+}
+
+bool engineFromJson(const std::string& text, EngineParams& p, EngineMeta& m, std::string& err) {
+    Parser ps{text.data(), text.data() + text.size(), {}};
+    JVal root;
+    if (!ps.val(root)) { err = "JSON error near byte " + std::to_string(ps.s - text.data()) + ": " + ps.err; return false; }
+    if (root.kind != JVal::Obj) { err = "not an engine file"; return false; }
+    const JVal* f = root.get("format");
+    if (!f || f->str != "enginesim-engine") { err = "not an enginesim engine file (missing \"format\")"; return false; }
+    const JVal* e = root.get("engine");
+    if (!e || e->kind != JVal::Obj) { err = "the file has no \"engine\" section"; return false; }
+    EngineParams n = p;
+    char* base = reinterpret_cast<char*>(&n);
+    for (const EngineField& fd : kEngineFields) {
+        const JVal* j = e->get(fd.key);
+        if (!j) continue;
+        switch (fd.t) {
+        case EfType::F: if (j->kind == JVal::Num && std::isfinite(j->num)) *reinterpret_cast<float*>(base + fd.off) = (float)j->num; break;
+        case EfType::I:
+            if (j->kind == JVal::Num) *reinterpret_cast<int32_t*>(base + fd.off) = (int32_t)j->num;
+            else if (j->kind == JVal::Bool) *reinterpret_cast<int32_t*>(base + fd.off) = j->b ? 1 : 0;
+            break;
+        case EfType::FA: { int k = 0; readArr(j, reinterpret_cast<float*>(base + fd.off), fd.n, k); break; }
+        case EfType::IA: {
+            float tmp[kMaxCyl] = {}; int k = 0;
+            if (readArr(j, tmp, std::min(fd.n, kMaxCyl), k))
+                for (int i = 0; i < k; ++i) reinterpret_cast<int32_t*>(base + fd.off)[i] = (int32_t)tmp[i];
+            break;
+        }
+        }
+    }
+    readTurbo(e->get("turbo_maps"), n.turbo);
+    if (const JVal* j = root.get("name")) std::snprintf(n.name, sizeof(n.name), "%s", j->str.c_str());
+    m.name = n.name;
+    if (const JVal* j = root.get("author")) m.author = j->str;
+    if (const JVal* j = root.get("notes")) m.notes = j->str;
+    if (const JVal* j = root.get("saved")) m.saved = j->str;
+    if (const JVal* j = root.get("app")) m.app = j->str;
+    // keep the numbers in their working ranges (a hand-edited file must not crash the simulation)
+    n.cylinders = clampv((int)n.cylinders, 1, isRotary(n) ? 4 : kMaxCyl);
+    n.gears = clampv((int)n.gears, 1, kMaxGears);
+    n.bore_mm = clampv(n.bore_mm, 20.0f, 200.0f); n.stroke_mm = clampv(n.stroke_mm, 20.0f, 200.0f);
+    n.compression = clampv(n.compression, 4.0f, 25.0f); n.revLimit = clampv(n.revLimit, 1000.0f, 25000.0f);
+    if (validateFiring(n)) applyLayoutDefaults(n);   // broken firing order: the layout's default one
+    // the calibration: from the file, or a base calibration made for this engine
+    generateCalibration(n);
+    m.hasCalibration = false;
+    if (const JVal* c = root.get("calibration"); c && c->kind == JVal::Obj) {
+        const JVal* cf = c->get("format");
+        if (cf && cf->str == "enginesim-calibration") {
+            CalMeta cm;
+            calibrationFromRoot(*c, n.cal, cm);
+            m.hasCalibration = true;
+        }
+    }
+    p = n;
+    return true;
+}
+
+void setEngineDir(const std::string& dir) { g_engineDir = dir; }
+std::string engineDir() { return g_engineDir; }
+
+std::vector<EngineFileInfo> listEngineFiles() {
+    std::vector<EngineFileInfo> v;
+    std::error_code ec;
+    for (auto& e : fs::directory_iterator(fs::u8path(g_engineDir), ec)) {
+        if (!e.is_regular_file()) continue;
+        const std::string fn = e.path().filename().u8string();
+        if (fn.size() < 12 || fn.substr(fn.size() - 12) != ".engine.json") continue;
+        EngineFileInfo i;
+        i.path = e.path().u8string();
+        i.name = fn.substr(0, fn.size() - 12);
+        std::string text;
+        if (readTextFile(i.path, text)) {
+            Parser ps{text.data(), text.data() + text.size(), {}};
+            JVal root;
+            if (ps.val(root) && root.kind == JVal::Obj && root.get("format") && root.get("format")->str == "enginesim-engine") {
+                i.readable = true;
+                if (const JVal* j = root.get("name")) i.name = j->str;
+                if (const JVal* j = root.get("author")) i.author = j->str;
+                if (const JVal* j = root.get("notes")) i.notes = j->str;
+                if (const JVal* j = root.get("saved")) i.saved = j->str;
+            }
+        }
+        v.push_back(i);
+    }
+    std::sort(v.begin(), v.end(), [](const EngineFileInfo& a, const EngineFileInfo& b) { return a.name < b.name; });
+    return v;
+}
+
+bool exportEngineFile(const std::string& path, const EngineParams& p, EngineMeta& m, std::string& err) {
+    m.saved = nowStamp();
+    m.name = p.name;
+    if (!writeTextFile(path, engineToJson(p, m, true))) { err = "could not write " + path; return false; }
+    return true;
+}
+
+bool saveEngineFile(const EngineParams& p, EngineMeta& m, std::string& err, std::string* pathOut) {
+    std::string stem = engineFolderName(p.name);
+    if (stem.empty()) stem = "engine";
+    const std::string path = (fs::u8path(g_engineDir) / fs::u8path(stem + ".engine.json")).u8string();
+    if (!exportEngineFile(path, p, m, err)) return false;
+    if (pathOut) *pathOut = path;
+    return true;
+}
+
+bool loadEngineFile(const std::string& path, EngineParams& p, EngineMeta& m, std::string& err) {
+    std::string text;
+    if (!readTextFile(path, text)) { err = "could not read " + path; return false; }
+    return engineFromJson(text, p, m, err);
+}
+
+bool deleteEngineFile(const std::string& path) {
+    std::error_code ec;
+    return fs::remove(fs::u8path(path), ec);
 }
 
 } // namespace es

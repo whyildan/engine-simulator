@@ -27,33 +27,6 @@ App::~App() {
     sim_->stopThread();
 }
 
-void App::loadPreset(int i) {
-    EngineParams keep = p_;
-    p_ = makePreset(i);
-    // keep driver / audio / dyno state across presets
-    p_.ignition = keep.ignition;
-    p_.throttle = keep.throttle;
-    p_.listener = keep.listener;
-    p_.volume = keep.volume;
-    p_.oversample = keep.oversample;
-    p_.dynoMode = DynoMode::Off;
-    p_.sweepRequest = keep.sweepRequest;
-    // ambient air, dyno cell and test settings belong to the "test bench", not the engine
-    p_.baro_kPa = keep.baro_kPa; p_.coolingFan_kmh = keep.coolingFan_kmh;
-    p_.stepRpm = keep.stepRpm; p_.stepHold_s = keep.stepHold_s;
-    // stay in the car: keep driving mode and the transmission choice
-    p_.vehicle = keep.vehicle;
-    p_.transMode = keep.transMode;
-    p_.gear = keep.transMode == TransMode::Automatic ? keep.gear : 0;
-    presetIdx_ = i;
-    resetPeak();
-    baseMapInfo_.clear();
-    startBaseMap();
-    calOnPresetChanged();
-    equalPrimaries_ = true;
-    for (int c = 1; c < p_.cylinders; ++c) if (p_.primaryLen_mm[c] != p_.primaryLen_mm[0]) equalPrimaries_ = false;
-}
-
 // Win32 open dialog -> load + resample the WAV -> hand it to the simulation thread
 bool App::loadIrFile() {
     wchar_t file[MAX_PATH] = L"";

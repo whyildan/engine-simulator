@@ -40,6 +40,7 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🚗 **Drive it** | Car or motorcycle as the load: manual / auto-clutch / automatic gearbox, clutch, tyre slip, 0–100 and 1/4-mile timers. |
 | 🧪 **Virtual sensors** | Lag, noise, 10-bit ADC, transport delay, faults (open / short / stuck / noisy) and the ECU's fallbacks. |
 | 💾 **Calibration manager** | JSON calibrations per engine, version history, compare, locks, validation. |
+| 📤 **Share engines** | Save the whole engine (hardware, car, sound and its calibration) as your own preset under *My engines*, export it as one `.engine.json` file and import someone else's. |
 
 | | |
 |---|---|
@@ -260,6 +261,10 @@ build/Release/ecu_test.exe          # sensors, ECU fallbacks, closed loop, therm
 
 ```bash
 build/Release/cal_test.exe          # calibration files: JSON round trip, validation, diff, version history
+```
+
+```bash
+build/Release/engine_file_test.exe  # engine files: every preset round trips, partial / bad files, save / export / import
 ```
 
 ```bash

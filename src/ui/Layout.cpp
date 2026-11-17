@@ -59,12 +59,8 @@ void App::headerBar() {
     if (ImGui::SliderFloat("##thr", &p_.throttle, 0, 1, "Throttle %.2f")) keyThrottle_ = false;
     ImGui::SameLine();
     ImGui::SetNextItemWidth(h * 9.5f);
-    if (ImGui::BeginCombo("##preset", presetName(presetIdx_))) {
-        for (int i = 0; i < presetCount(); ++i)
-            if (ImGui::Selectable(presetName(i), i == presetIdx_)) loadPreset(i);
-        ImGui::EndCombo();
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Engine preset (swaps the engine live)");
+    presetCombo("##preset");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Engine preset or one of My engines (swaps the engine live)");
 
     // key readouts, compact digital style
     ImGui::SameLine(0, h);

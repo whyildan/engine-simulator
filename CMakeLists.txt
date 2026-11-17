@@ -105,6 +105,7 @@ add_executable(enginesim WIN32
   src/ui/Control.cpp
   src/ui/Motorsport.cpp
   src/ui/Advanced.cpp
+  src/ui/EngineFiles.cpp
   src/ui/FileDialog.cpp
   src/ui/Logging.cpp
   src/ui/Dashboard.cpp
@@ -206,3 +207,9 @@ target_link_libraries(idle_probe PRIVATE enginesim_core)
 
 add_executable(egt_trace tests/egt_trace.cpp)
 target_link_libraries(egt_trace PRIVATE enginesim_core)
+
+add_executable(engine_file_test tests/engine_file_test.cpp)
+target_link_libraries(engine_file_test PRIVATE enginesim_core)
+if(MSVC)
+  target_link_options(engine_file_test PRIVATE /STACK:16777216)
+endif()
