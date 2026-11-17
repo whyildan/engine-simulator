@@ -156,10 +156,15 @@ void WaveNetwork::step(double dt) {
     // 3) lumped nodes: pressure at pipe end equals node pressure
     for (NodeEnd& n : nodeEnds) {
         double in = inOf(n.e);
-        double pn = n.node->p() - p0_;
-        double out = pn - in;
         Pipe& pp = pipes[n.e.pipe];
         const double Z = pp.Z, rho = pp.rho;
+        // node pressure at the middle of this step's exchange with the pipe (trapezoidal: neither adds nor removes
+        // energy). Using the pressure from before the exchange lags the node's compliance by a sample, which acts
+        // as a negative resistance: with the engine at rest (no flow losses to hide it) the runner / port
+        // resonance rang up by itself - a whine at 0 rpm
+        const double k = kR * n.node->T / n.node->V * rho * dt / Z;
+        double pn = (n.node->p() - p0_ + k * in) / (1.0 + 0.5 * k);
+        double out = pn - in;
         double u = (out - in) / Z;              // volume velocity into pipe
         // never draw more than a fraction of the node's mass in one step; keep the
         // emitted wave consistent with the flow actually delivered (mass conservation)

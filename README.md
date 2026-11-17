@@ -328,6 +328,10 @@ build/Release/silence_probe.exe      # every preset must be silent with the engi
 ```
 
 ```bash
+build/Release/stop_probe.exe 0      # an engine parked at any crank angle / after key off must be silent
+```
+
+```bash
 build/Release/render_wav.exe 23 brap.wav idle=8   # record 8 s of warm idle to WAV
 ```
 

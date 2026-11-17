@@ -607,6 +607,19 @@ Implementasi:
   2.5× luas turbin (sebelumnya 1.3×: boost merayap 0.4 bar di atas pegas). Transbrake: beban converter naik dalam
   ±0.3 s (paket kopling terisi tekanan oli) dan feed-forward katup idle saat transbrake 35 %.
 
+### Setelah Fase 7 – Bunyi "ngiing" saat mesin diam
+- Gejala: di 0 rpm terdengar nada tinggi (K20A ±1.4 kHz dari intake, ±1.2 kHz dari exhaust), paling keras saat
+  katup intake sebuah silinder terbuka. Nadanya tidak meredam, malah naik lalu bertahan.
+- Penyebab: volume kecil (port, plenum, kolektor) disambung ke pipa gelombang memakai tekanan dari sebelum
+  pertukaran massa langkah itu. Telat satu sampel pada sebuah compliance bekerja seperti resistansi negatif, jadi
+  resonansi runner + port mendapat energi terus. Saat mesin jalan tertutup rugi aliran; saat diam tidak ada yang
+  meredam.
+- Perbaikan (`WaveNetwork::step`): tekanan node dihitung trapezoidal (tengah pertukaran) - tidak menambah atau
+  membuang energi. Backward Euler juga menghentikan bunyi tetapi meredam gelombang (daya puncak K20A −4 %);
+  trapezoidal −2 % (sebagian tuning gelombang sebelumnya ikut digelembungkan artefak yang sama). Base map versi 24.
+- Uji: `stop_probe` (crank diparkir tiap 30°, dan mesin dimatikan dengan kunci) - semua preset diam setelah kunci
+  dimatikan; yang tersisa hanya gerak pelan crank yang diparkir paksa di tengah kompresi (±50 Hz, meredam).
+
 ### Setelah Fase 7 – Simpan / bagikan mesin
 - **Engine Setup → Engine → Save / share this engine**: simpan mesin sendiri ke *My engines* (muncul di daftar
   preset, header dan tab Engine), **Export file...** ke satu file `.engine.json` untuk dibagikan, **Import file...**

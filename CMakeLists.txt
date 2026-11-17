@@ -213,3 +213,6 @@ target_link_libraries(engine_file_test PRIVATE enginesim_core)
 if(MSVC)
   target_link_options(engine_file_test PRIVATE /STACK:16777216)
 endif()
+
+add_executable(stop_probe tests/stop_probe.cpp)
+target_link_libraries(stop_probe PRIVATE enginesim_core)
