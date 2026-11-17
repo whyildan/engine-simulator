@@ -62,6 +62,7 @@ public:
     double baro() const { return ambientPressurePa(p_) * 1e-3; }   // kPa, the ECU's barometric sensor
     double mapUsed = 101.3;
     double driveFf_ = 0;         // idle valve feed-forward for the drive / transbrake load
+    double rpmIdle_ = 0;         // speed for the idle controllers (averaged over about one firing interval)
     // torque management / gear-based control (Phase 7)
     double tqLoad = 0;           // ECU torque estimate, % of a full naturally aspirated charge
     double tqLimit = 0;          // active limit (0 = none)

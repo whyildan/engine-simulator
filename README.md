@@ -310,6 +310,10 @@ build/Release/idle_hold.exe 30       # every preset idles 30 s on its own - repo
 ```
 
 ```bash
+build/Release/idle_probe.exe 0       # idle quality: rpm spread, idle valve jumps, cycle-to-cycle IMEP (CoV), thumps
+```
+
+```bash
 build/Release/silence_probe.exe      # every preset must be silent with the engine off
 ```
 

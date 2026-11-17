@@ -37,7 +37,12 @@ int main(int argc, char** argv) {
     if (!loadCachedBaseMap(p, c)) { measureBaseMap(p, c); saveCachedBaseMap(p, c); }
     p.cal.veMap = c.veMap; p.cal.veTps = c.veTps;
     Simulator sim(p);
-    p.ignition = 1; p.starter = 1; sim.setParams(p); run(sim, 1.2);
+    p.ignition = 1; p.starter = 1; sim.setParams(p);
+    for (int k = 0; k < 600; ++k) {   // crank until it runs on its own (a cam-synced trigger can take two turns)
+        run(sim, 0.01); Telemetry t; sim.getTelemetry(t);
+        if (t.running && t.rpm > starterReleaseRpm(p, t.snsValue[kSnsECT])) break;
+    }
+    run(sim, 0.15);
     p.starter = 0; sim.setParams(p); run(sim, 3.0);
     std::printf("[%s] sweep %.0f..%.0f rpm\n", p.name, p.sweepStartRpm, p.sweepEndRpm);
     std::printf("   rpm  torque Nm   power kW (PS)   AFR    adv   VTEC  VTC   MAP    VE   knock  protection\n");

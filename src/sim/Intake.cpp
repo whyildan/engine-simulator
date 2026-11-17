@@ -35,6 +35,7 @@ void IntakeSystem::build(const EngineParams& p, double fs, double displacement) 
         g.setPressure(kPatm);
     }
     inletFilm_.assign(nIn, 0); portFilm_.assign(n, 0);
+    backM_.assign(nIn, 0); backMf_.assign(nIn, 0); backMb_.assign(nIn, 0);
     inletFlow_.assign(nIn, 0); pending_.assign(n, 0);
     inletT_ = ambT_;
     injSpread_.resize(n);
@@ -123,33 +124,63 @@ void IntakeSystem::stepAir(double dt, double pedal, double rpm, bool fuelEnabled
     for (int k = 0; k < nIn; ++k) {
         GasNode& g = inlets_[k];
         double flow;
+        double fresh = 0;   // kg/s of fresh air coming in (not the standoff puff drawn back) - what a carb meters
+        // Gas the intake pushes back out through the throttle (reversion at low rpm and full throttle carries the
+        // fuel just injected) is not lost: with boost it goes back into the charge pipe, without it stays as a
+        // fuel-laden puff in front of the throttle (air box / velocity stack "standoff") that the next intake
+        // pulse draws in first. Dropping it lost most of the fuel at a tip-in from idle on big-overlap engines -
+        // the charges went far too lean and the engine bogged down and stalled.
         if (boosted_) {
             // throttle fed by the pressurised charge pipe; the plenum takes its temperature
             flow = limitedFlow(cda, charge_.p(), charge_.T, charge_.V, g.p(), g.T, g.V, dt, 0.4);
             if (flow >= 0) {
-                double q = std::min(flow * dt, charge_.m * 0.3);
-                double ff = charge_.fuelFrac();
-                charge_.m -= q; charge_.mf -= q * ff;
+                const double q = std::min(flow * dt, charge_.m * 0.3);
+                const double ff = charge_.fuelFrac(), bf = charge_.burnedFrac();
+                charge_.m -= q; charge_.mf -= q * ff; charge_.mb -= q * bf;
+                g.m += q; g.mf += q * ff; g.mb += q * bf;
                 flow = q / dt;
+                fresh = flow;
+            } else {
+                const double dm = std::min(-flow * dt, g.m * 0.5);
+                const double ff = g.fuelFrac(), bf = g.burnedFrac();
+                g.m -= dm; g.mf -= dm * ff; g.mb -= dm * bf;
+                charge_.m += dm; charge_.mf += dm * ff; charge_.mb += dm * bf;
             }
-            double pNow = g.p();
+            // the plenum takes the charge temperature at constant pressure (its composition stays the same)
+            const double pNow = g.p(), m0 = g.m;
             g.T += (charge_.T - g.T) * std::min(1.0, dt / 0.3);
-            g.setPressure(pNow); g.mf = std::min(g.mf, g.m);
+            g.setPressure(pNow);
+            if (m0 > 1e-12) { const double s = g.m / m0; g.mf *= s; g.mb *= s; }
         } else {
             flow = limitedFlow(cda, kPatm, inletT_, 1e3, g.p(), g.T, g.V, dt, 0.4);
-        }
-        if (flow >= 0) {
-            g.m += flow * dt;
-        } else {
-            double dm = std::min(-flow * dt, g.m * 0.5);
-            double ff = g.fuelFrac(), bf = g.burnedFrac();
-            g.m -= dm; g.mf -= dm * ff; g.mb -= dm * bf;
+            if (flow >= 0) {
+                const double q = flow * dt;
+                // the standoff puff comes back in first
+                const double t = std::min(q, backM_[k]);
+                if (t > 0) {
+                    const double ff = backMf_[k] / backM_[k], bf = backMb_[k] / backM_[k];
+                    g.mf += t * ff; g.mb += t * bf;
+                    backM_[k] -= t; backMf_[k] -= t * ff; backMb_[k] -= t * bf;
+                }
+                g.m += q;
+                fresh = (q - std::max(0.0, t)) / dt;
+            } else {
+                const double dm = std::min(-flow * dt, g.m * 0.5);
+                const double ff = g.fuelFrac(), bf = g.burnedFrac();
+                g.m -= dm; g.mf -= dm * ff; g.mb -= dm * bf;
+                // an air box keeps the puff; open velocity stacks lose much of it to the surroundings
+                const double keep = clampv(0.4 + 0.6 * (double)p_.airFilter, 0.4, 1.0);
+                backM_[k] += dm * keep; backMf_[k] += dm * ff * keep; backMb_[k] += dm * bf * keep;
+                // what does not fit in front of the throttle (about the inlet's own volume of air) drifts away
+                const double cap = 1.2 * std::max(0.3e-3, g.V);
+                if (backM_[k] > cap) { const double s = cap / backM_[k]; backM_[k] = cap; backMf_[k] *= s; backMb_[k] *= s; }
+            }
         }
         inletFlow_[k] = flow;
         totalAir += flow;
 
         if (carb) {
-            double ma = std::max(flow, 0.0);
+            double ma = std::max(flow, 0.0);   // the whole flow through the venturi makes the signal ...
             int bpi = p_.itb ? 1 : barrels;
             double av = bpi * circ(p_.venturi_mm) * 0.9;
             double rho = kPatm / (kR * inletT_);
@@ -161,7 +192,7 @@ void IntakeSystem::stepAir(double dt, double pedal, double rpm, bool fuelEnabled
             double fr = s / afrMain + (1 - s) * (idleF / afrIdle + (1 - idleF) * 0.82 / afrMain);
             fr *= 1.0 + 0.9 * std::max((double)p_.choke, 0.4 * cold_);   // manual choke or the automatic (bimetal) choke
             fr *= 1.0 + 0.5 * (1.0 - smoothstep(250, 600, rpm)); // cranking / just-started richness
-            double mf = ma * fr;
+            double mf = std::max(0.0, fresh) * fr;   // ... but the standoff puff already carries its fuel
             if (pumpFuel_ > 0) {
                 double shot = std::min(pumpFuel_, pumpFuel_ * dt / 0.15 + 1e-9) / nIn;
                 pumpFuel_ -= shot * nIn;

@@ -16,7 +16,7 @@ void Ecu::init(const EngineParams& p, double vdCyl, int ports, double revsPerEve
     evapAcc_.assign(ports, 0.0);
     lastInjT_.assign(ports, -1.0); lastAir_.assign(ports, 0.0); lastAfr_.assign(ports, 14.7);
     asyncFuel.assign(ports, 0.0);
-    iacI_ = 0.35; driveFf_ = 0; cmd = ActuatorCommands();
+    iacI_ = 0.35; driveFf_ = 0; rpmIdle_ = 0; cmd = ActuatorCommands();
 }
 
 // take the new calibration - except VE tables the tuner did not touch (they may hold auto-tune results)
@@ -368,6 +368,13 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     // MAP-rate enrichment with which the ECU itself catches a sagging idle: that is idle control, and resetting the
     // closed loop on every idle dip would keep a hunting idle out of closed loop for good
     sinceTransient_ = (std::fabs(tpsRate_) > 60.0 || std::fabs(mapRate_) > 150.0 || aeTps_ > 0.05) ? 0.0 : sinceTransient_ + dt;
+    // idle control works on the speed averaged over about one firing interval: the speed ripple between two firings
+    // made the idle spark jump from cycle to cycle (rough idle, "dung") and the valve twitch; real dips are not delayed
+    {
+        const double fire = 60.0 * revsPerEvent_ / (std::max(rpm, 300.0) * std::max(1, ports_));
+        const double tau = clampv(fire, 0.005, 0.08);
+        rpmIdle_ += (rpm - rpmIdle_) * (1.0 - std::exp(-dt / tau));
+    }
     const double d = dt > 0 ? (rpm - prevRpm_) / dt : 0.0;
     prevRpm_ = rpm;
     rpmRate_ += (d - rpmRate_) * (1.0 - std::exp(-dt / 0.12));
@@ -425,7 +432,7 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     const double idleTarget = curveLookup(cal_.idleTarget, s.value[kSnsECT]);   // fast idle when cold
     idleTargetNow = idleTarget;
     if (efi && pedal < 0.02 && rpm > 400 && rpm < idleTarget + 500)      // idle spark control
-        adv += clampv((idleTarget - rpm) * cal_.idleSparkGain, (double)cal_.idleSparkMin, (double)cal_.idleSparkMax);
+        adv += clampv((idleTarget - rpmIdle_) * cal_.idleSparkGain, (double)cal_.idleSparkMin, (double)cal_.idleSparkMax);
     adv -= soft * cal_.softLimitRetard;
     if (actRetard_ || limp) adv -= cal_.protRetard;
     if (msTimingOn_ && rpm >= 400) adv = msTiming_;              // launch / 3-step / rolling anti-lag timing
@@ -478,7 +485,7 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
         driveFf_ += (ffTarget - driveFf_) * std::min(1.0, dt / 0.12);
         if (!running) { iacI_ = 0.35; cmd.iac = 0.35; }
         else if (pedal < 0.02) {
-            double err = clampv(idleTarget - rpm, -500.0, 500.0);
+            double err = clampv(idleTarget - rpmIdle_, -500.0, 500.0);
             sinceRelease_ += dt;
             if (std::fabs(err) < 400 || sinceRelease_ > 2.5) iacI_ = clampv(iacI_ + cal_.idleKi * err * dt, 0.05, 1.0);
             dash_ *= std::exp(-dt / 0.9);

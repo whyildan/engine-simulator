@@ -200,3 +200,6 @@ target_link_libraries(phase7_test PRIVATE enginesim_core)
 if(MSVC)
   target_link_options(phase7_test PRIVATE /STACK:16777216)
 endif()
+
+add_executable(idle_probe tests/idle_probe.cpp)
+target_link_libraries(idle_probe PRIVATE enginesim_core)

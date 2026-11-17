@@ -4,8 +4,8 @@ Dokumen ini menjawab `tuning-update.md` bagian 19, langkah 1–6: memeriksa kode
 fitur yang sudah ada dan yang belum, lalu membagi pekerjaan per fase. Pekerjaan dilakukan satu fase per
 satu, dengan tes di akhir tiap fase.
 
-Status: **Fase 1–7 selesai (lihat bagian 4). Yang masih tersisa dari spesifikasi ada di tabel bagian 2 (🟡 / ❌) dan
-diringkas di "Sisa pekerjaan" di bawah tabel.**
+Status: **Fase 1–7 selesai (lihat bagian 4). Semua fitur spesifikasi di tabel bagian 2 sudah ✅, kecuali model ECU /
+I/O / CAN yang sengaja tidak didukung (➖); diesel ditunda (lihat "Sisa pekerjaan").**
 
 ---
 
@@ -79,37 +79,6 @@ Tabel ini menggambarkan kondisi setelah Fase 7 (diperbarui terhadap kode, bukan 
 **Sisa pekerjaan:**
 - Pemilihan model ECU, assignment I/O, CAN bus (§2) — sengaja tidak didukung (ditandai di ECU Setup).
 - Diesel (ditunda; fitur ECU yang menjadi syaratnya sudah selesai di Fase 7).
-
----|---|---|---|
-| 1 | Arsitektur I3–V12, flat-4/6, rotari | ✅ | Preset I5 dan flat-6 belum ada (tinggal ditambah) |
-| 1 | Bore/stroke/rod/CR/firing/limiter/inersia | ✅ | |
-| 1 | Redline terpisah, friksi yang bisa diatur | 🟡 | Friksi masih rumus tetap |
-| 1 | Komponen (piston, rod, crank, cam, pegas katup, manifold, throttle body, injector, coil, busi, pompa oli/air) | ❌ | Katalog lengkap, dan tiap komponen punya efek fisik (lihat Fase 1b) |
-| 2 | Mode injeksi sequential/batch/semi-seq | 🟡 | Saat ini hanya sequential |
-| 2 | Trigger crank/cam, CAN, I/O | ❌ | Trigger bisa disimulasikan (sinkronisasi saat start); CAN dan I/O ditandai "not supported" |
-| 2 | Speed density / Alpha-N / MAF / hybrid | 🟡 | Hanya mirip speed density; sensor MAF belum ada |
-| 3 | Tabel VE, target AFR/λ, injector + dead time, tekanan bahan bakar | 🟡 | Tabel VE ada tapi tidak bisa diedit; dead time dan tekanan bahan bakar belum ada |
-| 3 | Pengayaan cranking/warm-up/akselerasi, DFCO, after-start, trim | 🟡 | Ada, tapi hardcoded; warm-up butuh model termal |
-| 3 | Editor tabel (sel, interpolasi, smoothing, copy/paste, undo/redo, sel aktif, compare, per silinder) | ❌ | Antarmuka utama yang paling penting |
-| 3 | Permukaan 3D | ❌ | Butuh pustaka ImPlot3D (dependensi baru via FetchContent) |
-| 4 | Tabel pengapian, cranking, dwell, koreksi per silinder, koreksi suhu/beban | 🟡 | Kurva distributor ada; tabel belum ada |
-| 4 | Knock detection + retard | 🟡 | Indeks knock fisik ada; kontrolnya belum ada |
-| 5 | Turbo, wastegate, inersia, efisiensi | ✅ | |
-| 5 | Tabel boost (rpm/gigi/TPS), duty wastegate, PID, overboost, boost cut | 🟡 | Saat ini wastegate pneumatik dengan satu target |
-| 6 | Idle, rev limiter, anti-lag, VVT | 🟡 | Ada, tapi belum berupa tabel |
-| 6 | Soft/hard limiter, launch, 2-step/3-step, flat shift, DBW, VTEC, torque mgmt | ❌ | |
-| 7 | Sensor virtual (tegangan, noise, delay, gagal, fallback) | ❌ | Fondasi fase 1 |
-| 8 | Lambda STFT/LTFT, batas, kondisi learning, Auto Tune | 🟡 | Satu trim dan VE learning otomatis tersembunyi |
-| 8 | Kontrol knock per silinder, PID boost | ❌ | |
-| 9 | Proteksi dan limp mode | ❌ | Butuh model termal dan tekanan oli |
-| 10 | Fitur balap (launch, TC, nitrous, transbrake, …) | ❌ | Kendaraan dan slip ban sudah ada, jadi bisa dibangun di atasnya |
-| 11 | Dashboard live yang bisa diatur | 🟡 | Gauge ada; tata letak belum bisa diatur, sebagian channel belum ada |
-| 12 | Data logging, grafik, CSV, perbandingan sesi | ❌ | |
-| 13 | Dyno steady/sweep, perbandingan, ekspor | 🟡 | Ekspor dan satuan imperial belum ada |
-| 14 | Pemisahan fisika / sensor / ECU, frekuensi bisa diatur | ❌ | Inti fase 1 |
-| 15 | Manajemen kalibrasi (simpan, muat, versi, compare, lock, validasi) | ❌ | |
-| 16 | UI gelap padat, navigasi 12 bagian | 🟡 | Saat ini dock panel ImGui; perlu dirombak ke navigasi baru |
-| 17 | Pause/resume/reset, sesi deterministik | 🟡 | Simulasi deterministik (seed tetap); pause/reset belum ada |
 
 ---
 
@@ -497,9 +466,30 @@ Implementasi:
   `phase7_test`.
 - Ikut diperbaiki di tes: severity float berayun antar siklus begitu katup float (tes memakai nilai terburuk),
   auto-tune VE pada idle yang naik-turun diberi waktu belajar 20 s.
-- Diketahui: pada imperfection 0 (mesin rata sempurna, bukan default) tip-in dari idle bisa jatuh ke misfire kurus
-  beruntun dan mati — bahan bakar ikut lolos saat overlap besar di WOT rpm rendah. Presetnya berpindah tergantung
-  kondisi idle saat gas dibuka (Fase 6: V8 Roots, Fase 7: K20A); imperfection 0.6 / 1 / 2 tidak terpengaruh.
+- Diketahui saat itu: tip-in dari idle kadang jatuh ke misfire kurus beruntun dan mati — penyebabnya ditemukan dan
+  diperbaiki setelah Fase 7 (bahan bakar yang keluar mundur lewat throttle dihapus, lihat di bawah).
+
+### Setelah Fase 7 – Idle lebih halus
+- Gejala: idle naik-turun dan bunyi "dung" — katup idle melompat dari ±10–15 % ke 30–56 % sesaat, siklus
+  berikutnya terlalu terisi dan meledak keras, rpm terlempar lalu turun lagi.
+- Penyebab: kontrol idle (timing dan katup) memakai rpm mentah, yang ikut riak di antara dua pembakaran. Timing
+  idle (0.04°/rpm) berganti tiap siklus mengikuti riak itu → pembakaran tidak rata; error katup ikut berkedut.
+- Perbaikan: kontrol idle memakai rpm yang dirata-rata sekitar satu selang pembakaran (K20A ±35 ms, V10 ±14 ms) —
+  riak hilang, penurunan rpm yang sebenarnya tidak tertunda. Pendekatan lain (katup dibuat lambat / dibatasi lajunya)
+  diuji dan ditolak: mesin cam besar (V10, V12, flatplane, flat-6) butuh katup yang cepat dan bisa mati tanpa itu.
+- Hasil (`idle_probe`, 12 s idle): K20A ±49 → ±24 rpm, CoV IMEP 32 → 9 %, katup maks 56 → 25 %, "dung" 1 → 0;
+  I3 / I6 / V6 / I5 / flat-4 / 13B CoV 22–29 % → 10–15 %. Mesin cam besar tetap lumpy (karakter overlap).
+- **Bug bahan bakar hilang saat tip-in (diperbaiki)**: di WOT rpm rendah dengan cam overlap / IVC lambat, muatan
+  yang sudah masuk silinder terdorong balik ke port, runner, plenum, lalu keluar mundur lewat throttle. Gas yang
+  keluar mundur itu **dihapus** (NA: dianggap hilang ke atmosfer; boost: tidak masuk ke pipa charge, dan aliran
+  maju dari charge pun hanya membawa udara). Neraca bahan bakar saat blip V8 Roots: ±150–220 mg per 50 ms (60–70 %
+  dari yang disemprot) hilang di throttle → λ silinder 1.5–3 → misfire kurus beruntun → mati. Inilah stall
+  "acak" di survey sejak Fase 6 (V8 Roots / K20A, imperfection 0 / 1).
+  Sekarang: NA — gas yang keluar mundur ditahan sebagai "standoff" di depan throttle (maks ±volume inlet) dan
+  terhisap kembali lebih dulu (air box menahan semuanya, velocity stack terbuka hanya ±40 % — sisanya lepas ke
+  udara; tanpa itu 26B peripheral port banjir saat cranking); boost — masuk ke pipa charge, aliran maju membawa komposisinya; perubahan suhu
+  plenum mempertahankan komposisi. Karburator hanya menakar bahan bakar dari udara segar (puff standoff sudah
+  membawa bahan bakarnya; menakar ulang membuat AFR ±2.7 dan mati). Base map versi 22.
 
 ---
 

@@ -57,6 +57,7 @@ private:
     bool boosted_ = false;
     std::vector<GasNode> ports_;
     std::vector<double> inletFilm_, portFilm_;
+    std::vector<double> backM_, backMf_, backMb_;   // standoff: gas pushed back out in front of each throttle
     std::vector<double> inletFlow_;  // kg/s per inlet (last step)
     std::vector<double> pending_;    // EFI fuel waiting to be sprayed per cylinder (kg)
     std::vector<double> injSpread_;

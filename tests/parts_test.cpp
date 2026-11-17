@@ -2,6 +2,7 @@
 // usage: parts_test
 #include "sim/Simulator.h"
 #include "ecu/BaseMap.h"
+#include <algorithm>
 #include <cstdio>
 #include <vector>
 
@@ -24,9 +25,10 @@ static Telemetry wotHold(EngineParams p, float rpm, double seconds = 2.0) {
     sim.setParams(p);
     run(sim, seconds);
     // average the cycle torque over a second: the dyno absorber keeps the speed only on average
-    Telemetry t, avg; double tq = 0, duty = 0; int n = 0;
-    for (int k = 0; k < 20; ++k) { run(sim, 0.05); sim.getTelemetry(t); tq += t.torque; duty += t.injDuty; ++n; }
+    Telemetry t, avg; double tq = 0, duty = 0; int n = 0; float fl = 0;
+    for (int k = 0; k < 20; ++k) { run(sim, 0.05); sim.getTelemetry(t); tq += t.torque; duty += t.injDuty; fl = std::max(fl, t.floatIn); ++n; }
     avg = t; avg.torque = (float)(tq / n); avg.injDuty = (float)(duty / n);
+    avg.floatIn = fl;   // float severity swings from cycle to cycle once the valves float: the worst seen
     return avg;
 }
 
