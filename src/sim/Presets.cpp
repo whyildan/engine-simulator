@@ -396,7 +396,8 @@ EngineParams makePreset(int idx) {
         p.header = HeaderType::TriY; for (int i = 0; i < 4; ++i) p.primaryLen_mm[i] = 780;
         p.primaryDia_mm = 40; p.collectorDia_mm = 57; p.pipeDia_mm = 57; p.cat = 0; p.resonator = 0;
         p.muffler = Muffler::StraightThrough; p.revLimit = 9200; p.flywheel = 0.07f;
-        p.injector_ccmin = 380; p.idleTargetRpm = 1200; p.mechAdvanceRpm = 6000; p.mechAdvance = 24;
+        p.injector_ccmin = 380; p.idleTargetRpm = 1200; p.mechAdvanceRpm = 6000;
+        p.mechAdvance = 18;   // 30 deg at WOT: at 36 (CR 12.5) the knock control ran out of retard and the protection cut in
         p.limiter = Limiter::IgnitionCut;
         break;
     case 12: case 13: case 14: case 15: { // Wankel rotaries

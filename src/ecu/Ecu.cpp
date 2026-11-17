@@ -353,8 +353,13 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     // falling idle, a dashpot) - the MAP sensor lags the port, so speed density alone runs lean there
     // (the fast rate only while the revs are falling - catching a sagging idle; at a steady idle the manifold
     //  pulsation would make the fast rate enrich all the time, so there only the sustained rate counts)
+    // Not where the MAP is not the load signal (alpha-N, individual throttle bodies): there the MAP pulses with
+    // every intake stroke, and on a lumpy big-cam idle (revs falling half the time) it enriched by up to 40 % all
+    // the time - the idle ran at lambda 0.75, misfired, and a tip-in on top of that drowned the engine
+    const bool mapIsLoad = !s.fallback[kSnsMAP] && cal_.loadMode != LoadMode::AlphaN &&
+                           !(cal_.loadMode == LoadMode::Hybrid && tpsPct >= cal_.hybridTpsHi);
     const double mapRise = rpmRate_ < -300.0 ? std::max(mapRate_, mapRateSlow_) : mapRateSlow_;
-    if (mapRise > 20.0 && s.value[kSnsCKP] > 400.0 && tpsPct < 2.0 && !holdIac)   // (not on the calibration rig)
+    if (mapIsLoad && mapRise > 20.0 && s.value[kSnsCKP] > 400.0 && tpsPct < 2.0 && !holdIac)   // (not on the calibration rig)
         aeNow_ = std::max(aeNow_, std::min(0.4, 0.004 * (mapRise - 20.0)) * (1.0 + (cal_.accelColdMult - 1.0) * cold));
     accel = aeNow_;
     sinceCut_ += dt;
@@ -518,12 +523,14 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     }
 
     // ---- auto-tune: remember what was commanded, learn once the gas reaches the wideband
-    const bool steady = std::fabs(tpsRate_) < 20.0 && std::fabs(mapRate_) < 40.0 && aeNow_ < 0.01;
     Hist& h = hist_[histW_];
     h.t = time_; h.rpm = rpm; h.map = mapUsed; h.tps = tpsPct; h.lam = targetAfr / 14.7;
     h.w = s.fallback[kSnsMAP] ? 1.0
         : cal_.loadMode == LoadMode::Hybrid ? smoothstep(cal_.hybridTpsLo, cal_.hybridTpsHi, tpsPct)
         : cal_.loadMode == LoadMode::AlphaN ? 1.0 : 0.0;
+    // the MAP only has to be steady where it is the load signal: on individual throttle bodies (alpha-N) it
+    // pulses with every intake stroke, and requiring it steady kept the VE map from ever learning there
+    const bool steady = std::fabs(tpsRate_) < 20.0 && (h.w > 0.99 || std::fabs(mapRate_) < 40.0) && aeNow_ < 0.01;
     h.trim = trim;
     h.ok = efi && fuelling_ && steady && running && afterStart_ > 3.0 && s.value[kSnsECT] > 60.0 && targetAfr > 0 &&
            cal_.loadMode != LoadMode::Maf;

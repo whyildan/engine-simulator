@@ -620,6 +620,21 @@ Implementasi:
 - Uji: `stop_probe` (crank diparkir tiap 30°, dan mesin dimatikan dengan kunci) - semua preset diam setelah kunci
   dimatikan; yang tersisa hanya gerak pelan crank yang diparkir paksa di tengah kompresi (±50 Hz, meredam).
 
+### Setelah Fase 7 – Preset ITB (alpha-N)
+- Gejala: idle AFR ±11 (target 14.7) dengan misfire terus, mesin mati saat gas dibuka ke 30 % dari idle, dan di WOT
+  rpm tinggi proteksi knock memotong throttle (sweep dyno 6500 rpm: AFR 33, torsi anjlok).
+- Penyebab dan perbaikan:
+  1. Pengayaan laju MAP (menangkap idle yang turun pada speed density) ikut aktif pada ITB: MAP berdenyut tiap
+     langkah isap dan idle cam besar turun-naik, jadi bahan bakar +40 % hampir terus-menerus (λ 0.74). Tip-in
+     menambah pengayaan akselerasi di atasnya → λ 0.4, mesin tenggelam. Sekarang hanya bila MAP memang sinyal
+     beban (bukan alpha-N, bukan hybrid di TPS tinggi).
+  2. Auto-tune VE mensyaratkan MAP stabil, padahal pada alpha-N MAP tidak dipakai - VE ITB tidak pernah belajar.
+     Syarat MAP stabil kini hanya bila MAP ikut menentukan beban.
+  3. Spark WOT 36° pada CR 12.5: knock control kehabisan retard (> 9°) → proteksi. `mechAdvance` 24 → 18 (30°
+     WOT, seperti K20A); daya puncak sama (169 PS) karena sebelumnya knock control sudah memundurkan timing.
+- Hasil (`egt_probe 11`): idle 554 °C AFR 14.70, 3000 rpm 30 % AFR 12.90, WOT 908 °C AFR 12.81, tanpa proteksi.
+  Alat baru `op_trace <preset>`: urutan egt_probe dengan titik operasi, λ per silinder dan status proteksi.
+
 ### Setelah Fase 7 – Simpan / bagikan mesin
 - **Engine Setup → Engine → Save / share this engine**: simpan mesin sendiri ke *My engines* (muncul di daftar
   preset, header dan tab Engine), **Export file...** ke satu file `.engine.json` untuk dibagikan, **Import file...**

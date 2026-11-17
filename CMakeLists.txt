@@ -216,3 +216,6 @@ endif()
 
 add_executable(stop_probe tests/stop_probe.cpp)
 target_link_libraries(stop_probe PRIVATE enginesim_core)
+
+add_executable(op_trace tests/op_trace.cpp)
+target_link_libraries(op_trace PRIVATE enginesim_core)

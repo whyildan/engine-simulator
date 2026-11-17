@@ -332,6 +332,10 @@ build/Release/stop_probe.exe 0      # an engine parked at any crank angle / afte
 ```
 
 ```bash
+build/Release/op_trace.exe 11       # idle, 3000 rpm part load, WOT: operating point, lambda per cylinder, protection
+```
+
+```bash
 build/Release/render_wav.exe 23 brap.wav idle=8   # record 8 s of warm idle to WAV
 ```
 
