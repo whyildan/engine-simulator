@@ -78,9 +78,65 @@ Tabel ini menggambarkan kondisi setelah Fase 7 (diperbarui terhadap kode, bukan 
 
 **Sisa pekerjaan:**
 - Pemilihan model ECU, assignment I/O, CAN bus (§2) — sengaja tidak didukung (ditandai di ECU Setup).
-- Diesel (ditunda; fitur ECU yang menjadi syaratnya sudah selesai di Fase 7).
+- Diesel (ditunda; fitur ECU yang menjadi syaratnya sudah selesai di Fase 7) — Paket 4 di bawah.
 
-**Update berikutnya – posisi sensor knalpot:**
+### Rencana update berikutnya (urutan prioritas)
+
+Bobot: **S** kecil (beberapa jam) · **M** sedang (±1 sesi) · **L** besar (beberapa sesi) · **XL** sangat besar.
+
+| Urutan | Paket | Isi | Bobot | Butuh dulu | Kenapa di urutan ini |
+|---|---|---|---|---|---|
+| 1 | **Bahan bakar dan flex fuel** | pilihan bahan bakar (regular / premium / race / E10 / E20 / E85 / E100 / metanol) dengan AFR, LHV, oktan, panas penguapan, kecepatan api; sensor flex fuel + koreksi ECU otomatis | **L** | – | Fondasi: AFR stoik dan LHV sekarang konstanta tetap di ±20 tempat. Wideband (paket 2) dan diesel (paket 4) butuh sifat bahan bakar yang bisa berganti. Efeknya juga paling terasa (knock, tenaga, start dingin). |
+| 2 | **Sensor knalpot** | sensor EMAP (backpressure, rasio drive pressure, proteksi); wideband membaca gas di pipa; posisi EGT (per silinder, sebelum / sesudah turbin) | **M** | paket 1 (λ dihitung dari AFR stoik bahan bakar yang dipakai) | Pekerjaan kecil-menengah dengan manfaat tuning besar; posisi sensor ini dipakai paket 3. |
+| 3 | **Peta aliran dan kesehatan mesin** | skema jalur gas dari konfigurasi, partikel aliran (kecepatan = aliran, warna = suhu, aliran balik terlihat), warna komponen dari keadaan simulasi, panel kesehatan, hover nilai, mode diagnosis | **L** | paket 2 (sensor digambar di posisinya, EMAP di skema turbo) | Murni tampilan di atas data yang sudah ada; paling bagus setelah sensor berada di posisi nyata. |
+| 4 | **Diesel** | pembakaran kompresi (tanpa busi), injeksi langsung + timing injeksi, tanpa throttle (beban = jumlah bahan bakar), busi pijar, turbo VGT, smoke limit, EGR | **XL** | paket 1 (bahan bakar sebagai data), paket 2 (EMAP penting untuk turbo diesel) | Terbesar dan paling berbeda dari mesin bensin; dikerjakan terakhir setelah fondasinya siap. |
+
+Tiap paket ditutup dengan tes sendiri dan regresi penuh, seperti fase-fase sebelumnya.
+
+**Paket 1 – Bahan bakar dan flex fuel (detail):**
+- Pilihan bahan bakar di Engine Setup, masing-masing dengan sifat fisiknya. Nilai di bawah adalah kisaran dari
+  literatur dan masih perlu dicek ulang saat implementasi:
+
+  | Bahan bakar | RON / MON | AFR stoik | LHV MJ/kg | Panas penguapan kJ/kg | Catatan |
+  |---|---|---|---|---|---|
+  | Regular (Pertalite RON 90, US "87" AKI) | 90 / ±82 | 14.6–14.7 | ±43 | ±350 | rasio kompresi ±9–10:1 |
+  | Premium (Pertamax 92, RON 95, Pertamax Turbo 98) | 92–98 / 84–88 | 14.6–14.7 | ±43 | ±350 | rasio kompresi ±10–13:1 |
+  | Race fuel (tanpa timbal) | ±100–110 / 98–105 | ±14.0–14.7 | ±43–44 | ±350 | knock resistance tinggi |
+  | E10 | +2–3 RON di atas basisnya | ±14.0 | ±41.5 | ±400 | O₂ ±3.5 % berat |
+  | E20 | ±+5 RON | ±13.4 | ±40 | ±450 | |
+  | E85 | ±105–108 / ±88–90 | ±9.8 | ±29 | ±800 | injektor ±+35 % aliran; susah start dingin |
+  | Etanol murni (E100) | 108–110 / ±90–92 | 9.0 | 26.9 | ±900 | |
+  | Metanol (M100) | 108–109 / ±87–89 | 6.45 | 20.0 | ±1100 | injektor ±2× aliran; api hampir tak terlihat |
+
+- Efeknya di simulasi (semua harus nyata, bukan sekadar label):
+  - **AFR stoikiometri dan LHV per bahan bakar.** Sekarang `kStoich` 14.7 dan `kLHV` 44 MJ/kg adalah konstanta
+    tetap di ±20 tempat. Keduanya menentukan massa bahan bakar, energi pembakaran, dan tampilan AFR/λ.
+  - **Knock dari oktan.** Ambang indeks knock mengikuti RON/MON (sensitivitas RON − MON berpengaruh di beban
+    tinggi), sehingga bensin regular di mesin rasio kompresi tinggi knock dan knock control me-retard.
+  - **Pendinginan muatan dari panas penguapan.** Alkohol mendinginkan muatan (muatan lebih padat, ikut menahan
+    knock).
+  - **Kecepatan api.** Alkohol terbakar sedikit lebih cepat, sehingga durasi pembakaran lebih pendek.
+  - **Start dingin.** Alkohol sulit menguap saat dingin, jadi butuh pengayaan cranking/warm-up lebih besar dan bisa
+    gagal start di suhu rendah.
+  - **Injektor dan pompa.** Duty injektor naik sesuai kebutuhan massa bahan bakar.
+  - **Sensor flex fuel (wajib, bukan opsional).** Sensor kadar etanol di saluran bahan bakar (frekuensi 50–150 Hz
+    = E0–E100, ditambah suhu bahan bakar) sebagai sensor virtual baru, lengkap dengan noise, jeda, dan kegagalan.
+    ECU memakainya untuk mengoreksi otomatis:
+    - AFR stoikiometri dan pulse injektor;
+    - timing (lebih maju dengan etanol tinggi);
+    - pengayaan cranking / warm-up (alkohol susah menguap saat dingin);
+    - ambang knock.
+    Kadar etanol berubah bertahap saat mengisi bahan bakar campuran (tangki + saluran). Tanpa sensor atau saat sensor
+    rusak: ECU memakai nilai cadangan dari kalibrasi, sehingga ganti bahan bakar = kalibrasi harus disesuaikan.
+- Rujukan:
+  - [IEA AMF – sifat etanol](https://iea-amf.org/content/fuel_information/ethanol/fuel_properties)
+  - [IEA AMF – sifat metanol](https://iea-amf.org/content/fuel_information/methanol/fuel_properties)
+  - [NREL 63091 – heat of vaporization campuran etanol](https://www.nrel.gov/docs/fy15osti/63091.pdf)
+  - [SAE 2010-01-2112 – AFR stoikiometri bensin beretanol](https://saemobilus.sae.org/content/2010-01-2112)
+  - [ORNL – knock limit E85](https://bioenergykdf.ornl.gov/system/files/The%20Impact%20of%20Low%20Octane%20Hydrocarbon%20Blending%20Streams%20on%20the%20Knock%20Limit%20of%20E85_Szybist.pdf)
+  - [ESDM – jenis BBM Indonesia (RON 90 / 92 / 98)](https://www.esdm.go.id/id/media-center/news-archives/yuk-cerdas-pilih-bbm-berkualitas)
+
+**Paket 2 – Sensor knalpot (detail):**
 - **Sensor EMAP (backpressure)** untuk mesin turbo: tekanan manifold sebelum turbin (node `turbineIn` sudah
   dihitung fisika), rasio drive pressure (EMAP ÷ boost), channel log, aturan proteksi backpressure tinggi.
 - **Wideband membaca gas di pipa**: λ dihitung dari komposisi gas di collector / downpipe (bahan bakar, gas
@@ -88,6 +144,36 @@ Tabel ini menggambarkan kondisi setelah Fase 7 (diperbarui terhadap kode, bukan 
   λ = rata-rata silinder + jeda transport. Turbo: wideband setelah turbin.
 - **Posisi EGT**: opsional EGT per silinder (header), dan EGT sebelum / sesudah turbin pada mesin turbo. Sekarang
   satu termokopel di collector (= sebelum turbin pada turbo).
+
+**Paket 3 – Peta aliran dan kesehatan mesin, Live Dashboard › Flow map (detail):**
+- **Skema jalur gas yang dibangun dari konfigurasi mesin**, bukan gambar tetap:
+  - jalurnya: air filter → kompresor / supercharger → intercooler → throttle (atau ITB / karburator) → plenum /
+    runner → head dan katup → header → turbin / wastegate → katalis → muffler;
+  - mesin NA tanpa turbo dan intercooler; rotari dengan port;
+  - **gaya (sudah diputuskan):** tema aplikasi sendiri — latar gelap dengan aksen oranye, warna status hijau /
+    kuning / merah hanya untuk keadaan komponen — bukan hijau neon seperti gambar referensi, supaya orisinal dan
+    menyatu dengan UI yang sekarang.
+- **Aliran hidup:**
+  - partikel bergerak di pipa, kecepatannya mengikuti aliran massa dan warnanya mengikuti suhu gas (biru dingin →
+    oranye panas);
+  - tebal garis mengikuti tekanan;
+  - aliran balik (reversion, standoff di depan throttle, surge kompresor) terlihat sebagai partikel yang mundur.
+- **Warna komponen dari keadaan simulasi** (hijau = normal, kuning = peringatan, merah = batas):
+  - turbo: overspeed, surge, EGT sebelum turbin;
+  - intercooler: heat soak;
+  - throttle / DBW: dibatasi proteksi;
+  - head: knock, valve float;
+  - header: EGT;
+  - busi: fouling, energi percikan.
+  Ambang batasnya diambil dari aturan proteksi dan batas komponen yang sudah ada.
+- **Panel kesehatan di bawah skema:** check engine, knock, busi, sensor, katup, rod, crank, piston, perbaikan.
+  - Data dari ComponentModel (stres, damage, kegagalan), valve float, fouling, status sensor, dan aturan proteksi.
+  - Klik ikon → lompat ke panel terkait (Components, Knock control, Sensor Configuration, …).
+- **Hover / klik node** → nilai langsung: tekanan, suhu, aliran, efisiensi kompresor / turbin, rasio drive pressure
+  (bersama sensor EMAP).
+- **Mode diagnosis:** sensor yang diberi gangguan (Sensor Configuration) berkedip di posisinya pada skema; lambda dan
+  EGT digambar di posisi pemasangannya (bersama update posisi sensor knalpot).
+- Tidak termasuk: keausan jangka panjang (jarak tempuh, servis) — sudah diputuskan tidak dibuat.
 
 ---
 
