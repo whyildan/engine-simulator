@@ -32,7 +32,7 @@ void Dyno::accumulate(const Engine& e) {
     // brake torque = cycle averaged net engine torque
     sumT_ += e.netTorque(); sumAfr_ += e.lambdaAvg * kStoich; sumVe_ += e.veAvg; ++cnt_;
     sumBoost_ += (e.intake.map() - kPatm) * 1e-5;
-    sumEgt_ += e.egtAvg - 273.15;
+    sumEgt_ += e.egtProbe() - 273.15;
     sumAdv_ += e.advance();
     sumFuel_ += e.intake.fuelFlow();
     sumIat_ += e.thermal.iatC;

@@ -111,6 +111,8 @@ struct Cylinder {
     double knock = 0, knockCycle = 0;
     int cycles = 0;               // completed working cycles (the knock window counts per cycle)
     double egt = 800;
+    double tEvo = 1000;                   // K: burned gas temperature when the exhaust valve opened (blowdown)
+    double exhH = 0, exhM = 0;            // mass x temperature, mass that left during this exhaust event
     double afterfireFuel = 0;             // unburned fuel sitting in the primary
     double afterfireAir = 0;              // ... and the fresh air (oxygen) next to it
     double popPending = 0;                // afterfire pressure still to be released (Pa)

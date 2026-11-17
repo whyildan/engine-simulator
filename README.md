@@ -200,9 +200,10 @@ rebuild the engine with a short sound crossfade, without stopping it.
 - **Cylinders**: control volumes (mass, energy, fuel and burned-gas fractions), slider-crank kinematics,
   compressible orifice flow through the valves, **Wiebe** combustion whose duration depends on rpm, λ and
   residual gas, cycle-to-cycle variation, misfire (lean, rich, dilution, weak spark, fouled plug), Woschni heat
-  transfer, end-gas knock index. The EGT sensor sees the gas after the exhaust port, which loses heat to the
-  port wall (Dittus–Boelter convection, pulsating-flow factor) — so a low-flow idle reads well below the
-  in-cylinder exit temperature. Fuel that burns in the manifold (overrun pops, a spark-cut 2-step) heats the
+  transfer, end-gas knock index. The exhaust temperature is mass-weighted over each exhaust event; the gas loses
+  heat to the water-cooled port (Dittus–Boelter convection, pulsating-flow factor) and the EGT gauge is a
+  thermocouple in the header (convection from the gas, radiation to the slowly warming pipe wall) — so idle reads
+  ~450 C, full load ~850–950 C, and a lift-off barely moves it. Fuel that burns in the manifold (overrun pops, a spark-cut 2-step) heats the
   exhaust gas further — that is what spools a turbo on the 2-step.
 - **Afterfire**: unburned fuel only pops where it meets oxygen in a flammable mixture — a misfired or cut charge,
   or the overrun. The exhaust of a rich burn has no oxygen; mixture that slips through a firing cylinder
@@ -311,6 +312,10 @@ build/Release/idle_hold.exe 30       # every preset idles 30 s on its own - repo
 
 ```bash
 build/Release/idle_probe.exe 0       # idle quality: rpm spread, idle valve jumps, cycle-to-cycle IMEP (CoV), thumps
+```
+
+```bash
+build/Release/egt_trace.exe 0        # EGT at idle and WOT, and a lift-off from the redline traced every 20 ms
 ```
 
 ```bash

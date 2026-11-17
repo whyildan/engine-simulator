@@ -214,7 +214,8 @@ void Simulator::render(float* out, int frames) {
     t.stress = (float)e.stress; t.floatIn = (float)e.floatIn; t.floatEx = (float)e.floatEx;
     t.sparkMargin = (float)e.sparkMargin; t.sparkAvail = (float)e.sparkAvail; t.oilBar = (float)e.oilBar;
     t.plugTempC = (float)e.plugTempC; t.fouling = (float)e.fouling; t.damage = (float)e.damage; t.failure = e.failure;
-    t.egt = (float)e.egtAvg - 273.15f;
+    t.egt = (float)e.egtProbe() - 273.15f;        // what the EGT gauge shows (thermocouple in the header)
+    t.egtGas = (float)e.egtAvg - 273.15f;
     t.dynoLoad = (float)dyno_.load;
     t.dynoTarget = (float)dyno_.target;
     t.dynoProgress = (float)dyno_.progress;

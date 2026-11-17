@@ -69,13 +69,17 @@ public:
         vehSpeed_ = speedMs; vehGear_ = gear; wheelSpeed_ = wheelMs < 0 ? speedMs : wheelMs; shifting_ = shifting;
     }
     // carry thermal / electrical state (and the nitrous bottle) over a rebuild (structural change while running)
-    void copyThermalFrom(const Engine& o) { thermal = o.thermal; elec = o.elec; rail = o.rail; n2oBottle = o.n2oBottle; n2oRefillSeen_ = o.n2oRefillSeen_; }
+    void copyThermalFrom(const Engine& o) {
+        thermal = o.thermal; elec = o.elec; rail = o.rail; n2oBottle = o.n2oBottle; n2oRefillSeen_ = o.n2oRefillSeen_;
+        egtProbe_ = o.egtProbe_; egtWall_ = o.egtWall_;
+    }
     // nitrous: what flows now and what is left in the bottle
     double n2oFlow = 0;           // kg/s of N2O
     double n2oBottle = 0;         // kg
     static constexpr int kTrace = 1080;
     float traceP[kTrace] = {}, traceV[kTrace] = {}, traceExh[kTrace] = {}, traceInt[kTrace] = {};
-    double lambdaAvg = 1, veAvg = 0, knockMax = 0, egtAvg = 800;   // egtAvg: in the manifold (after the port)
+    double lambdaAvg = 1, veAvg = 0, knockMax = 0, egtAvg = 800;   // egtAvg: gas in the manifold (after the port)
+    double egtProbe() const { return egtProbe_; }   // K: what an EGT thermocouple in the header reads
     double egtCyl = 800;          // gas leaving the cylinders (before the port heat loss)
     int misfires = 0, afterfires = 0;   // misfires: charges with fuel that did not light (fuel-cut cycles are not counted)
     enum MisCause : int { kMisLean, kMisSpark, kMisFouled, kMisRich, kMisDilution, kMisCauseCount };
@@ -102,6 +106,8 @@ public:
     bool crankSynced() const { return crankSync_; }
     bool camSynced() const { return camSync_; }
     double lastSyncDeg = 0;       // crank degrees from the first movement to crank sync (last start)
+    double afterfireKw() const { return afPower_ * 1e-3; }      // heat of fuel burning in the exhaust
+    double exhFlowGs() const { return exhFlowAvg_ * 1e3; }      // exhaust mass flow (averaged)
     double vtcAdvance() const { return vtcNow_; }       // intake cam advance now, crank deg
 
 private:
@@ -133,6 +139,8 @@ private:
     int n2oRefillSeen_ = -1;
     double n2oCool_ = 0;          // K the port charge is cooled by the evaporating nitrous
     double afHeatJ_ = 0, afPower_ = 0;
+    double exhOutKg_ = 0;         // gas that left the cylinders this step
+    double egtProbe_ = 300, egtWall_ = 300;   // EGT thermocouple tip and header wall (K)
     double sinceCutS_ = 10;       // s since the last fuel cut (limiter / decel cut)   // afterfire heat released in the manifold (J this step, W smoothed)
     void nitrousStep(double dt);
     bool fuelCutNow_ = false;

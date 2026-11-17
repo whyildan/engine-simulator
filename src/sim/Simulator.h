@@ -17,7 +17,7 @@ struct Telemetry {
     float rpm = 0, crankDeg = 0, torque = 0, powerKw = 0;
     float mapKPa = 101, afr = 14.7f, targetAfr = 14.7f, ve = 0;
     float airFlow = 0, fuelFlow = 0, injDuty = 0, advance = 0, iac = 0;
-    float knock = 0, egt = 0, dynoLoad = 0, dynoTarget = 0, dynoProgress = 0;
+    float knock = 0, egt = 0, egtGas = 0, dynoLoad = 0, dynoTarget = 0, dynoProgress = 0;
     int dynoState = 0, dynoRun = 0;
     int misfires = 0, afterfires = 0;
     bool running = false, limiter = false;

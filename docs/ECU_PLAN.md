@@ -80,6 +80,15 @@ Tabel ini menggambarkan kondisi setelah Fase 7 (diperbarui terhadap kode, bukan 
 - Pemilihan model ECU, assignment I/O, CAN bus (§2) — sengaja tidak didukung (ditandai di ECU Setup).
 - Diesel (ditunda; fitur ECU yang menjadi syaratnya sudah selesai di Fase 7).
 
+**Update berikutnya – posisi sensor knalpot:**
+- **Sensor EMAP (backpressure)** untuk mesin turbo: tekanan manifold sebelum turbin (node `turbineIn` sudah
+  dihitung fisika), rasio drive pressure (EMAP ÷ boost), channel log, aturan proteksi backpressure tinggi.
+- **Wideband membaca gas di pipa**: λ dihitung dari komposisi gas di collector / downpipe (bahan bakar, gas
+  terbakar, udara) — misfire dan campuran yang lolos saat overlap ikut terbaca seperti sensor sungguhan. Sekarang
+  λ = rata-rata silinder + jeda transport. Turbo: wideband setelah turbin.
+- **Posisi EGT**: opsional EGT per silinder (header), dan EGT sebelum / sesudah turbin pada mesin turbo. Sekarang
+  satu termokopel di collector (= sebelum turbin pada turbo).
+
 ---
 
 ## 3. Arsitektur target
@@ -490,6 +499,27 @@ Implementasi:
   udara; tanpa itu 26B peripheral port banjir saat cranking); boost — masuk ke pipa charge, aliran maju membawa komposisinya; perubahan suhu
   plenum mempertahankan komposisi. Karburator hanya menakar bahan bakar dari udara segar (puff standoff sudah
   membawa bahan bakarnya; menakar ulang membuat AFR ±2.7 dan mati). Base map versi 22.
+
+### Setelah Fase 7 – EGT
+- Gejala: EGT idle terlalu tinggi (single thumper 730–750 °C, mesin nyata ±350–500 °C), EGT naik tajam saat gas
+  dilepas dari putaran tinggi (K20A +360 K, single carb sampai 1370 °C), padahal EGT WOT justru terlalu rendah
+  (K20A ±550 °C, mesin nyata ±850–950 °C).
+- Penyebab dan perbaikan:
+  1. Suhu gas keluar silinder dirata-rata dengan bobot q / massa yang tersisa di silinder: gas terakhir (overlap,
+     dingin di WOT; residu panas di idle) paling menentukan. Sekarang rata-rata berbobot massa per event buang.
+  2. Campuran yang lolos saat overlap menyala di port bila gas blowdown (suhu saat katup buang membuka) panas, bukan
+     menurut rata-rata gas yang sudah tercampur campuran dingin.
+  3. Panas afterfire dibagi aliran gas buang yang sebenarnya keluar dari silinder (bukan aliran throttle yang
+     langsung berhenti saat gas dilepas), dirata-rata sama; kenaikan suhu dibatasi 700 K.
+  4. Sensor EGT = termokopel di header: konveksi dari gas (kuat di aliran cepat, lemah di idle / saat gas dilepas),
+     radiasi ke dinding pipa yang memanas pelan. Di idle membaca jauh di bawah suhu gas, di WOT hampir sama.
+  5. Port buang (didinginkan air) mengambil lebih banyak panas dari gas idle yang lambat (batas Nusselt laminar).
+- Hasil (`egt_trace`): idle K20A 641 → 445 °C, single thumper 744 → 522 °C, I4 turbo 704 → 485 °C; WOT K20A
+  544 → 825 °C, I4 turbo 976 °C (sebelum turbin), 13B 895 °C. Lepas gas dari redline: K20A +64 K lalu turun,
+  single carb +56 K. Suhu gas di WOT ikut menentukan kecepatan gelombang di pipa → base map versi 23.
+- Ikut menyesuaikan: gas WOT yang lebih panas memberi turbin lebih banyak energi — wastegate kini bisa membuang
+  2.5× luas turbin (sebelumnya 1.3×: boost merayap 0.4 bar di atas pegas). Transbrake: beban converter naik dalam
+  ±0.3 s (paket kopling terisi tekanan oli) dan feed-forward katup idle saat transbrake 35 %.
 
 ---
 

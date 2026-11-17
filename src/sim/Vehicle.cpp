@@ -91,7 +91,8 @@ double Vehicle::step(double dt, double we, const EngineParams& p, double& pedal)
         if (transbrake) {
             const double stall = std::max(2200.0, 0.45 * (double)p.revLimit);
             const double tConv = 0.6 * std::max(10.0f, p.clutchTorque) * (rpm / stall) * (rpm / stall);
-            autoEng_ = clampv(tConv / std::max(10.0f, p.clutchTorque), 0.0, 1.0);
+            // the clutch packs fill with line pressure in ~0.3 s: the converter load builds up, it does not slam on
+            autoEng_ = std::min(clampv(tConv / std::max(10.0f, p.clutchTorque), 0.0, 1.0), autoEng_ + 3.0 * dt);
         }
         // the driver can still override with the pedal
         engagement = std::min(autoEng_, smoothstep(0.15, 0.85, 1.0 - clampv((double)p.clutchPedal, 0.0, 1.0)));

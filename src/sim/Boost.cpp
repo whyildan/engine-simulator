@@ -226,7 +226,8 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
             const double unit = orificeFlow(1.0, tin.p(), tin.T, tin.p() / er);
             if (unit > 1e-12) aT = std::max(1e-6, mMap / unit);
         }
-        double aWg = wgPos_ * aT * 1.3;
+        // a wide-open wastegate bypasses most of the exhaust (real ports pass ~2-3x the turbine's flow area)
+        double aWg = wgPos_ * aT * 2.5;
         double flow = limitedFlow(aT + aWg, tin.p(), tin.T, tin.V, tout.p(), tout.T, tout.V, dt, 0.35);
         double qf = flow * dt;
         GasNode& s = qf >= 0 ? tin : tout;

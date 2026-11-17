@@ -203,3 +203,6 @@ endif()
 
 add_executable(idle_probe tests/idle_probe.cpp)
 target_link_libraries(idle_probe PRIVATE enginesim_core)
+
+add_executable(egt_trace tests/egt_trace.cpp)
+target_link_libraries(egt_trace PRIVATE enginesim_core)

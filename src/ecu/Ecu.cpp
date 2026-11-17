@@ -480,7 +480,7 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
         double ffTarget = 0;
         if (p_.vehicle && s.value[kSnsGear] > 0.5) {
             if (p_.transMode == TransMode::Automatic) ffTarget = 0.05;
-            if (s.in.transbrake && p_.transMode != TransMode::Manual) ffTarget = 0.22;
+            if (s.in.transbrake && p_.transMode != TransMode::Manual) ffTarget = 0.35;
         }
         driveFf_ += (ffTarget - driveFf_) * std::min(1.0, dt / 0.12);
         if (!running) { iacI_ = 0.35; cmd.iac = 0.35; }

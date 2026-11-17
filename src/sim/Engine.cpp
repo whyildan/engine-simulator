@@ -31,6 +31,8 @@ Engine::Engine(const EngineParams& p, double fs) : p_(p), fs_(fs) {
     exhaust.build(p_, phase_, fs);
     boost.init(p_, fs);
     thermal.init(p_);
+    // EGT probe and header wall: at ambient on a cold start, still warm on a warm one
+    egtWall_ = egtProbe_ = ambT_ + (p_.coldStart ? 0.0 : 250.0);
     elec.volts = 12.6;
     rail.pressureBar = 0.5;
     sensors.reset(p_);
@@ -244,7 +246,7 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
         t.knockCyl[port] = std::max(t.knockCyl[port], cyls_[i].knock);
         t.knockSeq[port] += cyls_[i].cycles;
     }
-    t.v[kSnsEGT] = egtAvg - 273.15;
+    t.v[kSnsEGT] = egtProbe_ - 273.15;
     t.v[kSnsOilP] = oilBar;
     t.v[kSnsOilT] = thermal.oilC;
     t.v[kSnsFuelP] = rail.pressureBar;
@@ -373,6 +375,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     Ai *= 1.0 + 0.02 * imp * sprPort_[0][port];
     Ae *= 1.0 + 0.02 * imp * sprPort_[1][port];
     bool inOpen = Ai > 0, exOpen = Ae > 0;
+    if (exOpen && !c.prevExhaustOpen) c.tEvo = c.T;
     double ffC = c.m > 0 ? c.mf / c.m : 0, bfC = c.m > 0 ? c.mb / c.m : 0;
 
     if (Ai > 0) {
@@ -398,9 +401,11 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             q = std::min(q, c.m * 0.3);
             ep.m += q; ep.mf += q * ffC; ep.mb += q * bfC;
             dm -= q; dmf -= q * ffC; dmb -= q * bfC;
+            exhOutKg_ += q;
             dU -= q * kCp * c.T;
-            double w = clampv(q / (c.m + 1e-9), 0.0, 1.0);
-            c.egt += (c.T - c.egt) * w * 0.5;
+            // mass-weighted over the whole exhaust event (weighting by what is left in the cylinder made the last,
+            // cool overlap gas count most: a full-load EGT came out hundreds of K too low)
+            c.exhH += q * c.T; c.exhM += q;
             const double airOut = q * std::max(0.0, 1.0 - ffC - bfC);
             if (c.burning) {
                 // the flame is still going when the exhaust valve opens (late / slow burn at high rpm): the mixture
@@ -418,6 +423,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             double ff = ep.fuelFrac(), bf = ep.burnedFrac();
             ep.m -= q; ep.mf -= q * ff; ep.mb -= q * bf;
             dm += q; dmf += q * ff; dmb += q * bf;
+            exhOutKg_ -= q;   // (net flow out of the cylinders)
             dU += q * kCp * ep.T;
         }
     }
@@ -436,6 +442,10 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
         c.pIvc = c.p; c.tIvc = c.T;
     }
     c.prevIntakeOpen = inOpen;
+    if (!exOpen && c.prevExhaustOpen && c.exhM > 1e-9) {   // exhaust valve closed: this cycle's exhaust temperature
+        c.egt += (c.exhH / c.exhM - c.egt) * 0.6;
+        c.exhH = c.exhM = 0;
+    }
     c.prevExhaustOpen = exOpen;
 
     // ---- injection event (EFI)
@@ -657,7 +667,9 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
         // a firing cylinder under load fills its port with hot, fast gas: mixture that slips through (scavenging
         // with a big overlap, late burning) burns there as a continuous flame. Pops need a pocket of mixture - an
         // unburned (misfired or cut) charge, or the cooler gas of the overrun.
-        if (!c.misfired && c.egt > 900 && burnable > 0) {
+        // (the hot blowdown gas lights it - the overlap flow itself is cool fresh mixture, so the average temperature
+        //  of everything leaving the cylinder would wrongly keep a scavenging engine's slip from ever burning)
+        if (!c.misfired && std::max(c.egt, c.tEvo) > 900 && burnable > 0) {
             const double b = burnable * std::min(1.0, dt / 0.004);
             c.afterfireFuel -= b; c.afterfireAir = std::max(0.0, c.afterfireAir - b * kStoich);
             afHeatJ_ += b * kLHV * 0.9;
@@ -754,11 +766,15 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     // for the pulsating flow) over port + manifold run of ~4 port diameters: little loss at full flow, a lot at
     // idle, where the slow gas spends long in the port - that is why a real idle EGT is only some 300-550 C.
     {
-        exhFlowAvg_ += (std::max(0.0, intake.airFlow() + intake.fuelFlow()) - exhFlowAvg_) * std::min(1.0, dt / 0.2);
+        // the gas actually leaving the cylinders (the throttle flow stops at once on a lift-off, the exhaust flow
+        // does not), averaged like the afterfire heat below so that the two always describe the same gas
+        exhFlowAvg_ += (exhOutKg_ / std::max(1e-6, dt) - exhFlowAvg_) * std::min(1.0, dt / 0.15);
+        exhFlowAvg_ = std::max(0.0, exhFlowAvg_);
+        exhOutKg_ = 0;
         const double D = clampv((double)p_.primaryDia_mm, 20.0, 90.0) * 1e-3;
         const double mPort = std::max(1e-5, exhFlowAvg_ / std::max(1, nPorts_));
         const double Re = 4.0 * mPort / (kPi * D * 4.0e-5);
-        const double Nu = 1.8 * std::max(8.0, 0.023 * std::pow(Re, 0.8) * 0.9);
+        const double Nu = 1.8 * std::max(14.0, 0.023 * std::pow(Re, 0.8) * 0.9);
         const double hA = Nu * 0.06 / D * kPi * D * (4.0 * D);
         const double ntu = hA / (mPort * 1150.0);
         const double Tw = thermal.coolantC + 273.15 + 120.0;
@@ -769,8 +785,24 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
         // gas downstream of the port - this is what spools a turbo on the 2-step
         afPower_ += (afHeatJ_ / std::max(1e-6, dt) - afPower_) * std::min(1.0, dt / 0.15);
         afHeatJ_ = 0;
-        Tport += std::min(900.0, afPower_ / (std::max(2e-3, exhFlowAvg_) * 1150.0));
+        // (a burning pocket cannot heat the gas beyond a stoichiometric flame of it: a few hundred K at most)
+        Tport += std::min(700.0, afPower_ / (std::max(1e-3, exhFlowAvg_) * 1150.0));
         egtAvg += (Tport - egtAvg) * a;
+
+        // EGT sensor: a sheathed thermocouple in the header. Its tip takes heat from the gas by convection (strong in
+        // the fast gas at full load, weak in the slow gas at idle / on a lift-off) and loses it by radiation to the
+        // cooler pipe wall, which itself warms up slowly. So at idle it reads well below the gas, follows the gas
+        // closely at full load, and a short hot burst at low flow barely moves it.
+        const double area = kPi * 0.25 * D * D;
+        const double G = mPort / area;                                // kg / m^2 s through a primary
+        const double hProbe = 800.0 * std::sqrt(std::max(0.02, G) / 32.0);
+        const double hGasWall = 120.0 * std::pow(std::max(0.02, G) / 32.0, 0.8);
+        const double hOut = 20.0 + 1.2 * std::min(40.0, vehSpeed_);   // pipe outside: radiation + air
+        const double Ta = ambT_;
+        egtWall_ += dt * (hGasWall * (egtAvg - egtWall_) - hOut * (egtWall_ - Ta)) / 4200.0;
+        const double Tp = egtProbe_, Twl = egtWall_;
+        const double hRad = 4.0 * 0.8 * 5.67e-8 * std::pow(0.5 * (Tp + Twl), 3.0);
+        egtProbe_ += dt * (hProbe * (egtAvg - Tp) - hRad * (Tp - Twl)) / 560.0;
     }
     exhaust.setGasTemp(egtAvg);   // pipe sound speed follows the gas temperature
     knockMax = std::max(kn, knockMax - dt * 0.5);
