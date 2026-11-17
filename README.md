@@ -45,9 +45,9 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | | |
 |---|---|
 | ![VE map editor with 3D surface](docs/images/ve-map-3d.png) | ![Live dashboard](docs/images/dashboard.png) |
-| *Fuel Tuning — VE map with operating point and 3D surface* | *Live Dashboard — gauges, readouts, cylinder pressure scope* |
+| *Fuel Tuning — VE map with operating point and 3D surface* | *Live Dashboard — gauges, readouts, rotatable 2.5D engine view* |
 | ![Engine setup](docs/images/engine-setup.png) | ![Engine protection](docs/images/protection.png) |
-| *Engine Setup — geometry, firing order, animated engine* | *Engine Protection — rules, live state, actions* |
+| *Engine Setup — geometry, firing order, engine view (K20A i-VTEC)* | *Engine Protection — rules, live state, actions* |
 
 ## Getting started
 
