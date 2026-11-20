@@ -136,7 +136,7 @@ private:
     void pollBaseMap();
     std::thread bmThread_;
     BaseMapProgress bmProg_;
-    std::atomic<bool> bmDone_{false};
+    std::atomic<bool> bmDone_{false}, bmFailed_{false};
     bool bmRunning_ = false;
     EngineParams bmFor_{};
     Calibration bmResult_{};

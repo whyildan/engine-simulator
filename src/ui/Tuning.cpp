@@ -15,6 +15,13 @@ using namespace ui;
 // ------------------------------------------------------------------ base map job (background thread)
 void App::startBaseMap(bool force) {
     stopBaseMap();
+    if (isDiesel(p_)) {
+        // a diesel fuels by quantity and holds its smoke limit on the air flow meter: the throttle-sweep VE rig
+        // does not apply (the VE maps only back up a failed MAF sensor) - nothing to measure
+        baseMapInfo_ = "diesel: no base map needed (fuel by quantity, smoke limit on the MAF; VE maps only back up a failed MAF)";
+        bmKeyApplied_ = airPathKey(p_); bmVeApplied_ = p_.cal.veMap; bmTpsApplied_ = p_.cal.veTps; bmStale_ = false;
+        return;
+    }
     if (!force) {
         Calibration c = p_.cal;
         if (loadCachedBaseMap(p_, c)) {
@@ -27,12 +34,16 @@ void App::startBaseMap(bool force) {
     }
     bmFor_ = p_;
     bmProg_.fraction = 0; bmProg_.cancel = false;
-    bmDone_ = false; bmRunning_ = true;
+    bmDone_ = false; bmFailed_ = false; bmRunning_ = true;
     bmVeBefore_ = p_.cal.veMap; bmTpsBefore_ = p_.cal.veTps;
     bmThread_ = std::thread([this] {
         Calibration c = bmFor_.cal;
         bool ok = measureBaseMap(bmFor_, c, &bmProg_, 48000.0 * std::max(1, (int)bmFor_.oversample));
-        if (ok) { bmResult_ = c; saveCachedBaseMap(bmFor_, c); bmDone_ = true; }
+        if (ok) { bmResult_ = c; saveCachedBaseMap(bmFor_, c); }
+        else if (bmProg_.cancel) return;   // (cancelled: stopBaseMap() ends the run)
+        // done either way: a run that could not measure must not leave the UI "measuring..." for ever
+        bmFailed_ = !ok;
+        bmDone_ = true;
     });
 }
 
@@ -45,6 +56,7 @@ void App::pollBaseMap() {
     if (!bmRunning_ || !bmDone_) return;
     if (bmThread_.joinable()) bmThread_.join();
     bmRunning_ = false;
+    if (bmFailed_) { baseMapInfo_ = "base map could not be measured for this engine (generic VE maps kept)"; return; }
     // only take it if the tuner did not edit the VE maps meanwhile and it is still the same engine
     bool same = airPathKey(bmFor_) == airPathKey(p_);
     if (same && std::memcmp(&p_.cal.veMap.v, &bmVeBefore_.v, sizeof(bmVeBefore_.v)) == 0 && !p_.cal.veMap.locked)
@@ -105,7 +117,8 @@ void App::sectionFuelTuning() {
     const Calibration* ref = hasRef_ ? &refCal_ : nullptr;
     OpPoint opMap; opMap.x = tel_.ecuLoadX; opMap.y = tel_.ecuLoadY; opMap.valid = tel_.running && efi;
     OpPoint opTps = opMap; opTps.y = tel_.ecuTps;
-    if (!efi) ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "Carburettor: the fuel maps are not used (mixture comes from jets / choke). Switch to EFI in the Fuel system tab.");
+    if (isDiesel(p_)) ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "Diesel: these petrol fuel maps are not used - the diesel's fuel demand, injection timing, smoke limit and EGR maps are in Engine Control > Diesel.");
+    else if (!efi) ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "Carburettor: the fuel maps are not used (mixture comes from jets / choke). Switch to EFI in the Fuel system tab.");
     if (ImGui::BeginTabBar("fueltabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
         if (ImGui::BeginTabItem("Setup")) {
             ImGui::PushItemWidth(-260);
