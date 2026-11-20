@@ -559,6 +559,19 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
         }
         cmd.dieselFuelMg = std::max(0.0, q);
         cmd.soi = tableLookup(cal_.soi, std::max(rpm, (double)p_.idleTargetRpm * 0.5), cmd.dieselFuelMg);
+        // pilot: taken out of the demanded quantity, ahead of the main injection by its own duration plus the dwell
+        cmd.pilotMg = 0; cmd.pilotSoi = cmd.soi;
+        // (rpm limit with 200 rpm of hysteresis: no switching on and off with every wobble of the revs)
+        if (rpm > cal_.pilotMaxRpm) pilotRpmOk_ = false;
+        else if (rpm < cal_.pilotMaxRpm - 200.0) pilotRpmOk_ = true;
+        if (running && cal_.pilotMg > 0 && pilotRpmOk_ && cmd.dieselFuelMg > 2.0 * cal_.pilotMg) {
+            cmd.pilotMg = cal_.pilotMg;
+            cmd.dieselFuelMg -= cmd.pilotMg;
+            const double dwellUs = lerp((double)cal_.pilotDwellIdleUs, (double)cal_.pilotDwellUs,
+                                        smoothstep((double)p_.idleTargetRpm, std::max(p_.idleTargetRpm + 100.0, 1500.0), rpm));
+            const double ms = cmd.pilotMg / std::max(1.0, (double)p_.dieselInjRate) + std::max(0.0, dwellUs) * 1e-3;
+            cmd.pilotSoi = cmd.soi + ms * 1e-3 * 6.0 * std::max(rpm, 300.0);
+        }
         fuelling_ = cmd.dieselFuelMg > 0 && !cmd.fuelCut;
         targetAfr = 0;
         // EGR: valve from its map over speed and fuel quantity, only on a warm running engine (none in limp mode)

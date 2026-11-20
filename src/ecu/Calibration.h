@@ -212,6 +212,12 @@ struct Calibration {
     Curve1D glowPreheat;    // s over coolant C
     float afterglowTime;    // s
     float afterglowEct;     // C
+    // pilot injection: a small injection before the main one - it lights first and shortens the main injection's
+    // ignition delay (less premixed burn, less combustion noise)
+    float pilotMg;          // mg (0 = off)
+    float pilotDwellUs;     // us from the end of the pilot to the start of the main injection (from 1500 rpm)
+    float pilotDwellIdleUs; // ... at idle (blended to pilotDwellUs by 1500 rpm): the pilot needs time to light first
+    float pilotMaxRpm;      // rpm: no pilot above
     // exhaust gas recirculation (Package 4b): valve opening over rpm x fuel, only with a warm engine
     Table2D egrMap;         // % over rpm x fuel mg/stroke
     float egrMinEct;        // C

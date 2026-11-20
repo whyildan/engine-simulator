@@ -40,7 +40,9 @@ struct ActuatorCommands {
     double dwellMs = 3.0;         // coil dwell
     // diesel (Package 4)
     double dieselFuelMg = 0;      // fuel per injection, mg/stroke
-    double soi = 0;               // start of injection, deg BTDC
+    double soi = 0;               // start of injection, deg BTDC (main injection)
+    double pilotMg = 0;           // pilot injection, mg (0 = none)
+    double pilotSoi = 0;          // its start, deg BTDC
     bool glow = false;            // glow plugs powered
     double egr = 0;               // EGR valve opening 0..1
 };
@@ -126,6 +128,7 @@ private:
     // idle control
     double iacI_ = 0.35, dash_ = 0, sinceRelease_ = 10, prevRpm_ = 0, rpmRate_ = 0, afterStart_ = 0;
     double dIdleI_ = 0;           // diesel idle governor integral (mg/stroke)
+    bool pilotRpmOk_ = true;      // pilot injection below its rpm limit (hysteresis)
     int glowPhase_ = 0;           // 0 key off, 1 pre-heat / cranking, 3 running (post-heat)
     double keyT_ = 0, preheatS_ = 0, afterT_ = 0; bool afterOk_ = false;
     bool limiterOn_ = false;

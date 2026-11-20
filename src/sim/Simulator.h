@@ -20,6 +20,7 @@ struct Telemetry {
     float knock = 0, egt = 0, egtGas = 0, dynoLoad = 0, dynoTarget = 0, dynoProgress = 0;
     // diesel (Package 4)
     float dieselFuelMg = 0, soi = 0, ignDelayDeg = 0; bool smokeLimited = false;
+    float pilotMg = 0, pilotSoi = 0, mainDelayDeg = 0;   // pilot injection; the main injection's own delay after it
     float glowTipC = 0; bool glowOn = false, glowLight = false;
     float egrPos = 0, egrGs = 0, egrRate = 0, vgtOpen = 0;   // EGR valve 0..1, flow g/s, share of the charge; VGT vane opening
     int dynoState = 0, dynoRun = 0;

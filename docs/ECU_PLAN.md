@@ -198,7 +198,7 @@ implementasi" di bagian 4.
   - **versi wajib dinaikkan tiap fisika yang ikut diukur berubah** — terlewat sesudah Kelompok B dan perubahan misfire
     (peta v29 tetap dipakai); diperbaiki: versi 30.
 
-**Paket 4 – Diesel (detail):** tahap 4a, 4b dan 4c selesai (lihat bagian 4). Rujukan dicek identitas dan abstraknya; persamaan dan konstanta dibaca
+**Paket 4 – Diesel (detail):** tahap 4a, 4b dan 4c selesai, plus tunda Assanis dan injeksi pilot (lihat bagian 4). Rujukan dicek identitas dan abstraknya; persamaan dan konstanta dibaca
 dari sumber aslinya saat implementasi (seperti Kelompok A).
 - **Bahan bakar:** solar sebagai data bahan bakar (paket 1): AFR stoik, LHV, densitas, angka setana (bukan oktan).
 - **Penyalaan:** tanpa busi; tunda penyalaan (ignition delay) dari kondisi silinder dan angka setana — korelasi
@@ -1183,6 +1183,36 @@ persamaan dicek oleh agen riset); konstanta hasil fit mereka milik mesin mereka 
 - **Batas**: konstanta f_vgt dan peta EGR / target boost adalah kalibrasi; efisiensi turbin tidak bergantung posisi
   vane; tanpa pendingin EGR (suhu intake tinggi); NOx / jelaga tidak dimodelkan (EGR di sini hanya mengencerkan dan
   memanaskan).
+
+### Paket 4 lanjutan – tunda Assanis dan injeksi pilot ✅
+- **Tunda penyalaan**: korelasi Assanis et al. (J. Eng. Gas Turbines Power 125, 2003) τ = 2.4 φ^−0.2 p^−1.02
+  exp(2100/T) ms menggantikan HH di mesin (HH tetap ada sebagai fungsi dan di tes). Assanis peka suhu dan tekanan
+  muatan (HH hampir tidak peka suhu — lihat 4c); efek cetane tidak ada di Assanis, jadi faktor cetane HH (E_A =
+  618840/(CN+25)) dipakai **relatif terhadap CN 51** di atas 12.9 bar. φ = bahan bakar siklus itu / udara.
+- **Injeksi pilot**: Busch et al. (Sandia, SAND2015-2001 / SAE 2015-01-0796): pilot 1.5 mg di 1500 rpm, IMEPg 9 bar,
+  bising pembakaran turun ±6 dB untuk dwell > ±200 µs. ECU: `pilot_mg` 1.5, dwell 300 µs dari 1500 rpm, **1000 µs di
+  idle** (dipilih: tunda pilot sendiri ±0.5 ms di idle — dengan 300 µs pilot belum menyala saat main mulai), sampai
+  3000 rpm dengan histeresis 200 rpm. Kuantitas main = permintaan − pilot.
+- **Mesin**: pilot dan main punya jam pembakaran sendiri. Pilot yang sudah menyala saat main mulai: main mendapat
+  tunda sendiri (integral yang sama, dari keadaan muatan yang sudah dipanaskan pilot), **dibagi `kPilotMainDelayDiv` =
+  2.2** — kalibrasi: efek suhu saja hanya memberi −2.8 dB (dan +2…3 dB di beban lebih tinggi); dengan 2.2 hasilnya
+  ±6 dB seperti Busch. Bahan bakar main yang disuntikkan selama tundanya → premixed main; sisanya difusi + ekor dari
+  saat main menyala. Pilot yang belum menyala saat main mulai: satu pembakaran biasa (premixed = semua yang sudah
+  disuntikkan).
+- **Perbaikan**: (1) pilot menyala / mati bolak-balik di batas rpm (3000) — siklus yang pilotnya dinyalakan ECU
+  setelah sudut pilot lewat tidak pernah mulai injeksi: torsi WOT 3000 jatuh ke 162 Nm. Kini histeresis 200 rpm, dan
+  siklus yang belum mulai injeksi mulai di sudut main tanpa pilot. (2) **Pangsa EGR** (telemetri dan campuran suhu
+  plenum) memakai aliran EGR rata-rata 0.1 s dibagi aliran udara **sesaat** — di antara pulsa intake udara berhenti,
+  pangsa terbaca 100 %: tes melaporkan 63 % dan plenum terlalu panas. Kini udara dirata-rata dengan cara yang sama:
+  37 % di 1500 rpm pedal 30 %, intake ±135 °C (sebelumnya ±155 °C).
+- **Hasil** (preset 24): bising pembakaran (level teratenuasi struktur) 1500 rpm pedal 50 % 102.8 dB dengan pilot vs
+  108.4 dB tanpa (−5.5 dB), idle −6.1 dB. Pedal penuh 149 / 210 / 233 / 230 / 219 Nm di 1000 / 1500 / 2000 / 3000 /
+  4000 rpm (4b: 156 / 217 / 234 / 230 / 220), tekanan puncak 100–150 bar.
+- **Tes** (`diesel_test`): Assanis vs hitungan tangan, efek cetane, pilot −6 dB di 1500 rpm beban menengah (±1.5 dB)
+  dan lebih pelan di idle. Bising diukur dari RMS laju penuh (`combNoiseRms`) — sampling 1 ms ter-alias dengan ledakan
+  pembakaran.
+- **Batas**: pembagi tunda main 2.2 dan dwell idle adalah kalibrasi; satu pilot (tanpa post-injection); laju injeksi
+  konstan (tanpa bentuk laju / tekanan rail).
 
 ---
 

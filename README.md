@@ -30,7 +30,7 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | ⚙️ **Any layout** | Inline, V, boxer, 1–16 cylinders, odd-fire / big-bang, custom firing orders — and **Wankel rotaries** with 1–4 rotors and four porting styles. |
 | 🌀 **The rotary "brap"** | A bridge-ported 13B idles lumpy because exhaust floods back through the port overlap and the diluted charges misfire — modelled, not faked. |
 | 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control; trigger wheels (60-2, 36-1, 36-2-2-2 …) with crank / cam sync, sequential / semi-sequential / batch injection, coil dwell table. |
-| 🛢️ **Diesel** | Compression ignition with direct injection: Hardenberg–Hase ignition delay, premixed / diffusion burn, no throttle (the load is the fuel quantity), smoke limiter, idle and max-speed governors, glow plugs with pre- and post-heat, variable geometry turbo and EGR — and the diesel clatter from the chamber ringing through the engine structure. |
+| 🛢️ **Diesel** | Compression ignition with direct injection: Assanis ignition delay, pilot + main injection, premixed / diffusion burn, no throttle (the load is the fuel quantity), smoke limiter, idle and max-speed governors, glow plugs with pre- and post-heat, variable geometry turbo and EGR — and the diesel clatter from the chamber ringing through the engine structure. |
 | ⛽ **Fuels and flex fuel** | Regular / premium / race gasoline, E10, E20, E85, E100 and methanol, each with its own stoichiometric AFR, heating value, octane (knock), charge cooling, flame speed and cold start; a tank you can refuel with a blend, and a flex fuel sensor the ECU uses to adapt its fuelling, spark and cold enrichment. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
 | 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; compressor / turbine maps (built in or loaded from CSV) with efficiency islands, surge and choke; intercooler heat soak; Roots, twin-screw and centrifugal superchargers. |
@@ -296,7 +296,7 @@ build/Release/flow_test.exe          # flow map: the gas-path flows add up, reve
 
 ```bash
 build/Release/sound_test.exe         # exhaust acoustics vs theory: open-end reflection (Levine & Schwinger), chamber / side-branch / Helmholtz transmission loss
-build/Release/diesel_test.exe        # diesel: ignition delay vs hand calculation, governors, smoke limit, cetane, clatter, glow plugs / cold start, VGT, EGR
+build/Release/diesel_test.exe        # diesel: ignition delay vs hand calculation, governors, smoke limit, cetane, clatter, pilot injection, glow plugs / cold start, VGT, EGR
 ```
 
 ```bash

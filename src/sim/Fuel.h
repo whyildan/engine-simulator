@@ -95,6 +95,32 @@ inline double dieselDelayDeg(double Sp, double T, double pBar, double cetane) {
     return (0.36 + 0.22 * Sp) * std::exp(std::min(60.0, x));
 }
 
+// Ignition delay used by the engine: Assanis, Filipi, Fiveland & Syrimis (J. Eng. Gas Turbines Power 125, 2003),
+// as reproduced in Alkhulaifi & Hamdalla (WASET 5(10), 2011, eq. 3): tau = 2.4 phi^-0.2 p^-1.02 exp(2100 / T) ms
+// (p bar, T K; fitted on a heavy-duty turbocharged DI diesel in steady and transient running; the validity range was
+// not verified). Its temperature sensitivity (2100 K) is about twice Hardenberg-Hase's (E_A / R ~980 K at CN 51), so a
+// cooler charge lights clearly later - what makes a pilot injection shorten the main injection's delay. It has no
+// cetane term: the cetane number enters as Hardenberg-Hase's ratio at the same state, relative to CN 51 (the fuel of
+// the fitted engine is not stated in the source - taken as EN 590 diesel).
+inline double dieselDelayMs(double phi, double pBar, double T, double cetane) {
+    if (pBar <= 1.0 || T <= 300.0) return 1e9;
+    double tau = 2.4 * std::pow(std::max(0.05, phi), -0.2) * std::pow(pBar, -1.02) * std::exp(2100.0 / T);
+    if (pBar > 12.9) {
+        const double cn = std::max(0.0, cetane);
+        const double dEa = 618840.0 / (cn + 25.0) - 618840.0 / (51.0 + 25.0);
+        tau *= std::exp(std::min(60.0, dEa * (1.0 / (8.314 * T) - 1.0 / 17190.0) * std::pow(21.2 / (pBar - 12.4), 0.63)));
+    }
+    return tau;
+}
+
+// Main injection after a pilot that is already burning: Busch et al. (Sandia, SAND2015-2001 / SAE 2015-01-0796):
+// the pilot's heat and radicals shorten the main injection's ignition delay and cut its premixed burn - about 6 dB
+// less combustion noise at 1500 rpm, IMEPg 9 bar, 1.5 mg pilot, dwell > 200 us. The bulk temperature rise of a 0-D
+// charge (~80 K from 1.5 mg) shortens the delay only ~17 %: the main spray actually enters the pilot's burning zone.
+// So the main delay is divided by this factor on top - calibrated, not measured: it makes the model's 1500 rpm /
+// ~9 bar IMEP point (preset 24) give ~6 dB, as Busch et al. measured.
+constexpr double kPilotMainDelayDiv = 2.2;
+
 // cold start: a diesel lights unaided only when the compressed charge is hot enough, else it needs the hot spot of a
 // glow plug (Bosch glow plug brochure: at least 850 C needed at the plug for a reliable cold start; DI engines start
 // without glow plugs above about -5 C - Bosch patent US 7900599: above -10 C). Real engines lose compression

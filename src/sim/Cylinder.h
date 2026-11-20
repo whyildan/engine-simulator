@@ -129,6 +129,12 @@ struct Cylinder {
     double popPending = 0;                // afterfire pressure still to be released (Pa)
     // diesel (Package 4): direct injection, ignition delay, premixed / diffusion / tail burn
     double injLeft = 0, injRate = 0, injDone = 0;   // kg still to inject, kg/s, kg injected this cycle
+    double mainPending = 0, injPlanned = 0;         // pilot cycle: main quantity waiting for its start; total this cycle
+    bool injStarted = false;                        // this cycle's injection has begun (cleared at exhaust opening)
+    double dPhiNow = 0.5;                           // overall equivalence ratio of this cycle's fuel (delay correlation)
+    // main injection after a pilot that is already burning: its own ignition delay (shortened by the pilot's heat)
+    bool idOpen2 = false, main2 = false;            // its delay running / it has lit (its own premixed + diffusion)
+    double idI2 = 0, soc2Phi = 0, preMain = 0, dPre2 = 0, idDegMain = 0;
     double idI = 0;                       // ignition delay integral (dt / tau, Hardenberg-Hase) since the start of injection
     bool idOpen = false;                  // injecting / injected but not lit yet
     bool dBurning = false;                // diesel burn running
@@ -138,7 +144,7 @@ struct Cylinder {
     double ringA = 0, ringPh = 0;         // combustion chamber pressure ringing: amplitude Pa, phase rad
     double ringKickA = 0;                 // amplitude the last burn excited (diagnostics), Pa
     double dpStep = 0;                    // highest pressure rise rate since the start of combustion, Pa / deg
-    bool ringKicked = false;              // the ringing of this burn has been excited
+    double ringKickPeak = 0;              // pressure rise rate (Pa / deg) that last excited the ringing this cycle
     bool misfired = false;
     double dilution = 0;                  // burned gas share of the charge at the spark (residual + reverted exhaust)
     double burnEta = 1;                   // 1 fired, 0 misfired (diagnostics)

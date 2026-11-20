@@ -240,6 +240,11 @@ void generateCalibration(EngineParams& p) {
     setCurve(c.glowPreheat, {-30, -10, -5, 0, 20, 40}, [](double x, const EngineParams&) {
         return x <= -10 ? 7.0 : x <= -5 ? 5.0 + (-5.0 - x) * 0.4 : x <= 0 ? 2.0 + (-x) * 0.6 : x <= 20 ? 2.0 : 0.0; }, p);
     c.afterglowTime = 180; c.afterglowEct = 70;
+    // pilot injection: Busch et al. (Sandia, SAND2015-2001 / SAE 2015-01-0796) - 1.5 mg pilot at 1500 rpm; the noise
+    // drop holds for dwells above ~200 us -> 300 us here; up to 3000 rpm (chosen). At idle the pilot's own delay
+    // (~0.5 ms) is longer than that: with 300 us it has not lit when the main starts and does nothing -> 1000 us at
+    // idle (chosen: ~6 dB less clatter at idle in the model)
+    c.pilotMg = 1.5f; c.pilotDwellUs = 300; c.pilotDwellIdleUs = 1000; c.pilotMaxRpm = 3000;
     c.powerTpsLo = 60; c.powerTpsHi = 90; c.powerLambda = p.afrWot / 14.7f;
     c.crankAdvance = std::min(p.baseAdvance, 8.0f);
     auto cold = [](double ect) { return 1.0 - smoothstep(15.0, 75.0, ect); };

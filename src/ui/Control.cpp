@@ -169,6 +169,18 @@ void App::sectionEngineControl() {
             ImGui::SliderFloat("Max-speed governor band", &c.dieselGovBand, 0, 1500, "%.0f rpm");
             Help("The fuel falls to zero over this band below the rev limit (a diesel governs its speed with the fuel).");
             ImGui::SliderFloat("Cranking fuel", &c.dieselStartFuel, 0, 150, "%.0f mg/stroke");
+            ImGui::SeparatorText("Pilot injection");
+            ImGui::PushItemWidth(-260);
+            ImGui::SliderFloat("Pilot quantity", &c.pilotMg, 0, 5, "%.1f mg (0 = off)");
+            ImGui::SliderFloat("Dwell (from 1500 rpm)", &c.pilotDwellUs, 0, 2000, "%.0f us");
+            ImGui::SliderFloat("Dwell at idle", &c.pilotDwellIdleUs, 0, 2000, "%.0f us");
+            ImGui::SliderFloat("Pilot up to", &c.pilotMaxRpm, 0, 6000, "%.0f rpm");
+            ImGui::PopItemWidth();
+            Help("A small injection before the main one: it lights first, and the main injection then lights sooner, with\n"
+                 "less fuel burning all at once - less clatter (Sandia, Busch et al.: about 6 dB at 1500 rpm, 1.5 mg pilot,\n"
+                 "dwell above 200 us). Too short a dwell: the pilot has not lit yet and does nothing.");
+            ImGui::Text("Now: pilot %.1f mg at %.1f deg BTDC, main %.1f mg at %.1f deg; main delay after the pilot %.1f deg",
+                        tel_.pilotMg, tel_.pilotSoi, tel_.dieselFuelMg, tel_.soi, tel_.mainDelayDeg);
             ImGui::SeparatorText("Glow plugs");
             ImGui::SliderFloat("Post-heat at most", &c.afterglowTime, 0, 600, "%.0f s");
             ImGui::SliderFloat("Post-heat until coolant", &c.afterglowEct, 0, 100, "%.0f C");

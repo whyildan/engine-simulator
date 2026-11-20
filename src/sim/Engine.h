@@ -86,6 +86,11 @@ public:
     double glowTipC() const { return glowC_; }
     double egrPos() const { return egrPos_; }
     double egrFlow() const { return egrFlow_; }
+    double egrRate() const { return egrFlow_ / std::max(1e-6, egrFlow_ + egrAir_); }   // share of the charge (averaged)
+    double combNoise() const { return combNoise_; }   // diesel combustion noise, Pa (structure-attenuated)
+    // its rms over every step since the last call (tests / diagnostics: sampling the signal now and then aliases
+    // with the firing - the short bursts are hit or missed depending on the phase)
+    double combNoiseRms() { const double r = cnN_ > 0 ? std::sqrt(cnE2_ / cnN_) : 0.0; cnE2_ = 0; cnN_ = 0; return r; }
     const FuelProps& tankFuel() const { return tankProps_; }
     double tankLitres() const { return tankL_; }
     static constexpr double kTankCapL = 50.0;
@@ -211,6 +216,7 @@ private:
     bool diesel_ = false;          // compression ignition, direct injection (fuelSystem DieselDI)
     double glowC_ = 20;            // glow plug tip temperature, C
     double egrPos_ = 0, egrFlow_ = 0; // EGR valve opening 0..1, flow kg/s (averaged)
+    double egrAir_ = 0;               // fresh air flow kg/s averaged the same way (the EGR share)
     double fireTimer_ = 10;    // time since last combustion
     double ambT_ = 298;
     Rng rng_{12345};
@@ -222,7 +228,8 @@ private:
     // diesel combustion noise (Package 4c): the cylinder pressures (with their ringing) through the structure
     // attenuation of an engine block (AVL generic curve, fitted) -> radiated sound pressure, Pa
     StructureAttenuation cnStruct_;
-    double combNoise_ = 0;
+    double combNoise_ = 0, cnE2_ = 0;
+    long long cnN_ = 0;
     Biquad ping_, starterBp_;
     double blockIn_ = 0, tickIn_ = 0, pingIn_ = 0, starterPhase_ = 0;
 };

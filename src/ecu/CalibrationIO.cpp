@@ -235,6 +235,9 @@ const ScalarDef kScalars[] = {
     {"diesel_start_fuel", &Calibration::dieselStartFuel, nullptr},
     {"afterglow_time", &Calibration::afterglowTime, nullptr}, {"afterglow_ect", &Calibration::afterglowEct, nullptr},
     {"egr_min_ect", &Calibration::egrMinEct, nullptr},
+    {"pilot_mg", &Calibration::pilotMg, nullptr}, {"pilot_dwell_us", &Calibration::pilotDwellUs, nullptr},
+    {"pilot_dwell_idle_us", &Calibration::pilotDwellIdleUs, nullptr},
+    {"pilot_max_rpm", &Calibration::pilotMaxRpm, nullptr},
 };
 const char* kActKeys[kActCount] = {"warn", "retard", "boost_reduce", "throttle_limit", "fuel_limit", "limp", "shutdown"};
 const char* kLoadModeNames[] = {"speed_density", "alpha_n", "maf", "hybrid"};

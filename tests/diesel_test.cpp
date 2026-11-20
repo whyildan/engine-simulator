@@ -56,6 +56,13 @@ int main() {
         CHECK(dieselDelayDeg(10, 800, 60, 50) > t && dieselDelayDeg(10, 900, 40, 50) > t && dieselDelayDeg(10, 900, 60, 40) > t,
               "longer when colder, at lower pressure and with a lower cetane number");
         CHECK(dieselDelayDeg(10, 900, 12.0, 50) > 1e8, "no ignition below 12.4 bar (outside the correlation)");
+        // the engine's delay: Assanis et al. 2003 - phi 0.5, 60 bar, 900 K, CN 51: 2.4 x 0.5^-0.2 x 60^-1.02 x e^(2100/900)
+        // = 2.4 x 1.1487 x 0.015365 x 10.312 = 0.4368 ms; 700 K: x e^(2100/700 - 2100/900) = x 1.948
+        const double a = dieselDelayMs(0.5, 60.0, 900.0, 51.0), a7 = dieselDelayMs(0.5, 60.0, 700.0, 51.0);
+        std::printf("  Assanis tau(phi 0.5, 60 bar, 900 K) = %.4f ms; 700 K / 900 K = %.3f\n", a, a7 / a);
+        CHECK(std::fabs(a - 0.4368) < 0.002, "Assanis correlation matches the hand calculation (0.4368 ms)");
+        CHECK(std::fabs(a7 / a - 1.948) < 0.01, "its temperature sensitivity (x1.95 from 900 to 700 K; Hardenberg-Hase gives ~x1.36)");
+        CHECK(dieselDelayMs(0.5, 60, 900, 40) > a * 1.05, "a lower cetane number lengthens it (Hardenberg-Hase cetane factor)");
     }
 
     // ---------------- start, idle, no throttle
@@ -157,6 +164,29 @@ int main() {
         const double expect = 0.5 * kRingBeta * dpm * 6.0 * rpm;
         std::printf("  peak rise rate %.1f bar/deg at %.0f rpm -> expected amplitude %.2f bar, measured %.2f bar\n", dpm / 1e5, rpm, expect / 1e5, rmax / 1e5);
         CHECK(rmax > 0.6 * expect && rmax < 1.4 * expect, "the premixed burn rings the chamber at the amplitude Eng's relation gives");
+    }
+
+    // ---------------- pilot injection: less combustion noise (Busch et al., Sandia: ~6 dB at 1500 rpm, IMEPg 9 bar)
+    {
+        std::printf("[pilot] combustion noise with / without the pilot (structure-attenuated level)\n");
+        auto noiseAt = [&](float rpm, float pedal, bool pilot) {
+            EngineParams q = p;
+            if (!pilot) q.cal.pilotMg = 0;
+            Simulator sim(q);
+            start(sim, q);
+            if (rpm > 0) hold(sim, q, rpm, pedal);
+            run(sim, 5.0);
+            Engine& e = *const_cast<Engine*>(sim.engineForTests());
+            e.combNoiseRms();   // (reset)
+            run(sim, 3.0);
+            return 20.0 * std::log10(std::max(1e-9, e.combNoiseRms()) / 20e-6);
+        };
+        const double on15 = noiseAt(1500, 0.5f, true), off15 = noiseAt(1500, 0.5f, false);
+        const double onI = noiseAt(0, 0, true), offI = noiseAt(0, 0, false);
+        std::printf("  1500 rpm 50 %% pedal (~9 bar IMEP): %.1f dB with the pilot, %.1f dB without (%+.1f dB)\n", on15, off15, on15 - off15);
+        std::printf("  idle: %.1f dB with the pilot, %.1f dB without (%+.1f dB)\n", onI, offI, onI - offI);
+        CHECK(off15 - on15 > 4.0 && off15 - on15 < 9.0, "1500 rpm mid load: the pilot cuts the noise by about Sandia's 6 dB");
+        CHECK(offI - onI > 3.0, "idle: the pilot (longer dwell) quietens the clatter");
     }
 
     // ---------------- glow plugs / cold start (4c)

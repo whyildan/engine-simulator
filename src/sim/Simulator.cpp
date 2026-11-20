@@ -227,9 +227,11 @@ void Simulator::render(float* out, int frames) {
     t.knock = (float)e.knockMax;
     t.dieselFuelMg = (float)e.ecu.cmd.dieselFuelMg; t.soi = (float)e.ecu.cmd.soi; t.smokeLimited = e.ecu.smokeLimited;
     t.ignDelayDeg = e.cylinders() > 0 ? (float)e.cyl(0).idDeg : 0.0f;
+    t.pilotMg = (float)e.ecu.cmd.pilotMg; t.pilotSoi = (float)e.ecu.cmd.pilotSoi;
+    t.mainDelayDeg = e.cylinders() > 0 && e.cyl(0).main2 ? (float)e.cyl(0).idDegMain : 0.0f;
     t.glowTipC = (float)e.glowTipC(); t.glowOn = e.ecu.cmd.glow; t.glowLight = e.ecu.glowLight;
     t.egrPos = (float)e.egrPos(); t.egrGs = (float)(e.egrFlow() * 1000.0);
-    t.egrRate = (float)(e.egrFlow() / std::max(1e-6, e.egrFlow() + std::max(0.0, e.intake.airFlow())));
+    t.egrRate = (float)e.egrRate();
     t.vgtOpen = e.params().vgt ? (float)e.boost.wastegate : 1.0f;
     t.stress = (float)e.stress; t.floatIn = (float)e.floatIn; t.floatEx = (float)e.floatEx;
     t.sparkMargin = (float)e.sparkMargin; t.sparkAvail = (float)e.sparkAvail; t.oilBar = (float)e.oilBar;
