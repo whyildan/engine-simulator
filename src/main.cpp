@@ -1,5 +1,6 @@
 // EngineSim - Win32 + Direct3D 11 + Dear ImGui host.
 #include "ui/App.h"
+#include "resource.h"
 #include "ecu/BaseMap.h"
 #include "ecu/CalibrationIO.h"
 #include "ecu/EngineFile.h"
@@ -123,6 +124,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
 
     WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, wndProc, 0, 0, hInst, nullptr, nullptr, nullptr, nullptr, L"EngineSimWnd", nullptr};
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    // app icon (src/app.rc): the large one for Alt-Tab / taskbar, the small one for the title bar
+    wc.hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(IDI_APPICON));
+    wc.hIconSm = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                   GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
     RegisterClassExW(&wc);
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"EngineSim - real-time engine simulator", WS_OVERLAPPEDWINDOW,
                               60, 40, 1680, 1000, nullptr, nullptr, hInst, nullptr);

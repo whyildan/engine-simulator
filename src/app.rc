@@ -1,0 +1,4 @@
+// Windows resources of the app: the icon (Explorer, title bar, taskbar, Alt-Tab). Drawn by tools/make_icon.py.
+#include "resource.h"
+
+IDI_APPICON ICON "../assets/enginesim.ico"

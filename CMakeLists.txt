@@ -98,6 +98,7 @@ target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_D
 
 add_executable(enginesim WIN32
   src/main.cpp
+  src/app.rc
   src/audio/AudioOutput.cpp
   src/ui/App.cpp
   src/ui/Panels.cpp
