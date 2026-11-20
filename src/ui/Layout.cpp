@@ -25,7 +25,7 @@ const SectionInfo kSections[App::kSectionCount] = {
     {"Engine Control",       "Idle, limiters, launch, flat shift, VVT, torque management"},
     {"Sensor Configuration", "Virtual sensors: calibration, noise, delay, failures"},
     {"Engine Protection",    "Warning thresholds, protection actions and limp mode"},
-    {"Live Dashboard",       "Gauges, readouts, cylinder pressure and sound scopes, engine animation"},
+    {"Live Dashboard",       "Gauges, readouts, flow map and engine health, cylinder pressure and sound scopes, engine animation"},
     {"Data Logging",         "Channel recording, graphs, CSV export, session comparison"},
     {"Virtual Dyno",         "Steady-state and sweep tests, run comparison"},
     {"Calibration Manager",  "Save, load, version and compare calibrations"},
@@ -98,7 +98,8 @@ void App::headerBar() {
     Lamp("Run", tel_.running, col(0.2f, 0.9f, 0.3f)); ImGui::SameLine();
     Lamp("Lim", tel_.limiter, col(1.0f, 0.2f, 0.2f)); ImGui::SameLine();
     Lamp("Shift", tel_.rpm >= redlineRpm(p_), col(0.3f, 0.6f, 1.0f)); ImGui::SameLine();
-    Lamp("Knock", tel_.knock > 1.0f, col(1.0f, 0.5f, 0.1f)); ImGui::SameLine();
+    if (isDiesel(p_)) { Lamp("Glow", tel_.glowLight, col(1.0f, 0.75f, 0.1f)); ImGui::SameLine(); }   // pre-heating: wait before cranking
+    else { Lamp("Knock", tel_.knock > 1.0f, col(1.0f, 0.5f, 0.1f)); ImGui::SameLine(); }
     Lamp("Float", std::max(tel_.floatIn, tel_.floatEx) > 0.1f, col(1.0f, 0.6f, 0.2f)); ImGui::SameLine();
     Lamp("Oil", tel_.running && tel_.snsValue[kSnsOilP] < 0.7f, col(1.0f, 0.25f, 0.2f)); ImGui::SameLine();
     { int nf = 0; for (int k = 0; k < kSensorCount; ++k) nf += tel_.snsFallback[k] ? 1 : 0;
@@ -128,7 +129,7 @@ void App::navBar() {
         ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.55f, 0.29f, 0.13f, 0.85f));
         // sections that are not built yet are dimmed (they only describe what is planned)
         if (!ready && !sel) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.45f, 0.5f, 1));
-        if (ImGui::Selectable(label, sel, 0, ImVec2(0, ImGui::GetFrameHeight()))) section_ = i;
+        if (ImGui::Selectable(label, sel, 0, ImVec2(0, ImGui::GetFrameHeight()))) { section_ = i; jumpTab_.clear(); }
         if (!ready && !sel) ImGui::PopStyleColor();
         ImGui::PopStyleColor();
         if (!ready && ImGui::IsItemHovered()) ImGui::SetTooltip("Planned - see docs/ECU_PLAN.md");
@@ -202,12 +203,12 @@ void App::workArea() {
     case kEngineSetup: {
         beginSplit("##es_cfg", 0.56f);
         if (ImGui::BeginTabBar("engtabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
-            if (ImGui::BeginTabItem("Engine")) { panelEngine(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem(isRotary(p_) ? "Ports###valv" : "Valvetrain###valv")) { panelValvetrain(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Exhaust")) { panelExhaust(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Engine", nullptr, tabJump("engine"))) { panelEngine(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem(isRotary(p_) ? "Ports###valv" : "Valvetrain###valv", nullptr, tabJump("valv"))) { panelValvetrain(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Exhaust", nullptr, tabJump("exhaust"))) { panelExhaust(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Vehicle")) { panelVehicle(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Sound")) { panelAudio(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Components")) { panelComponents(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Components", nullptr, tabJump("components"))) { panelComponents(); ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         splitNext("##es_view");
@@ -221,7 +222,7 @@ void App::workArea() {
     case kBoostControl: {
         beginSplit("##boost_cfg", 0.50f);
         if (ImGui::BeginTabBar("boosttabs")) {
-            if (ImGui::BeginTabItem("Hardware")) { panelBoost(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Hardware", nullptr, tabJump("boost_hw"))) { panelBoost(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("ECU boost control")) { tabBoostControl(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Anti-lag")) { tabAntiLag(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Nitrous")) { tabNitrous(); ImGui::EndTabItem(); }
@@ -238,8 +239,9 @@ void App::workArea() {
     case kLiveDashboard: {
         beginSplit("##dash", 0.55f);
         if (ImGui::BeginTabBar("dashkind")) {
-            if (ImGui::BeginTabItem("Gauges")) { panelDashboard(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Custom")) { panelCustomDash(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Gauges", nullptr, tabJump("gauges"))) { panelDashboard(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Custom", nullptr, tabJump("custom"))) { panelCustomDash(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Flow map", nullptr, tabJump("flowmap"))) { panelFlowMap(); ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         splitNext("##dash_right");

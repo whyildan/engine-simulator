@@ -1,5 +1,6 @@
 // All ImGui panels. Every widget edits App::p_ directly; App::frame() pushes the changed
 // parameters to the simulation thread, so every change is heard immediately.
+#include "sim/Fuel.h"
 #include "ui/App.h"
 #include "ui/Widgets.h"
 #include "imgui.h"
@@ -209,7 +210,7 @@ void App::panelEngine() {
     SliderF("Bore", &p_.bore_mm, 40, 140, "%.1f mm");
     SliderF("Stroke", &p_.stroke_mm, 40, 140, "%.1f mm");
     SliderF("Rod length", &p_.rod_mm, std::max(60.0f, p_.stroke_mm * 1.2f), 260, "%.0f mm", "Longer rods: piston dwells longer at TDC.");
-    SliderF("Compression", &p_.compression, 6, 16, "%.1f : 1", "Higher CR = more torque but more knock.");
+    SliderF("Compression", &p_.compression, 6, isDiesel(p_) ? 25.0f : 16.0f, "%.1f : 1", isDiesel(p_) ? "A diesel lights by compression: ~16-22:1. Lower = later ignition, harder cold starts." : "Higher CR = more torque but more knock.");
     SliderF("Flywheel inertia", &p_.flywheel, 0.02f, 0.6f, "%.3f kg m2", "Light = revs fast and sounds raw; heavy = smooth, slow revving.");
     SliderF("Imperfection", &p_.imperfection, 0, 2.5f, "%.2f", "Real engines are never perfectly even: each cylinder's port flow, injector, spark timing,\n"
             "burn and header length differ a little, and every cycle burns slightly differently.\n0 = machine-perfect (sterile), 1 = typical engine, 2+ = tired / lumpy.");
@@ -496,12 +497,79 @@ void App::panelFuelIntake() {
     SliderF("Ambient temp", &p_.ambientTemp_C, -20, 45, "%.0f C");
     altitudeUi("Altitude");
 
+    ImGui::SeparatorText("Fuel");
+    if (Combo("Fill the tank with", &p_.fuelType, fuelTypeNames())) {}
+    Help("Choosing a fuel drains the tank and fills it with that fuel. It reaches the injectors over about half a\n"
+         "minute (the fuel line and rail are purged through the return line). Each fuel brings its own stoichiometric\n"
+         "AFR, heating value, octane, charge cooling, flame speed and cold-start behaviour.\n"
+         "Without a flex fuel sensor the ECU keeps calculating with its calibration's fuel - re-tune after a change.");
+    ImGui::TextDisabled("%s", fuelTypeNote(p_.fuelType));
+    {
+        char b[160];
+        std::snprintf(b, sizeof(b), "%.1f / %.0f L", tel_.tankLitres, tel_.tankCap);
+        ImGui::ProgressBar(tel_.tankCap > 0 ? tel_.tankLitres / tel_.tankCap : 0, ImVec2(-170, 0), b);
+        ImGui::SameLine(); ImGui::TextUnformatted("Tank");
+        ImGui::Text("Tank: %.0f %% alcohol, RON %.1f      Fuel line (burning now): %.0f %% alcohol, RON %.1f / MON %.1f",
+                    tel_.tankAlcohol, tel_.tankRon, tel_.fuelAlcohol, tel_.fuelRon, tel_.fuelMon);
+        ImGui::Text("Stoich AFR %.2f   heating value %.1f MJ/kg   lambda %.3f", tel_.fuelStoich, tel_.fuelLhv, tel_.lambda);
+    }
+    ImGui::PushItemWidth(ImGui::GetFontSize() * 14);
+    Combo("##refueltype", &p_.refuelType, fuelTypeNames());
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    ImGui::PushItemWidth(ImGui::GetFontSize() * 8);
+    ImGui::SliderFloat("##refuellitres", &p_.refuelLitres, 1, 50, "%.0f L");
+    ImGui::PopItemWidth();
+    ImGui::SameLine();
+    if (ImGui::Button("Refuel")) ++p_.refuelRequest;
+    if (isDiesel(p_) != isDieselFuel(p_.fuelType))
+        ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), isDiesel(p_) ? "Petrol / alcohol in a diesel: outside what the model covers (its ignition delay is a diesel-fuel correlation)."
+                                                                  : "Diesel in a petrol engine is not supported - it will not run on it.");
+    Help("Adds this many litres of that fuel to what is in the tank (as far as it fits): blends mix by volume.\n"
+         "E.g. 20 L of E85 on top of 30 L of premium gives about E34 - the flex fuel sensor follows it.");
+    if (p_.fuelSystem == FuelSystem::EFI) {
+        Check("Flex fuel sensor fitted", &p_.flexSensor);
+        Help("Measures the alcohol content in the fuel line (50 Hz = E0 .. 150 Hz = E100). The ECU then sets its\n"
+             "stoichiometric AFR, injector mass flow, spark and cold enrichment from it (Fuel Tuning > Flex fuel).\n"
+             "Without it (or when it fails) the ECU uses the fallback alcohol % of its calibration.");
+    }
+
     ImGui::SeparatorText("Fuel system");
     int fs = (int)p_.fuelSystem;
     ImGui::RadioButton("Fuel injection (EFI)", &fs, 0); ImGui::SameLine();
-    ImGui::RadioButton("Carburetor", &fs, 1);
+    ImGui::RadioButton("Carburetor", &fs, 1); ImGui::SameLine();
+    ImGui::RadioButton("Diesel (direct injection)", &fs, 2);
+    Help("Diesel: the fuel is injected into the cylinder near top dead centre and lights by itself in the hot\n"
+         "compressed air (needs a high compression ratio, ~16-22:1). No throttle: the load is the amount of fuel.\n"
+         "Switching fills the tank with the matching fuel.");
+    if ((FuelSystem)fs != p_.fuelSystem) {
+        const bool toDiesel = (FuelSystem)fs == FuelSystem::DieselDI;
+        if (toDiesel && !isDieselFuel(p_.fuelType)) p_.fuelType = kFuelDiesel;
+        if (!toDiesel && isDieselFuel(p_.fuelType)) p_.fuelType = kFuelPremium95;
+    }
     p_.fuelSystem = (FuelSystem)fs;
-    if (p_.fuelSystem == FuelSystem::EFI) {
+    if (p_.fuelSystem == FuelSystem::DieselDI) {
+        SliderF("Injection rate", &p_.dieselInjRate, 5, 150, "%.0f mg/ms", "What one injector delivers per millisecond at its rail pressure: sets\nhow long an injection lasts (more fuel or a weaker injector = a longer, later-burning injection).");
+        SliderF("Full-pedal fuel", &p_.dieselMaxFuel, 5, 200, "%.0f mg/stroke", "The driver's demand map scales to this (the smoke limiter can hold it back).\nRegenerate the calibration (ECU tab) after a big change.");
+        SliderF("Injection timing at idle", &p_.soiBase, -5, 20, "%.1f deg BTDC");
+        SliderF("Speed advance", &p_.soiAdvance, 0, 25, "%.1f deg", "Added towards rated speed (like a mechanical pump's timing device):\nthe ignition delay takes more crank angle at speed.");
+        SliderF("Idle target", &p_.idleTargetRpm, 500, 1500, "%.0f rpm");
+        Combo("Glow plugs", &p_.glowPlugs, "None\0Metal (850 C in < 5 s)\0Ceramic (1000 C in < 2 s)\0");
+        Help("The hot tip lights the fuel when the compressed air alone is too cold (a DI diesel needs them below about\n"
+             "-5 to -10 C). Key on: the glow lamp stays on while they pre-heat - wait for it before cranking. They keep\n"
+             "heating while cranking and after the start until the coolant reaches 70 C (quieter, less white smoke).\n"
+             "Heat-up times: Bosch glow plug brochure; pre-heat schedule: BorgWarner / BERU (ECU tab > Diesel).");
+        ImGui::Text("Glow plug tip %.0f C  %s", tel_.glowTipC, tel_.glowLight ? "PRE-HEATING (wait)" : tel_.glowOn ? "heating" : "off");
+        SliderF("EGR valve", &p_.egrValveDia_mm, 0, 50, "%.0f mm", "Exhaust gas recirculation: a valve from the exhaust manifold (before the turbine) into the\n"
+                "intake (0 = none). Burned gas in the charge takes the place of fresh air - less NOx in a real engine, a\n"
+                "little less oxygen. Uncooled here: it also warms the intake. Opening: ECU tab > Diesel > EGR map.");
+        if (p_.egrValveDia_mm > 0)
+            ImGui::Text("EGR valve %.0f %%   %.1f g/s   %.0f %% of the charge", tel_.egrPos * 100.0f, tel_.egrGs, tel_.egrRate * 100.0f);
+        ImGui::Text("Fuel %.1f mg/stroke   start of injection %.1f deg BTDC   ignition delay %.1f deg   %s", tel_.dieselFuelMg, tel_.soi,
+                    tel_.ignDelayDeg, tel_.smokeLimited ? "SMOKE LIMITED" : "");
+        if (p_.compression < 15.0f)
+            ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "Compression %.1f:1 is low for a diesel - it may not light (16-22:1 typical).", p_.compression);
+    } else if (p_.fuelSystem == FuelSystem::EFI) {
         Combo("Injection", &p_.injection, "Port injection\0Throttle body injection\0");
         SliderF("Injector size", &p_.injector_ccmin, 60, 1200, "%.0f cc/min", "Too small = runs lean at high rpm (watch injector duty).");
         SliderF("AFR cruise", &p_.afrCruise, 11, 17, "%.1f");
@@ -563,11 +631,66 @@ void App::panelExhaust() {
     SliderF("Pipe diameter", &p_.pipeDia_mm, 30, 110, "%.0f mm");
     SliderF("Mid-pipe length", &p_.midpipeLen_mm, 100, 4000, "%.0f mm");
     Check("Catalytic converter", &p_.cat);
-    ImGui::SameLine();
-    Check("Resonator", &p_.resonator);
+    Combo("Resonator", &p_.resonator, "None\0Inline chamber\0Helmholtz (tuned side branch)\0");
+    Help("Inline chamber: a short expansion chamber in the pipe.\n"
+         "Helmholtz: a neck into a closed volume beside the pipe, sized for one frequency - it cancels the pipe's wave\n"
+         "there (the cruise \"drone\"). Auto tunes it to the firing frequency at 2000 rpm.");
+    if (p_.resonator == 2) {
+        const double perRev = isRotary(p_) ? (double)p_.cylinders : 0.5 * p_.cylinders;
+        char lb[48];
+        std::snprintf(lb, sizeof(lb), p_.resonatorHz > 1 ? "%.0f Hz" : "auto (%.0f Hz)", p_.resonatorHz > 1 ? p_.resonatorHz : perRev * 2000.0 / 60.0);
+        ImGui::SliderFloat("Resonator tuning", &p_.resonatorHz, 0, 400, lb);
+        Help("Frequency the Helmholtz resonator cancels; 0 = auto. Firing frequency = cylinders / 2 x rpm / 60.");
+    }
     Combo("Muffler", &p_.muffler, "None (straight pipe)\0Straight-through / glasspack\0Chambered\0Turbo (quiet)\0");
+    if (p_.muffler == Muffler::Chambered) {
+        Check("Extended inlet / outlet tubes", &p_.mufflerExtTubes);
+        Help("Tubes reaching L/2 (inlet) and L/4 (outlet) into each chamber: the closed spaces around them are\n"
+             "quarter-wave resonators that fill the chambers' transmission-loss dips - fewer pass bands.");
+    }
     SliderF("Tailpipe length", &p_.tailpipeLen_mm, 50, 2500, "%.0f mm");
+
+    // ---- exhaust sensors (Package 2)
+    ImGui::SeparatorText("Exhaust sensors");
+    const bool turbo = p_.induction == Induction::Turbo;
+    Check("EMAP sensor", &p_.emapSensor);
+    Help("Exhaust manifold pressure: before the turbine on a turbo engine. With the boost it gives the drive\n"
+         "pressure ratio (EMAP / MAP) - above ~2 the turbine is choking the engine: hot charge, high residual gas,\n"
+         "EGT and head gasket stress (protection rule 'High drive pressure').");
+    if (turbo) {
+        Combo("Wideband position", &p_.widebandPos, "Collector (before the turbine)\0Downpipe (after the turbine)\0");
+        Help("The wideband reads the gas in the pipe, not the cylinders: misfires read lean (unburned fuel diffuses\n"
+             "through the sensor more slowly than oxygen), fresh air blown through on the overlap reads lean, rich\n"
+             "products read rich. After the turbine the gas is better mixed but reaches the sensor later.");
+        Check("EGT after the turbine", &p_.egtPostTurbo);
+        Help("A second thermocouple in the downpipe: the drop across the turbine shows the work it takes out.");
+    }
+    Check("EGT in every primary", &p_.egtPerCyl);
+    Help("One thermocouple per cylinder: a lean or misfiring cylinder shows up at once (the collector probe only\n"
+         "sees the mix). The hottest one also feeds the High EGT protection rule.");
     ImGui::PopItemWidth();
+    ImGui::Text("Wideband %.3f (gas at the sensor %.3f, in the cylinders %.3f)", tel_.snsValue[kSnsWideband], tel_.lambdaPipe, tel_.lambda);
+    if (p_.emapSensor) {
+        if (tel_.mapKPa > tel_.baroKPa + 5)
+            ImGui::Text("EMAP %.0f kPa   MAP %.0f kPa   drive pressure ratio %.2f", tel_.snsValue[kSnsEMAP], tel_.mapKPa, tel_.driveRatio);
+        else ImGui::Text("EMAP %.0f kPa   MAP %.0f kPa   (drive pressure ratio: under boost)", tel_.snsValue[kSnsEMAP], tel_.mapKPa);
+    }
+    ImGui::Text("EGT collector %.0f C", tel_.snsValue[kSnsEGT]);
+    if (turbo && p_.egtPostTurbo) { ImGui::SameLine(); ImGui::Text("   after the turbine %.0f C (turbine drop %.0f K)", tel_.snsValue[kSnsEGT2], tel_.turbineDropK); }
+    if (p_.egtPerCyl && tel_.cylinders > 0) {
+        const int n = std::min(tel_.cylinders, kMaxCyl);
+        float lo = 1e9f, hi = -1e9f;
+        for (int i = 0; i < n; ++i) { lo = std::min(lo, tel_.egtCylC[i]); hi = std::max(hi, tel_.egtCylC[i]); }
+        ImGui::Text("EGT per cylinder (spread %.0f K):", hi - lo);
+        const float w = (ImGui::GetContentRegionAvail().x - 8.0f * (n - 1)) / n;
+        for (int i = 0; i < n; ++i) {
+            if (i) ImGui::SameLine(0, 8);
+            char b[32]; std::snprintf(b, sizeof(b), "%d: %.0f", i + 1, tel_.egtCylC[i]);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, tel_.egtCylC[i] >= hi - 0.5f && hi - lo > 15 ? ImVec4(1, 0.45f, 0.2f, 1) : ImVec4(0.55f, 0.3f, 0.13f, 1));
+            ImGui::ProgressBar(std::clamp(tel_.egtCylC[i] / 1100.0f, 0.0f, 1.0f), ImVec2(w, 0), b);
+            ImGui::PopStyleColor();
+        }
+    }
     ImGui::TextDisabled("Topology changes (header type, crossover, cat/resonator, muffler) rebuild the\nwave network live with a short crossfade; lengths & diameters glide smoothly.");
 }
 
@@ -592,6 +715,15 @@ void App::panelBoost() {
             SliderF("Turbine A/R", &p_.turbineAR, 0.3f, 1.4f, "%.2f", "Small A/R: spools early, chokes up top (backpressure).\nLarge A/R: lazy spool, big top end.");
         }
         SliderF("Rotor inertia", &p_.turboInertia, 0.03f, 0.8f, "%.2f kg cm2", "Heavier wheels = more lag.");
+        Check("Variable geometry (VGT)", &p_.vgt);
+        Help("Guide vanes in the turbine housing instead of a wastegate: closed they make a small, fast turbine (boost\n"
+             "low down, high back pressure), open a big one (no choking up top). The ECU positions them for its boost\n"
+             "target (Boost Control > ECU boost control). Typical on modern diesels.");
+        if (p_.vgt) {
+            SliderF("Vanes closed: flow area", &p_.vgtMinArea, 0.05f, 0.6f, "%.2f of open", "Turbine flow area with the vanes fully closed, as a share of the open area\n(the open area is the A/R above).");
+            SliderF("Max boost target", &p_.wastegateBar, 0.2f, 2.5f, "%.2f bar", "Top of the generated boost target map.");
+            ImGui::Text("Vanes open %.0f %%", tel_.vgtOpen * 100.0f);
+        } else
         SliderF("Wastegate (boost)", &p_.wastegateBar, 0.2f, 2.5f, "%.2f bar", "Boost target: the wastegate opens and bypasses the turbine above this.");
         Check("Blow-off valve", &p_.bov);
         Help("Vents boost when you lift: 'pssshh'.\nWithout it the compressor surges against the closed throttle: 'stu-tu-tu' flutter.");

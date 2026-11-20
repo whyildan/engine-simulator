@@ -10,8 +10,6 @@ void WaveNetwork::init(double fs, double c, double rho0, double p0) {
     hotT_ = coldT_ = T0_;
     mask_ = kBufLen - 1;
     glide_ = 1.0 - std::exp(-1.0 / (0.08 * fs)); // ~80 ms glide on length changes
-    // open end reflection: lowpass whose cutoff relates to radiation (ka ~ 1 for d ~ 5cm => ~2kHz)
-    openA_ = onePoleCoef(3500.0, fs);
     dcA_ = onePoleCoef(4.0, fs);
     radA_ = onePoleCoef(9000.0, fs);
     uDcA_ = onePoleCoef(18.0, fs);     // separates the mean exhaust flow from the pulses
@@ -199,8 +197,22 @@ void WaveNetwork::step(double dt) {
     // 4) open ends: frequency dependent negative reflection, radiation
     for (OpenEnd& o : openEnds) {
         double in = inOf(o.e);
-        o.lp += openA_ * (in - o.lp);
-        double out = -0.985 * o.lp;
+        {   // radiation reflection (Waveguide.h): recomputed when the pipe radius or its gas sound speed moves
+            const Pipe& pp = pipes[o.e.pipe];
+            const double tau = std::sqrt(pp.area / kPi) / std::max(100.0, pp.c);
+            if (std::fabs(tau - o.rTau) > 0.002 * tau) {
+                o.rTau = tau;
+                constexpr double n1 = 0.167, d1 = 1.393, d2 = 0.457;
+                const double x = 2.0 * fs_ * tau;                       // bilinear: s = 2 fs (1 - z^-1) / (1 + z^-1)
+                const double a0 = 1.0 + d1 * x + d2 * x * x;
+                o.rb0 = -(1.0 + n1 * x) / a0; o.rb1 = -2.0 / a0; o.rb2 = -(1.0 - n1 * x) / a0;
+                o.ra1 = (2.0 - 2.0 * d2 * x * x) / a0; o.ra2 = (1.0 - d1 * x + d2 * x * x) / a0;
+            }
+        }
+        const double refl = o.rb0 * in + o.rb1 * o.rx1 + o.rb2 * o.rx2 - o.ra1 * o.ry1 - o.ra2 * o.ry2;
+        o.rx2 = o.rx1; o.rx1 = in; o.ry2 = o.ry1; o.ry1 = refl;
+        // (x 0.985: losses of the mean exhaust flow leaving the pipe - vortex shedding - that the no-flow theory leaves out)
+        double out = 0.985 * refl;
         setOut(o.e, out);
         o.u = (in - out) / pipes[o.e.pipe].Z;
         // monopole far field at 1 m, radiating into ambient air

@@ -11,6 +11,9 @@
 
 namespace es {
 
+// diesel: the stoichiometric AFR the ECU calculates the smoke limit with (Fuel.h: 14.5)
+constexpr double kDieselStoichEcu = 14.5;
+
 struct ActuatorCommands {
     double iac = 0.35;            // idle air control valve opening 0..1
     double sparkAdvance = 10;     // deg BTDC (before per-cylinder trims)
@@ -35,6 +38,11 @@ struct ActuatorCommands {
     // Phase 7
     int injMode = 0;              // InjMode in effect (semi-sequential until the cam is synced)
     double dwellMs = 3.0;         // coil dwell
+    // diesel (Package 4)
+    double dieselFuelMg = 0;      // fuel per injection, mg/stroke
+    double soi = 0;               // start of injection, deg BTDC
+    bool glow = false;            // glow plugs powered
+    double egr = 0;               // EGR valve opening 0..1
 };
 
 class Ecu {
@@ -59,6 +67,11 @@ public:
     int learnSeq = 0;            // bumps whenever auto-tune changed a VE table
     // diagnostics / telemetry
     double targetAfr = 14.7, injDuty = 0, trim = 1.0, warmup = 0, accel = 0, deadComp_ms = 0, flowComp = 1;
+    // the fuel as the ECU sees it (flex fuel sensor, or the calibration's fallback): alcohol %, stoichiometric AFR,
+    // density (injector mass flow), and the target lambda behind targetAfr
+    double flexPct = 0, stoichEcu = 14.7, densityEcu = 0.745, targetLambda = 1.0, flexCold = 0;
+    bool flexLive = false;       // the alcohol content comes from a working sensor
+    double lambdaOf(double afr) const { return afr / std::max(1.0, stoichEcu); }
     double baro() const { return ambientPressurePa(p_) * 1e-3; }   // kPa, the ECU's barometric sensor
     double mapUsed = 101.3;
     double driveFf_ = 0;         // idle valve feed-forward for the drive / transbrake load
@@ -85,6 +98,8 @@ public:
     int protState[kProtCount] = {};          // 0 ok, 1 warning, 2 action active
     double protValue[kProtCount] = {};
     bool limp = false, shutdown = false, throttleLimited = false;
+    bool smokeLimited = false;    // diesel: the smoke limiter is holding the fuel back
+    bool glowLight = false;       // diesel: pre-heating (the dashboard glow lamp - wait before cranking)
     // Phase 5 telemetry
     int launchState = kLaunchOff;
     double launchLimitRpm = 0;               // rpm the active launch / shift limiter holds (0 = none)
@@ -110,6 +125,9 @@ private:
     double time_ = 0, tauFilm_ = 0.07;
     // idle control
     double iacI_ = 0.35, dash_ = 0, sinceRelease_ = 10, prevRpm_ = 0, rpmRate_ = 0, afterStart_ = 0;
+    double dIdleI_ = 0;           // diesel idle governor integral (mg/stroke)
+    int glowPhase_ = 0;           // 0 key off, 1 pre-heat / cranking, 3 running (post-heat)
+    double keyT_ = 0, preheatS_ = 0, afterT_ = 0; bool afterOk_ = false;
     bool limiterOn_ = false;
     double alsTimer_ = 10;
     // transients
@@ -121,6 +139,8 @@ private:
     bool fuelling_ = false;
     // Phase 3 state
     double sinceTransient_ = 0, capOn_ = 0;
+    int misfireSeen_ = -1;
+    double sinceMisfire_ = 10;   // s since the crank-speed misfire detection last saw one
     bool capLimiter_ = false;
     int knockSeqSeen_[kMaxCyl] = {};
     bool knockSeqInit_ = false;

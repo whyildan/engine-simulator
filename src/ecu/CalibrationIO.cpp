@@ -1,5 +1,6 @@
 #include "ecu/CalibrationIO.h"
 #include "ecu/EngineFile.h"
+#include "sim/Fuel.h"
 #include "core/MathUtil.h"
 #include "sim/EngineParams.h"
 #include <algorithm>
@@ -225,6 +226,15 @@ const ScalarDef kScalars[] = {
     {"torque_mgmt", nullptr, &Calibration::torqueMgmt}, {"tq_max_retard", &Calibration::tqMaxRetard, nullptr},
     {"tq_max_cut", &Calibration::tqMaxCut, nullptr}, {"tq_throttle_rate", &Calibration::tqThrottleRate, nullptr},
     {"gear_control", nullptr, &Calibration::gearControl},
+    // fuel and flex fuel (Package 1)
+    {"stoich_gasoline", &Calibration::stoichGasoline, nullptr}, {"stoich_alcohol", &Calibration::stoichAlcohol, nullptr},
+    {"flex_fallback_pct", &Calibration::flexFallbackPct, nullptr},
+    // diesel (Package 4)
+    {"smoke_lambda", &Calibration::smokeLambda, nullptr}, {"diesel_idle_kp", &Calibration::dieselIdleKp, nullptr},
+    {"diesel_idle_ki", &Calibration::dieselIdleKi, nullptr}, {"diesel_gov_band", &Calibration::dieselGovBand, nullptr},
+    {"diesel_start_fuel", &Calibration::dieselStartFuel, nullptr},
+    {"afterglow_time", &Calibration::afterglowTime, nullptr}, {"afterglow_ect", &Calibration::afterglowEct, nullptr},
+    {"egr_min_ect", &Calibration::egrMinEct, nullptr},
 };
 const char* kActKeys[kActCount] = {"warn", "retard", "boost_reduce", "throttle_limit", "fuel_limit", "limp", "shutdown"};
 const char* kLoadModeNames[] = {"speed_density", "alpha_n", "maf", "hybrid"};
@@ -393,6 +403,17 @@ std::vector<CalIssue> validateCalibration(const Calibration& c, const EnginePara
     if (!(c.injFlow > 20 && c.injFlow < 5000)) add(2, "Injector flow %.0f cc/min is implausible", c.injFlow);
     else if (std::fabs(c.injFlow / std::max(1.0f, p.injector_ccmin) - 1) > 0.03f)
         add(1, "Injector flow in the ECU (%.0f) differs from the fitted injector (%.0f cc/min) - fuelling scales by the ratio", c.injFlow, p.injector_ccmin);
+    // the fuel the ECU assumes against the fuel the engine is filled with
+    if (p.fuelSystem == FuelSystem::EFI) {
+        const FuelProps f = fuelProps(fuelTypeBlend(p.fuelType));
+        const double v = (p.flexSensor ? f.alcoholPct : (double)c.flexFallbackPct) * 0.01;
+        const double mg = (1.0 - v) * 0.745, ma = v * 0.790, wa = ma / std::max(1e-6, mg + ma);
+        const double st = (1.0 - wa) * c.stoichGasoline + wa * c.stoichAlcohol;
+        if (std::fabs(st / f.stoich - 1.0) > 0.04)
+            add(p.flexSensor ? 1 : 2, "%s: the ECU calculates with a stoich AFR of %.2f, the fuel needs %.2f - it runs %s by %.0f %%%s",
+                fuelTypeName(p.fuelType), st, f.stoich, st > f.stoich ? "lean" : "rich", std::fabs(st / f.stoich - 1.0) * 100.0,
+                p.flexSensor ? " (alcohol stoich setting)" : " (no flex fuel sensor: set the fallback alcohol %)");
+    }
     if (c.powerLambda < 0.65f || c.powerLambda > 1.0f) add(1, "Power enrichment lambda %.2f is unusual (0.78-0.9 typical)", c.powerLambda);
     if (c.hybridTpsHi <= c.hybridTpsLo && c.loadMode == LoadMode::Hybrid) add(2, "Hybrid load: TPS hi must be above TPS lo");
     if (c.powerTpsHi <= c.powerTpsLo) add(1, "Power enrichment: TPS hi must be above TPS lo");
@@ -638,11 +659,16 @@ const EngineField kEngineFields[] = {
     EF("afr_wot", afrWot), EI("ve_learning", veLearning), EF("injection_angle", injectionAngle), EF("idle_target_rpm", idleTargetRpm),
     EI("carb_barrels", carbBarrels), EF("venturi_mm", venturi_mm), EF("main_jet", mainJet), EF("idle_mixture", idleMixture),
     EF("idle_screw", idleScrew), EF("accel_pump", accelPump), EF("choke", choke),
+    EI("fuel_type", fuelType), EI("flex_sensor", flexSensor),
+    EF("diesel_inj_rate", dieselInjRate), EF("diesel_max_fuel", dieselMaxFuel), EF("soi_base", soiBase), EF("soi_advance", soiAdvance),
+    EI("glow_plugs", glowPlugs), EF("egr_valve_dia_mm", egrValveDia_mm), EI("vgt", vgt), EF("vgt_min_area", vgtMinArea),
+    EI("emap_sensor", emapSensor), EI("wideband_pos", widebandPos), EI("egt_per_cyl", egtPerCyl), EI("egt_post_turbo", egtPostTurbo),
     // exhaust
     EI("header", header), EFA("primary_len_mm", primaryLen_mm, kMaxCyl), EF("primary_dia_mm", primaryDia_mm),
     EF("secondary_len_mm", secondaryLen_mm), EF("collector_len_mm", collectorLen_mm), EF("collector_dia_mm", collectorDia_mm),
     EI("crossover", crossover), EF("pipe_dia_mm", pipeDia_mm), EF("midpipe_len_mm", midpipeLen_mm), EI("cat", cat),
     EI("resonator", resonator), EI("muffler", muffler), EF("tailpipe_len_mm", tailpipeLen_mm),
+    EF("resonator_hz", resonatorHz), EI("muffler_ext_tubes", mufflerExtTubes),
     // rotary
     EF("rotor_radius_mm", rotorRadius_mm), EF("eccentricity_mm", eccentricity_mm), EF("rotor_width_mm", rotorWidth_mm),
     EF("r_intake_open", rIntakeOpen), EF("r_intake_close", rIntakeClose), EF("r_intake_area_cm2", rIntakeArea_cm2),
@@ -835,6 +861,9 @@ bool engineFromJson(const std::string& text, EngineParams& p, EngineMeta& m, std
     n.bore_mm = clampv(n.bore_mm, 20.0f, 200.0f); n.stroke_mm = clampv(n.stroke_mm, 20.0f, 200.0f);
     n.compression = clampv(n.compression, 4.0f, 25.0f); n.revLimit = clampv(n.revLimit, 1000.0f, 25000.0f);
     if (validateFiring(n)) applyLayoutDefaults(n);   // broken firing order: the layout's default one
+    n.fuelType = clampv((int)n.fuelType, 0, kFuelTypeCount - 1);
+    n.resonator = clampv((int)n.resonator, 0, 2); n.resonatorHz = clampv(n.resonatorHz, 0.0f, 400.0f);
+    n.mufflerExtTubes = n.mufflerExtTubes ? 1 : 0;
     // the calibration: from the file, or a base calibration made for this engine
     generateCalibration(n);
     m.hasCalibration = false;

@@ -32,6 +32,7 @@ double interp(const std::vector<std::pair<double, double>>& xy, double x) {
 } // namespace
 
 bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* prog, double fs) {
+    if (isDiesel(pIn)) return false;   // (see makeCalibratedPreset)
     EngineParams p = pIn;
     p.vehicle = 0; p.dynoMode = DynoMode::Off; p.ignition = 1; p.starter = 0; p.coldStart = 0;
     p.clutchPedal = 0; p.n2oArm = 0; p.transbrake = 0; p.rollingAlsButton = 0;   // no launch limiter / nitrous on the rig
@@ -110,7 +111,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
                 if (e.ecu.targetAfr > 0) {
                     double lam = 0;
                     for (int c = 0; c < e.cylinders(); ++c) lam += std::min(3.0, e.cyl(c).lambda);
-                    sLam += lam / e.cylinders(); sVeEcu += e.ecu.veUsed; sTgt += e.ecu.targetAfr / 14.7; ++nl;
+                    sLam += lam / e.cylinders(); sVeEcu += e.ecu.veUsed; sTgt += e.ecu.targetLambda; ++nl;
                 }
             }
             map = sMap / n; veAtm = sVe / n;            // trapped air relative to an atmospheric cylinder
@@ -169,7 +170,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
 // ------------------------------------------------------------------ on-disk cache
 // Keyed by everything that defines the engine (driver inputs, sound, dyno, vehicle and the VE maps
 // themselves are left out). Bump kBaseMapVersion when the physics changes.
-static constexpr uint32_t kBaseMapVersion = 24;   // 24: energy-neutral pipe / volume coupling (no self-excited ringing)   // 23: mass-weighted exhaust temperature (pipe wave speed)   // 22: reversion through the throttle keeps its fuel   // 21: trigger sync, dwell-limited spark (Phase 7)   // 20: valvetrain dynamics, turbo maps, intercooler core, cell fan (Phase 6)   // 17: VTEC crossover columns, afterfire needs oxygen   // 16: afterfire heat in the exhaust (Phase 5)   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
+static constexpr uint32_t kBaseMapVersion = 33;   // 33: back to the v30 physics (31 / 32 had pocket pops / partial burns)   // 30: exhaust acoustics (open end, resonators), dilution misfire threshold   // 29: burn duration from the laminar burning velocity (A4)   // 28: full Woschni, Livengood-Wu knock (A2, A3)   // 27: temperature-dependent gas properties, rich-burn CO / H2 (A1)   // 26: knock needs end-gas pressure (no part-load knock)   // 25: fuels (heating value 43.5 MJ/kg, charge cooling by evaporation)   // 24: energy-neutral pipe / volume coupling (no self-excited ringing)   // 23: mass-weighted exhaust temperature (pipe wave speed)   // 22: reversion through the throttle keeps its fuel   // 21: trigger sync, dwell-limited spark (Phase 7)   // 20: valvetrain dynamics, turbo maps, intercooler core, cell fan (Phase 6)   // 17: VTEC crossover columns, afterfire needs oxygen   // 16: afterfire heat in the exhaust (Phase 5)   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
 static std::string g_cacheDir;
 void setBaseMapCacheDir(const std::string& dir) { g_cacheDir = dir; }
 
@@ -191,6 +192,7 @@ static uint64_t engineKey(const EngineParams& in) {
     p.environment = Environment::OpenRoad; p.reverbMix = 0; p.irChoice = 0; p.irMix = 0;
     p.comp.repairCount = 0; p.comp.allowFailure = 0;
     p.coldStart = 0;
+    p.refuelRequest = 0; p.refuelType = 0; p.refuelLitres = 0;
     std::memset(&p.cal.veMap.v, 0, sizeof(p.cal.veMap.v)); std::memset(&p.cal.veTps.v, 0, sizeof(p.cal.veTps.v));
     p.cal.veMap.locked = p.cal.veTps.locked = 0; p.cal.autoTune = 0; p.cal.closedLoop = 0;
     // Phase 3 control settings (trims, knock, idle, boost control, protection) do not change the measured air
@@ -240,6 +242,7 @@ EngineParams makeCalibratedPreset(int idx) {
         auto it = cache.find(idx);
         if (it != cache.end()) { p.cal.veMap = it->second.veMap; p.cal.veTps = it->second.veTps; return p; }
     }
+    if (isDiesel(p)) return p;   // a diesel fuels by quantity and limits on its air flow meter: no VE rig run
     Calibration c = p.cal;
     if (!loadCachedBaseMap(p, c)) {
         measureBaseMap(p, c);

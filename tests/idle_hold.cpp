@@ -22,6 +22,9 @@ int main(int argc, char** argv) {
             p.cal.idleKp *= k; p.cal.idleKi *= k; p.cal.idleKd *= k;
         }
         if (const char* g = std::getenv("SPARKGAIN")) p.cal.idleSparkGain *= (float)std::atof(g);
+        if (const char* g = std::getenv("WBPOS")) p.widebandPos = std::atoi(g);              // diagnostics: wideband position
+        if (std::getenv("NOAT")) { p.cal.autoTune = 0; p.cal.closedLoop = 0; }               // no fuel feedback
+        if (std::getenv("NOPROT")) for (ProtRule& r : p.cal.prot) r.enabled = 0;
         p.ignition = 1; p.starter = 1;
         Simulator sim(p);
         std::vector<float> buf(480 * 2);

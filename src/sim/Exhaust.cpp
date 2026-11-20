@@ -49,6 +49,32 @@ PipeEnd ExhaustSystem::chain(PipeEnd from, Role role, int idx, double areaMul, d
     return PipeEnd{id, 1};
 }
 
+// Expansion chamber. With extended tubes, the inlet pipe reaches L/2 into the chamber and the outlet starts L/4 before its
+// end; the annular spaces around them are closed quarter-wave side branches that fill the chamber's transmission-loss
+// troughs at kL = n pi (the classic reactive-muffler design: Munjal, Acoustics of Ducts and Mufflers).
+PipeEnd ExhaustSystem::chamber(PipeEnd from, double ar, double L, double fc, double loss, bool ext) {
+    if (!ext) return chain(from, Fixed, 0, ar, L, fc, loss);
+    const double li = 0.5 * L, lo = 0.25 * L;
+    const int tin = newPipe(Fixed, 0, 1.0, li, 9000, 0.03);          // inlet tube inside the chamber
+    net.connect({from, PipeEnd{tin, 0}});
+    const int annIn = newPipe(Fixed, 0, ar - 1.0, li, fc, loss);       // annulus around it, closed at the wall
+    net.addClosedEnd(PipeEnd{annIn, 0});
+    const int mid = newPipe(Fixed, 0, ar, L - li - lo, fc, loss);
+    net.connect({PipeEnd{tin, 1}, PipeEnd{annIn, 1}, PipeEnd{mid, 0}});
+    const int annOut = newPipe(Fixed, 0, ar - 1.0, lo, fc, loss);
+    net.addClosedEnd(PipeEnd{annOut, 1});
+    const int tout = newPipe(Fixed, 0, 1.0, lo, 9000, 0.03);         // outlet tube inside the chamber
+    net.connect({PipeEnd{mid, 1}, PipeEnd{annOut, 0}, PipeEnd{tout, 0}});
+    return PipeEnd{tout, 1};
+}
+
+double ExhaustSystem::helmholtzHz() const {
+    if (p_.resonatorHz > 1.0f) return p_.resonatorHz;
+    // auto: the firing frequency at 2000 rpm (cylinders / 2 per revolution; rotors fire once per shaft turn)
+    const double perRev = isRotary(p_) ? (double)p_.cylinders : 0.5 * p_.cylinders;
+    return std::max(20.0, perRev * 2000.0 / 60.0);
+}
+
 void ExhaustSystem::finishPath(PipeEnd from, float pan, double midFrac) {
     PipeEnd e = from;
     if (midFrac > 0) e = chain(e, Mid, 0, 1.0, midFrac, 9000, 0.03);
@@ -58,21 +84,38 @@ void ExhaustSystem::finishPath(PipeEnd from, float pan, double midFrac) {
         e = chain(e, Fixed, 0, 1.0, 0.30, 9000, 0.03);
     }
     fixedZone_ = 0.62;
-    if (p_.resonator) {
+    if (p_.resonator == 1) {
         e = chain(e, Fixed, 0, 3.5, 0.35, 3500, 0.35);
         e = chain(e, Fixed, 0, 1.0, 0.35, 9000, 0.03);
+    } else if (p_.resonator == 2) {
+        // Helmholtz side branch on the mid pipe: a neck (half the pipe area, 0.25 m) into a closed volume, sized for
+        // the tuning frequency - f = 1 / 2pi sqrt(A K / (V l)), K the volume's stiffness. (The waveguide neck carries
+        // the inertia itself; no end corrections are added, so the volume follows from the neck as built. The gas
+        // volumes of the model are isothermal - p = m R T / V at a set T - so K = R T rather than the adiabatic
+        // gamma R T: the volume is sized for the stiffness it really has, and the resonance lands on the tuning.)
+        // It cancels the pipe's wave around that frequency: the cruise "drone".
+        const double S = circ(p_.pipeDia_mm), A = 0.5 * S, l = 0.25;
+        const double T = 300.0 + (gasT_ > 0 ? gasT_ : kGasT) * 0.62 - 300.0 * 0.62;   // (the zone of this section)
+        const double w = 2.0 * kPi * helmholtzHz();
+        GasNode v; v.V = std::max(2e-4, kR * T * A / (w * w * l)); v.T = T; v.setPressure(kPatm); v.mb = v.m;
+        helm_.push_back(v);
+        const int seg = newPipe(Fixed, 0, 1.0, 0.10, 9000, 0.03);
+        const int neck = newPipe(Fixed, 0, 0.5, l, 9000, 0.03);
+        net.connect({e, PipeEnd{seg, 0}, PipeEnd{neck, 0}});
+        net.addNodeEnd(PipeEnd{neck, 1}, &helm_.back());
+        e = PipeEnd{seg, 1};
     }
     fixedZone_ = 0.55;
     switch (p_.muffler) {
     case Muffler::StraightThrough:  // perforated core in packing: absorbs highs
         e = chain(e, Fixed, 0, 1.0, 0.45, 1700, 0.45);
         break;
-    case Muffler::Chambered:        // reactive chambers: resonant, "honky" tone
-        e = chain(e, Fixed, 0, 6.5, 0.12, 6000, 0.12);
+    case Muffler::Chambered:        // reactive chambers (plane-wave expansion chambers, area ratio 6.5): resonant tone
+        e = chamber(e, 6.5, 0.12, 6000, 0.12, p_.mufflerExtTubes != 0);
         e = chain(e, Fixed, 0, 0.8, 0.10, 9000, 0.05);
-        e = chain(e, Fixed, 0, 6.5, 0.18, 6000, 0.12);
+        e = chamber(e, 6.5, 0.18, 6000, 0.12, p_.mufflerExtTubes != 0);
         e = chain(e, Fixed, 0, 0.8, 0.12, 9000, 0.05);
-        e = chain(e, Fixed, 0, 6.5, 0.10, 6000, 0.12);
+        e = chamber(e, 6.5, 0.10, 6000, 0.12, p_.mufflerExtTubes != 0);
         break;
     case Muffler::Turbo:            // chambers + absorptive tubes: quiet, mellow
         e = chain(e, Fixed, 0, 5.0, 0.16, 1800, 0.6);
@@ -93,6 +136,7 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
     net.init(fs, c, kPatm / (kR * kGasT), kPatm);
 
     burned_.V = 1; burned_.T = kGasT; burned_.m = 1; burned_.mb = 1; burned_.mf = 0;
+    helm_.clear(); helm_.reserve(4);
     ports_.assign(n, GasNode());
     for (int i = 0; i < n; ++i) {
         GasNode& g = ports_[i];

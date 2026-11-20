@@ -65,6 +65,7 @@ struct ComponentModel {
     double extraInertia = 0;         // kg m^2 added to the crank by pistons and rods
     double allowInertiaPa[3] = {};   // allowed peak inertia load / piston area: piston, rod, crank
     double safeRpm = 1e9;            // mechanical limit (weakest part)
+    double partSafeRpm[3] = {1e9, 1e9, 1e9};   // the limit of each part: piston, rod, crank
     int weakest = 0;                 // 0 piston, 1 rod, 2 crank
     double moveMassIn = 0.05, moveMassEx = 0.05;  // effective moving valvetrain mass per valve (kg)
     double floatRpmIn = 1e9, floatRpmEx = 1e9;    // valve float onset

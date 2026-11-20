@@ -133,6 +133,7 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     double powerC = std::max(0.0, m) * kCpAir * ambT_ * std::max(0.0, tau) / std::max(0.3, eta);
     // intercooler: effectiveness against its core temperature; the core takes the heat and gives it to the air
     // blown through it (vehicle speed / dyno fan) - parked or on a dyno without a fan it heat-soaks
+    compOutT = T2;
     double Tcharge = T2;
     if (p_.intercooler) {
         const double eps = clampv((double)p_.icEfficiency, 0.0, 1.0);
@@ -186,6 +187,7 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     // blow-off valve / supercharger bypass: vent the charge when the throttle shuts on boost
     bovOpen = false;
     double vent = 0;
+    ventFlow = turbFlow = wgFlow = 0;
     if (p_.induction == Induction::Turbo && p_.bov && throttle < 0.08 && boostBar > 0.05 && charge.p() - in.map() > 0.25e5) bovOpen = true;
     if (p_.induction == Induction::Supercharger && p_.scBypass && throttle < 0.15) bovOpen = true;
     if (bovOpen) {
@@ -193,6 +195,7 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         vent = limitedFlow(area, charge.p(), charge.T, charge.V, kPatm, ambT_, 1e3, dt, 0.4);
         if (vent > 0) {
             double qv = std::min(vent * dt, charge.m * 0.3);
+            ventFlow = qv / dt;
             double ff = charge.fuelFrac(), bf = charge.burnedFrac();
             charge.m -= qv; charge.mf -= qv * ff; charge.mb -= qv * bf;
         }
@@ -228,6 +231,21 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         }
         // a wide-open wastegate bypasses most of the exhaust (real ports pass ~2-3x the turbine's flow area)
         double aWg = wgPos_ * aT * 2.5;
+        if (p_.vgt) {
+            // variable geometry: no wastegate; the guide vanes set the turbine's flow area. The ECU duty closes them
+            // (no duty / no ECU: open). Area over the vane opening u as the ellipse arc of Wahlstrom & Eriksson
+            // (LiTH-ISY-R-2882 eq. 53-55): f = c_f2 + c_f1 sqrt(1 - ((u - c_vgt2) / c_vgt1)^2), here centred on the
+            // open end (c_vgt1 = c_vgt2 = 1) and running from vgtMinArea (closed) to 1 (open) - their fitted
+            // constants belong to their engine. Actuator: first order, 0.15 s (chosen).
+            const double u = 1.0 - clampv(wgDuty_ >= 0.0 ? wgDuty_ : 0.0, 0.0, 1.0);
+            vanePos_ += (u - vanePos_) * std::min(1.0, dt / 0.15);
+            const double amin = clampv((double)p_.vgtMinArea, 0.05, 1.0);
+            const double fv = amin + (1.0 - amin) * std::sqrt(std::max(0.0, 1.0 - (vanePos_ - 1.0) * (vanePos_ - 1.0)));
+            aT *= fv;
+            aWg = 0;
+            wgPos_ = 0;
+            wastegate = vanePos_;   // (telemetry: the vane opening)
+        }
         double flow = limitedFlow(aT + aWg, tin.p(), tin.T, tin.V, tout.p(), tout.T, tout.V, dt, 0.35);
         double qf = flow * dt;
         GasNode& s = qf >= 0 ? tin : tout;
@@ -236,6 +254,10 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         double ff = s.fuelFrac(), bf = s.burnedFrac();
         s.m -= qa; s.mf -= qa * ff; s.mb -= qa * bf;
         d.m += qa; d.mf += qa * ff; d.mb += qa * bf;
+        {   // (signed: the turbine and the wastegate share the flow by their areas)
+            const double q = (qf >= 0 ? qa : -qa) / dt;
+            turbFlow = q * aT / (aT + aWg); wgFlow = q - turbFlow;
+        }
         double mt = std::max(0.0, flow) * aT / (aT + aWg);
         double prt = std::max(1.0, tin.p() / std::max(1.0, tout.p()));
         double Tin = std::max(600.0, egtK);
@@ -250,6 +272,13 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         turbEff = etaT; turbEr = erNow;
         turbMfp = mt * std::sqrt(std::max(300.0, tin.T)) / std::max(1.0, tin.p() * 1e-3);
         double powerT = mt * dh * etaT;
+        // the turbine takes this work out of the gas; the wastegate flow passes without expanding through it
+        {   // (averaged power over averaged flow: the pulsating instantaneous ratio would be meaningless)
+            const double k = std::min(1.0, dt / 0.08);
+            turbPowAvg_ += (powerT - turbPowAvg_) * k;
+            turbFlowAvg_ += (std::max(0.0, flow) - turbFlowAvg_) * k;
+            turbineDropK = turbPowAvg_ / (std::max(1e-3, turbFlowAvg_) * kCpExh);
+        }
         // ---- shaft
         double J = std::max(0.02f, p_.turboInertia) * 1e-4;
         double w = std::max(omegaT_, 400.0);

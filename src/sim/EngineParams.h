@@ -15,7 +15,7 @@ namespace es {
 constexpr int kMaxCyl = 16;
 
 enum class Layout : int32_t { Inline = 0, V = 1, Boxer = 2 };
-enum class FuelSystem : int32_t { EFI = 0, Carburetor = 1 };
+enum class FuelSystem : int32_t { EFI = 0, Carburetor = 1, DieselDI = 2 };   // DieselDI: compression ignition, direct injection (Package 4)
 enum class Injection : int32_t { Port = 0, ThrottleBody = 1 };
 enum class HeaderType : int32_t { Log = 0, Collector = 1, TriY = 2 };
 enum class Crossover : int32_t { TrueDual = 0, HPipe = 1, XPipe = 2, MergeY = 3 };
@@ -95,6 +95,23 @@ struct EngineParams {
     float idleScrew;          // throttle crack %, 0..10
     float accelPump;          // 0..2
     float choke;              // 0..1
+    // fuel (Package 1): what the tank is filled with, and the ethanol (flex fuel) sensor in the fuel line
+    int32_t fuelType;         // FuelType (sim/Fuel.h)
+    int32_t flexSensor;       // flex fuel sensor fitted: the ECU reads the alcohol content of the fuel
+    // diesel (Package 4, fuelSystem DieselDI): fuel injected straight into the cylinder near TDC, lit by the
+    // compressed air after an ignition delay; no throttle (the load is the amount of fuel)
+    float dieselInjRate;      // mg per ms one injector delivers at its rail pressure (sets the injection duration)
+    float dieselMaxFuel;      // mg per stroke at full pedal (the driver's demand map; the smoke limiter can cut it)
+    float soiBase;            // deg BTDC start of injection at idle (static timing)
+    float soiAdvance;         // deg added by rated speed (speed advance, like a mechanical pump's timing device)
+    int32_t glowPlugs;        // 0 none, 1 metal sheathed-element, 2 ceramic (heat-up: CombustionNoise.h / Engine)
+    float egrValveDia_mm;     // exhaust gas recirculation valve (exhaust manifold -> intake), 0 = none (Package 4b)
+
+    // ---------------------------------------------------------- exhaust sensors (Package 2)
+    int32_t emapSensor;       // exhaust manifold pressure sensor (turbo: before the turbine)
+    int32_t widebandPos;      // 0 = collector (before a turbine), 1 = downpipe (after the turbine)
+    int32_t egtPerCyl;        // a thermocouple in every primary (per-cylinder EGT)
+    int32_t egtPostTurbo;     // second thermocouple after the turbine
 
     // ---------------------------------------------------------- exhaust
     HeaderType header;
@@ -106,9 +123,11 @@ struct EngineParams {
     float pipeDia_mm;
     float midpipeLen_mm;
     int32_t cat;
-    int32_t resonator;
+    int32_t resonator;        // 0 none, 1 inline chamber, 2 Helmholtz side branch (tuned: resonatorHz)
     Muffler muffler;
     float tailpipeLen_mm;
+    float resonatorHz;        // Helmholtz resonator tuning, Hz (0 = auto: firing frequency at 2000 rpm - cruise drone)
+    int32_t mufflerExtTubes;  // chambered muffler: extended inlet / outlet tubes (L/2, L/4) inside each chamber
 
     // ---------------------------------------------------------- driver controls
     float throttle;           // 0..1 pedal
@@ -153,6 +172,10 @@ struct EngineParams {
     float turbineAR;          // turbine housing A/R (0.3 small/fast .. 1.4 big/laggy)
     float turboInertia;       // rotating assembly inertia (kg cm^2)
     float wastegateBar;       // boost target (bar gauge)
+    // variable geometry turbine (Package 4b): guide vanes instead of a wastegate - closed = small flow area (fast
+    // spool, high back pressure), open = full area; the ECU positions them for its boost target
+    int32_t vgt;
+    float vgtMinArea;         // flow area with the vanes closed, share of the open area
     int32_t intercooler;
     float icEfficiency;       // 0..1
     float chargeVolume_L;     // compressor -> throttle piping + intercooler volume
@@ -215,6 +238,10 @@ struct EngineParams {
     // ---------------------------------------------------------- ECU / sensors / simulation
     float ecuRateHz;          // ECU control loop frequency (sensors sampled at this rate)
     int32_t coldStart;        // 1 = engine starts at ambient temperature, 0 = warm (88 C)
+    // refuelling (bench): incremented by the UI - adds refuelLitres of refuelType to what is in the tank
+    int32_t refuelRequest;
+    int32_t refuelType;
+    float refuelLitres;
     SensorConfig sensors[kSensorCount];
 
     // ---------------------------------------------------------- ECU calibration (maps, curves, settings)
@@ -257,6 +284,7 @@ constexpr double kN2oKgsPerHp = 3.2e-4;
 inline double n2oFullFlowKgs(const EngineParams& p) { return std::max(0.0f, p.n2oShotHp) * kN2oKgsPerHp; }
 
 inline bool isRotary(const EngineParams& p) { return p.engineType == EngineType::Rotary; }
+inline bool isDiesel(const EngineParams& p) { return p.fuelSystem == FuelSystem::DieselDI; }
 // length of one working cycle of a chamber in crank / eccentric-shaft degrees
 inline double cycleDeg(const EngineParams& p) { return isRotary(p) ? 1080.0 : 720.0; }
 // rated displacement in litres (rotary: Mazda convention = one face per rotor)
@@ -271,7 +299,7 @@ inline double equivalentDisplacementL(const EngineParams& p) { return ratedDispl
 struct StructuralKey {
     int32_t cylinders; Layout layout; int32_t bank[kMaxCyl];
     int32_t itb; FuelSystem fuelSystem; Injection injection; int32_t carbBarrels;
-    HeaderType header; Crossover crossover; int32_t cat, resonator; Muffler muffler;
+    HeaderType header; Crossover crossover; int32_t cat, resonator; Muffler muffler; float resonatorHz; int32_t mufflerExtTubes;
     int32_t oversample;
     int32_t evenFire; int32_t firingOrder[kMaxCyl]; // affects tri-Y pairing
     EngineType engineType;
@@ -285,6 +313,7 @@ struct StructuralKey {
         k.itb = p.itb; k.fuelSystem = p.fuelSystem; k.injection = p.injection; k.carbBarrels = p.carbBarrels;
         k.header = p.header; k.crossover = p.crossover; k.cat = p.cat; k.resonator = p.resonator;
         k.muffler = p.muffler; k.oversample = p.oversample; k.evenFire = p.evenFire;
+        k.resonatorHz = p.resonatorHz; k.mufflerExtTubes = p.mufflerExtTubes;
         k.engineType = p.engineType;
         k.induction = p.induction; k.scType = p.scType;
         return k;

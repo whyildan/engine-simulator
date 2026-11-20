@@ -1,4 +1,5 @@
 #include "sim/Engine.h"
+#include "sim/Flame.h"
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
@@ -12,6 +13,7 @@ static inline bool crossed(double prev, double cur, double target) {
 }
 
 Engine::Engine(const EngineParams& p, double fs) : p_(p), fs_(fs) {
+    diesel_ = isDiesel(p_);
     ambT_ = 273.15 + p.ambientTemp_C;
     baroPa_ = ambientPressurePa(p_);
     kPatm = baroPa_;
@@ -26,13 +28,20 @@ Engine::Engine(const EngineParams& p, double fs) : p_(p), fs_(fs) {
     repairSeen_ = p_.comp.repairCount;
     cyls_.assign(geom_.rotary ? 3 * n : n, Cylinder());
     setupChambers();
-    for (Cylinder& c : cyls_) c.init(geom_, wrapPos(theta_ - c.phase, cycle_), ambT_);
+    {
+        const thermo::Burn st = thermo::burn(fuel_.molC, fuel_.molH, fuel_.molO, fuel_.stoich);
+        for (Cylinder& c : cyls_) c.init(geom_, wrapPos(theta_ - c.phase, cycle_), ambT_, st.products);
+    }
     intake.build(p_, fs, geom_.Vd * n);
+    fuelSetup(true);
     exhaust.build(p_, phase_, fs);
     boost.init(p_, fs);
     thermal.init(p_);
     // EGT probe and header wall: at ambient on a cold start, still warm on a warm one
     egtWall_ = egtProbe_ = ambT_ + (p_.coldStart ? 0.0 : 250.0);
+    egtPost_ = egtPostWall_ = egtProbe_;
+    for (int i = 0; i < kMaxCyl; ++i) egtCylProbe_[i] = egtCylWall_[i] = egtProbe_;
+    emapKPa_ = baroPa_ * 1e-3;
     elec.volts = 12.6;
     rail.pressureBar = 0.5;
     sensors.reset(p_);
@@ -40,6 +49,7 @@ Engine::Engine(const EngineParams& p, double fs) : p_(p), fs_(fs) {
     {
         // mode frequencies scale inversely with size (reference: 86 mm bore)
         const double sc = clampv(0.086 / std::max(0.03, geom_.boreEq), 0.55, 1.8);
+        cnStruct_.init(fs);   // diesel combustion noise: structure attenuation (CombustionNoise.h)
         block_.clear();
         //            f (Hz)        Q    gain
         block_.add( 380 * sc,  5.0, 1.00, fs);   // sump / oil pan "boom": body
@@ -180,6 +190,7 @@ void Engine::updateValveDynamics(double rpm) {
 void Engine::apply(const EngineParams& p) {
     p_ = p;
     p_.cylinders = nPorts_;
+    diesel_ = isDiesel(p_);
     CylGeom old = geom_;
     geom_.set(p_);
     computePhases(p_, phase_);
@@ -204,6 +215,43 @@ void Engine::apply(const EngineParams& p) {
     exhaust.apply(p_);
     boost.apply(p_);
     ecu.apply(p_);
+    fuelSetup(false);
+}
+
+// the tank: filled with the chosen fuel on a new engine; choosing another fuel drains and refills it; a refuel
+// request adds litres of a fuel to what is in it (mixing by volume)
+void Engine::fuelSetup(bool fresh) {
+    const int type = clampv((int)p_.fuelType, 0, kFuelTypeCount - 1);
+    if (fresh) {
+        tank_ = line_ = fuelTypeBlend(type);
+        tankL_ = 30.0;
+        fuelTypeSeen_ = type; refuelSeen_ = p_.refuelRequest;
+    } else {
+        if (type != fuelTypeSeen_) { tank_ = fuelTypeBlend(type); fuelTypeSeen_ = type; }
+        if (p_.refuelRequest != refuelSeen_) {
+            refuelSeen_ = p_.refuelRequest;
+            const double add = clampv((double)p_.refuelLitres, 0.0, kTankCapL - tankL_);
+            tank_ = mixBlends(tank_, tankL_, fuelTypeBlend(p_.refuelType), add);
+            tankL_ += add;
+        }
+    }
+    tankProps_ = fuelProps(tank_);
+    fuel_ = fuelProps(line_);
+    intake.setFuel(fuel_);
+}
+
+// fuel line + rail (~1 L): the pump circulates it through the return line, so a new fuel in the tank reaches the
+// injectors over about half a minute; the engine draws from the tank
+void Engine::fuelStep(double dt, double fuelKgs) {
+    const double usedL = std::max(0.0, fuelKgs) / std::max(0.5, fuel_.density) * dt;
+    tankL_ = std::max(0.5, tankL_ - usedL);
+    const double lineL = 1.0;
+    const double flowL = (p_.ignition ? 120.0 / 3600.0 * dt : 0.0) + usedL;   // circulation (pump on) + consumption
+    if (flowL > 0) {
+        line_ = mixBlends(line_, std::max(0.0, lineL - flowL), tank_, std::min(flowL, lineL));
+        fuel_ = fuelProps(line_);
+        intake.setFuel(fuel_);
+    }
 }
 
 // one ECU loop: electrical / fuel / thermal physics at this rate, sensors, then the controller
@@ -211,9 +259,10 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     const double mapPa = intake.map();
     const double fuelKgs = intake.fuelFlow();
     elec.step(h, rpm, p_.ignition != 0, p_.starter != 0);
-    rail.step(h, fuelKgs / 0.745 * 3600.0, (mapPa - kPatm) / 1e5, p_.ignition != 0, p_);
+    rail.step(h, fuelKgs / fuel_.density * 3600.0, (mapPa - kPatm) / 1e5, p_.ignition != 0, p_);
+    fuelStep(h, fuelKgs);
     ThermalInputs ti;
-    ti.fuelPowerW = fuelKgs * kLHV;
+    ti.fuelPowerW = fuelKgs * fuel_.lhv;
     ti.frictionPowerW = lastFricW_;
     ti.airflowKgs = std::max(0.0, intake.airFlow());
     ti.speedMs = coolingAirMs();
@@ -225,7 +274,8 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     intake.setInletTemp(thermal.iatC + 273.15);
     intake.setColdWalls(thermal.coldFactor());
     // the actual injector flow / dead time follow the rail pressure and battery voltage
-    const double rated = p_.injector_ccmin * 0.745e-3 / 60.0;
+    // an injector flows about the same volume of any of these fuels (the mass follows the density)
+    const double rated = p_.injector_ccmin * fuel_.density * 1e-3 / 60.0;
     intake.setSprayRate(rated * std::sqrt(std::max(0.0, rail.deltaBar((mapPa - kPatm) / 1e5)) / 3.0));
 
     SensorTruth t;
@@ -235,7 +285,23 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     t.v[kSnsMAF] = std::max(0.0, intake.airFlow()) * 1000.0;
     t.v[kSnsIAT] = isBoosted(p_) ? intake.inlet(0).T - 273.15 : thermal.iatC;
     t.v[kSnsECT] = thermal.coolantC;
-    t.v[kSnsO2] = t.v[kSnsWideband] = lamFast_;
+    // the lambda sensors read the gas in the pipe (collector, or downpipe after a turbo): misfires, fresh air
+    // blown through on the overlap and rich-burn products all show up as they would on a real sensor
+    t.v[kSnsO2] = t.v[kSnsWideband] = lamPipe_;
+    {
+        const double base = 0.015 + 25.0 / std::max(300.0, rpm);
+        t.lamDelay = (p_.widebandPos && exhaust.hasTurbine()) ? 1.5 * base + 0.02 : base;
+    }
+    // EMAP: the exhaust manifold before the turbine; without a turbo the mean of the exhaust ports
+    if (exhaust.hasTurbine()) emapKPa_ = exhaust.turbineIn().p() * 1e-3;
+    else {
+        double s = 0;
+        for (int i = 0; i < exhaust.portCount(); ++i) s += exhaust.portPressure(i);
+        emapKPa_ = s / std::max(1, exhaust.portCount()) * 1e-3;
+    }
+    t.v[kSnsEMAP] = emapKPa_;
+    t.v[kSnsEGT2] = egtPost_ - 273.15;
+    for (int i = 0; i < nPorts_ && i < kMaxCyl; ++i) t.egtCyl[i] = egtCylProbe_[i] - 273.15;
     t.v[kSnsCKP] = ckpRpm_;
     t.in.crankSync = crankSync_;
     t.in.camSync = camSync_;
@@ -253,11 +319,13 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     t.v[kSnsVSS] = vehSpeed_ * 3.6;
     t.v[kSnsGear] = vehGear_;
     t.v[kSnsBattery] = elec.volts;
+    t.v[kSnsFlex] = fuel_.alcoholPct;
     t.in.clutch = p_.clutchPedal > 0.5f;
     t.in.transbrake = p_.transbrake != 0 && p_.transMode != TransMode::Manual;
     t.in.n2oArm = p_.n2oArm != 0;
     t.in.rollingAls = p_.rollingAlsButton != 0;
     t.in.shift = shifting_;
+    t.in.misfireCount = misfires;
     t.in.wheelKmh = wheelSpeed_ * 3.6;
     sensors.update(h, t, p_);
     ecu.update(h, sensors.r, p_.starter != 0);
@@ -300,10 +368,77 @@ void Engine::injectPort(int port, double rpm, double share) {
     if (fuelCutNow_ || !p_.ignition) { ecu.targetAfr = 0; return; }
     double pw = ecu.injectionPulse(port, sensors.r, share);
     double cyc = rpm > 30 ? 60.0 * (geom_.rotary ? 1.0 : 2.0) / rpm : 1.0;
-    const double rated = p_.injector_ccmin * 0.745e-3 / 60.0;
+    const double rated = p_.injector_ccmin * fuel_.density * 1e-3 / 60.0;
     double flow = rated * std::sqrt(std::max(0.0, rail.deltaBar((intake.map() - kPatm) / 1e5)) / 3.0);
     double dead = std::max(0.0, (double)p_.comp.injDeadTime_ms) * 1e-3 * (1.0 + 0.12 * (14.0 - elec.volts));
     intake.injectPulse(port, pw, cyc, flow, dead);
+}
+
+// diesel (Package 4): the ECU's fuel quantity is injected straight into the cylinder from its start of injection at
+// the injector's rate; the injected fuel lights after the ignition delay (Hardenberg-Hase, integrated over the
+// changing charge state - Fuel.h); what was injected during the delay burns premixed, the rest in the mixing-
+// controlled diffusion and tail phases (Watson-type shapes, Fuel.h), never faster than it is injected. A charge
+// that has not lit by exhaust opening leaves unburned (a misfire: white smoke).
+void Engine::dieselStep(Cylinder& c, double dt, double phiPrev, double phi, double rpm, bool exOpen, bool fuelCut,
+                        double& dm, double& dmf, double& dmb, double& dmbNew, double& dU) {
+    // start of injection
+    if (crossed(phiPrev, phi, wrapPos(-ecu.cmd.soi, cycle_))) {
+        const double q = (p_.ignition && !fuelCut && !failure && !ecu.cmd.syncLost) ? std::max(0.0, ecu.cmd.dieselFuelMg) * 1e-6 : 0.0;
+        c.injLeft = q; c.injDone = 0;
+        c.injRate = std::max(1.0, (double)p_.dieselInjRate) * 1e-3;   // mg/ms -> kg/s
+        c.idI = 0; c.idOpen = q > 0; c.dBurning = false; c.dBurned = 0; c.soiPhi = phi; c.ringKicked = false; c.dpStep = 0;
+        c.dPre = c.dDiff = c.dTail = 0;
+    }
+    if (c.injLeft > 0) {
+        const double q = std::min(c.injLeft, c.injRate * dt);
+        c.injLeft -= q; c.injDone += q;
+        dm += q; dmf += q;
+        // the spray evaporates in the hot air: its latent heat comes out of the charge (rail fuel taken at 330 K)
+        dU += q * (thermo::enthalpy(0.0, c.yb, 330.0) - fuel_.hvap);
+    }
+    // ignition delay: integral of dt / tau over the charge state since the start of injection
+    if (c.idOpen && c.injDone > 0) {
+        if (exOpen) {   // never lit: the fuel leaves unburned
+            c.idOpen = false; c.misfired = true; c.burnEta = 0;
+            ++misfires; ++misfireCause[kMisLean];
+        } else {
+            const double Sp = 2.0 * geom_.strokeEq * std::max(rpm, 30.0) / 60.0;
+            const double tauDeg = dieselDelayDeg(Sp, c.T, c.p * 1e-5, fuel_.cetane);
+            // (cold: the charge alone lights only above the cold limit, otherwise a hot glow plug has to - Fuel.h)
+            if (c.T >= kDieselColdIgnK || glowC_ >= kGlowIgnC) c.idI += dt * 6.0 * std::max(rpm, 30.0) / tauDeg;
+            if (c.idI >= 1.0) {
+                c.idOpen = false; c.dBurning = true; c.socPhi = phi;
+                c.idDeg = wrapPos(phi - c.soiPhi, cycle_);
+                const double total = c.injDone + c.injLeft;
+                const double air = std::max(0.0, c.m + dm - (c.mf + dmf) - (c.mb + dmb));
+                c.dPhi = std::min(0.85, total * fuel_.stoich / std::max(1e-12, air));
+                c.dPre = c.injDone;                     // injected during the delay: premixed
+                c.dTail = c.injLeft * 0.6 * c.dPhi * c.dPhi;
+                c.dDiff = c.injLeft - c.dTail;
+                const thermo::Burn bp = thermo::burn(fuel_.molC, fuel_.molH, fuel_.molO, air / std::max(1e-12, total));
+                c.airPerFuel = bp.airUsed;
+                c.yNew = bp.products;
+                c.qTotal = std::max(0.0, fuel_.lhv - bp.energyLeft) * 0.97;   // J per kg of fuel burned (as the SI burn)
+                c.lambda = air / std::max(1e-12, total * fuel_.stoich);
+                c.fired = true; c.misfired = false; c.burnEta = 1.0;
+                fireTimer_ = 0;
+            }
+        }
+    }
+    if (c.dBurning) {
+        const double d = wrapPos(phi - c.socPhi, cycle_);
+        const double t = d / 125.0;
+        const double cd3 = 0.055 / (1.0 + 0.5 * c.dPhi), ct3 = 3.7 * cd3 / (1.0 + 1.12 * c.dPhi);
+        double target = c.dPre * wiebeWave(0.75, 2.0, t) + c.dDiff * wiebeWave(cd3, 1.75, t) + c.dTail * wiebeWave(ct3, 2.5, t);
+        target = std::min(target, c.injDone);                       // nothing burns before it is injected
+        double fb = std::min(std::max(0.0, target - c.dBurned), std::max(0.0, c.mf + dmf));
+        c.dBurned += fb;
+        dU += fb * c.qTotal;
+        dmf -= fb;
+        dmb += fb * (1.0 + c.airPerFuel);
+        dmbNew += fb * (1.0 + c.airPerFuel);
+        if (exOpen || d > 170.0) c.dBurning = false;   // what is left goes out with the exhaust
+    }
 }
 
 // worn apex seals let gas blow past into the neighbouring chamber of the same rotor
@@ -318,11 +453,11 @@ void Engine::apexLeakage(double dt) {
             Cylinder& dst = f > 0 ? b : a;
             double q = std::min(std::fabs(f) * dt, src.m * 0.2);
             if (q <= 0) continue;
-            double ff = src.mf / src.m, bf = src.mb / src.m, h = q * kCp * src.T;
+            double ff = src.mf / src.m, bf = src.mb / src.m, h = q * thermo::enthalpy(bf, src.yb, src.T);
             src.m -= q; src.mf -= q * ff; src.mb -= q * bf; src.U -= h;
             dst.m += q; dst.mf += q * ff; dst.mb += q * bf; dst.U += h;
             for (Cylinder* cc : {&src, &dst}) {
-                cc->T = cc->U / (cc->m * kCv);
+                cc->solveT();
                 cc->p = cc->m * kR * cc->T / cc->V;
             }
         }
@@ -337,15 +472,19 @@ double Engine::valveLift(const ValveSpec& v, double phi, const ValveDynamics& dy
     return std::max(0.0, L + dyn.dev(wrapSym(phi - v.center, 720.0)));
 }
 
-double Engine::burnDuration(const Cylinder& c, double rpm, double lambda) {
-    double D = 47.0 + 18.0 * clampv(rpm / 7000.0, 0.0, 1.3);
-    double dl = lambda - 1.0;
-    D *= 1.0 + 2.0 * dl * dl + (lambda > 1.05 ? 1.4 * (lambda - 1.05) : 0.0);
-    double resid = c.m > 0 ? c.mb / c.m : 0;
-    D *= 1.0 + 2.2 * resid;
-    double lowLoad = clampv(1.0 - c.pIvc / kPatm, 0.0, 0.8);
-    D *= 1.0 + 0.45 * lowLoad;
-    double cov = 0.05 + 0.10 * lowLoad;
+double Engine::burnDuration(Cylinder& c, double rpm, double lambda) {
+    // base: the turbulence (u' grows with the piston speed) - burn angle rises slowly with rpm (x 1.12: the base was
+    // set together with the old lambda / residual factors, which came to 1.12 at the full-load reference state)
+    double D = 1.12 * (47.0 + 18.0 * clampv(rpm / 7000.0, 0.0, 1.3));
+    // the mixture: laminar burning velocity at the spark (unburned gas, cylinder pressure, burned-gas dilution) sets
+    // the kernel and the turbulent flame speed (Flame.h) - lean, rich, diluted (residual at low load), hot, cold,
+    // high pressure and the fuel all act through it
+    const double resid = c.m > 0 ? c.mb / c.m : 0;
+    c.slSpark = laminarFlameSpeed(fuel_, 1.0 / std::max(0.2, lambda), c.tEnd, c.p, resid);
+    c.tuSpark = c.tEnd; c.pSpark = c.p;
+    D *= flameDurationFactor(c.slSpark, c.tEnd, c.p);
+    // cycle-to-cycle variation: larger in a diluted, slow-burning charge
+    const double cov = 0.05 + 0.10 * clampv(1.0 - c.pIvc / kPatm, 0.0, 0.8);
     D *= 1.0 + cov * rng_.gauss();
     // rotary: long, thin, moving combustion chamber burns slowly (in shaft degrees)
     if (geom_.rotary) D *= 1.2;
@@ -363,7 +502,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     const double dV = Vn - c.V;
 
     double dU = -c.p * dV;
-    double dm = 0, dmf = 0, dmb = 0;
+    double dm = 0, dmf = 0, dmb = 0, dmbNew = 0;   // dmbNew: products made by the burn this step
     c.work += c.p * dV;
 
     // ---- valves
@@ -375,7 +514,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     Ai *= 1.0 + 0.02 * imp * sprPort_[0][port];
     Ae *= 1.0 + 0.02 * imp * sprPort_[1][port];
     bool inOpen = Ai > 0, exOpen = Ae > 0;
-    if (exOpen && !c.prevExhaustOpen) c.tEvo = c.T;
+    if (exOpen && !c.prevExhaustOpen) { c.tEvo = c.T; c.fired = false; }
     double ffC = c.m > 0 ? c.mf / c.m : 0, bfC = c.m > 0 ? c.mb / c.m : 0;
 
     if (Ai > 0) {
@@ -383,15 +522,21 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
         double q = f * dt;
         if (q > 0) {
             q = std::min(q, ip.m * 0.5);
+            flInF_ += q;
             double ff = ip.fuelFrac(), bf = ip.burnedFrac();
             ip.m -= q; ip.mf -= q * ff; ip.mb -= q * bf;
             dm += q; dmf += q * ff; dmb += q * bf;
-            dU += q * kCp * ip.T;
+            dU += q * thermo::enthalpy(bf, c.yb, ip.T);
+            // charge cooling: the fuel evaporating on the way in takes part of its latent heat from the air (the
+            // rest from the port walls / valve) - small for gasoline (~9 K), large for alcohols (E85 ~25 K, methanol
+            // ~60 K): a denser, cooler charge that resists knock. Liquid that stays on cold walls takes nothing.
+            dU -= kChargeCoolShare * fuel_.hvap * q * ff * (1.0 - fuel_.coldVap * thermal.coldFactor());
         } else if (q < 0) {
             q = std::min(-q, c.m * 0.3);
+            flInB_ += q;
             ip.m += q; ip.mf += q * ffC; ip.mb += q * bfC;
             dm -= q; dmf -= q * ffC; dmb -= q * bfC;
-            dU -= q * kCp * c.T;
+            dU -= q * thermo::enthalpy(bfC, c.yb, c.T);
         }
     }
     if (Ae > 0) {
@@ -402,18 +547,29 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             ep.m += q; ep.mf += q * ffC; ep.mb += q * bfC;
             dm -= q; dmf -= q * ffC; dmb -= q * bfC;
             exhOutKg_ += q;
-            dU -= q * kCp * c.T;
+            flExF_ += q;
+            dU -= q * thermo::enthalpy(bfC, c.yb, c.T);
             // mass-weighted over the whole exhaust event (weighting by what is left in the cylinder made the last,
             // cool overlap gas count most: a full-load EGT came out hundreds of K too low)
             c.exhH += q * c.T; c.exhM += q;
             const double airOut = q * std::max(0.0, 1.0 - ffC - bfC);
+            // what the wideband will see of this gas: oxygen (free air, and the air bound in the combustion products)
+            // against fuel (the fuel bound in the products, and unburned fuel - which diffuses through the sensor's
+            // barrier more slowly than oxygen, so a misfire reads lean). The products carry the mixture they came
+            // from: a rich charge leaves CO / H2 that still lack their oxygen (lean: the excess air is free air)
+            {
+                const double lp = clampv(c.lambda, 0.4, 1.0), st = fuel_.stoich;
+                const double mbOut = q * bfC;
+                wbAirKg_ += airOut + mbOut * lp * st / (1.0 + lp * st);
+                wbFuelKg_ += kHcSensed * q * ffC + mbOut / (1.0 + lp * st);
+            }
             if (c.burning) {
                 // the flame is still going when the exhaust valve opens (late / slow burn at high rpm): the mixture
                 // that leaves keeps burning in the port as a continuous flame - heat for the exhaust, not a pop
-                const double b = std::min(q * ffC, airOut / kStoich);
-                afHeatJ_ += b * kLHV * 0.9;
+                const double b = std::min(q * ffC, airOut / fuel_.stoich);
+                afHeatJ_ += b * fuel_.lhv * 0.9;
                 c.afterfireFuel += q * ffC - b;
-                c.afterfireAir += airOut - b * kStoich;
+                c.afterfireAir += airOut - b * fuel_.stoich;
             } else {
                 c.afterfireFuel += q * ffC;
                 c.afterfireAir += airOut;   // fresh air (misfired / lean / cut charge)
@@ -424,7 +580,8 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             ep.m -= q; ep.mf -= q * ff; ep.mb -= q * bf;
             dm += q; dmf += q * ff; dmb += q * bf;
             exhOutKg_ -= q;   // (net flow out of the cylinders)
-            dU += q * kCp * ep.T;
+            flExB_ += q;
+            dU += q * thermo::enthalpy(bf, c.yb, ep.T);
         }
     }
     if (ip.mf < 0) ip.mf = 0;
@@ -436,10 +593,11 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
         double air = std::max(0.0, c.m - c.mf - c.mb);
         c.trappedAir = air;
         c.trappedFuel = c.mf;
-        c.lambda = c.mf > 1e-9 ? air / (c.mf * kStoich) : 9.99;
+        if (!diesel_) c.lambda = c.mf > 1e-9 ? air / (c.mf * fuel_.stoich) : 9.99;   // (diesel: set at the start of combustion)
         double rho = kPatm / (kR * ambT_);
         c.ve = air / (rho * geom_.Vd);
-        c.pIvc = c.p; c.tIvc = c.T;
+        c.pIvc = c.p; c.tIvc = c.T; c.vIvc = c.V;
+        c.lwI = 0; c.lwOpen = true; c.tEnd = c.T; c.knockCycle = 0; c.knockPCycle = 0;
     }
     c.prevIntakeOpen = inOpen;
     if (!exOpen && c.prevExhaustOpen && c.exhM > 1e-9) {   // exhaust valve closed: this cycle's exhaust temperature
@@ -448,8 +606,11 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     }
     c.prevExhaustOpen = exOpen;
 
+    // ---- diesel: direct injection, ignition delay, premixed / diffusion / tail burn (Package 4; Fuel.h)
+    if (diesel_) dieselStep(c, dt, phiPrev, phi, rpm, exOpen, fuelCut, dm, dmf, dmb, dmbNew, dU);
+
     // ---- injection event (EFI)
-    {
+    if (!diesel_) {
         const double ia = wrapPos(p_.injectionAngle, cycle_);
         const int mode = geom_.rotary ? kInjSequential : ecu.cmd.injMode;
         if (mode == kInjSequential) {
@@ -466,14 +627,14 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
 
     // ---- spark
     const double sparkAt = wrapPos(-(advance_ + ecu.cylSpark(port) - ecu.cmd.cylRetard[clampv(port, 0, kMaxCyl - 1)]) + 0.5 * imp * sprCyl_[0][i], cycle_);
-    if (crossed(phiPrev, phi, sparkAt) && !c.burning) {
-        c.knockCycle = 0;
+    if (!diesel_ && crossed(phiPrev, phi, sparkAt) && !c.burning) {
         // soft limiter: the ECU drops a share of the sparks
         if (spark && !(ecu.cmd.cutFraction > 0 && rng_.uniform() < ecu.cmd.cutFraction)) {
             double air = std::max(0.0, c.m - c.mf - c.mb);
             // only the vaporised fuel takes part (cold: part of it is still liquid on the walls)
-            const double vapF = 1.0 - 0.25 * thermal.coldFactor();
-            double lam = c.mf > 1e-10 ? air / (c.mf * vapF * kStoich) : 99.0;
+            // (alcohols: single boiling point and a large heat of vaporisation - far more stays liquid when cold)
+            const double vapF = 1.0 - fuel_.coldVap * thermal.coldFactor();
+            double lam = c.mf > 1e-10 ? air / (c.mf * vapF * fuel_.stoich) : 99.0;
             double resid = c.m > 0 ? c.mb / c.m : 1;
             // misfire probability per cause; the largest one decides (and is counted for diagnostics)
             double pc[kMisCauseCount] = {};
@@ -489,11 +650,19 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             }
             pc[kMisFouled] = clampv(fouling, 0.0, 1.0) * 0.6;   // fouled plug
             if (lam < 0.62) pc[kMisRich] = clampv((0.62 - lam) / 0.15, 0.0, 1.0);
-            // dilution: burned gas in the charge (residual, exhaust reverted through a big overlap) - past ~35 % the
-            // flame kernel starts to fail. A misfired charge leaves fresh mixture behind, so the next one fires
-            // harder: the lumpy idle of big-overlap engines (bridge / peripheral ported rotaries).
+            // dilution: burned gas in the charge (residual, exhaust reverted through a big overlap). Past the dilution
+            // limit the flame kernel fails. This is a threshold with a small cycle-to-cycle scatter (mixing at the
+            // plug), not a coin toss: near the limit the cycles couple through the residual they leave - a misfire
+            // leaves fresh mixture (the next charge is less diluted and fires hard), a strong burn leaves hot
+            // products (the next one misfires). That deterministic feedback with a little noise (Daw, Finney et al.,
+            // ORNL, SAE 962086; the same mechanism as a two-stroke's "four-stroking") gives the rhythmic lope of
+            // big-overlap engines - the bridge / peripheral port rotary "brap" - instead of a random sputter. (Limit
+            // 0.475 = the middle of the earlier 0.35-0.60 probability ramp, so the average dilution tolerance is
+            // unchanged.) Tried and left out (ECU_PLAN, "Brap tahap 2"): the paper's continuous combustion efficiency
+            // (partial burns) broke up the long misfire runs whose rpm swings make the slow brap, and popping the
+            // misfire pocket on the next firing - both sounded worse than this.
             c.dilution = resid;
-            if (resid > 0.35) pc[kMisDilution] = clampv((resid - 0.35) / 0.25, 0.0, 1.0);
+            if (resid + 0.03 * rng_.gauss() > 0.475) pc[kMisDilution] = 1.0;
             // fuel cut: nothing (or only the trace evaporating off the port walls) to light - not a misfire
             // (a charge inducted during the cut - up to one cycle after it ended - counts as cut, too)
             const bool noFuel = c.mf < 1e-9 || (sinceCutS_ < 1.5 * 60.0 * (cycle_ / 360.0) / std::max(rpm, 300.0) && lam > 1.3);
@@ -506,16 +675,25 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
                 c.burnEta = 0;
             } else {
                 c.misfired = false;
-                const double full = std::min(c.mf * (1.0 - 0.25 * thermal.coldFactor()), air / kStoich);   // cold: poor vaporisation
+                // the vaporised fuel burns (cold: part of it is still liquid on the walls); a rich charge uses all its
+                // oxygen and leaves CO and H2, whose chemical energy is not released (Thermo.h)
+                const double full = c.mf * vapF;
+                const thermo::Burn bp = thermo::burn(fuel_.molC, fuel_.molH, fuel_.molO, full > 1e-12 ? air / full : 99.0);
                 c.burnEta = 1.0;
                 c.fuelBurn = full;
-                c.qTotal = c.fuelBurn * kLHV * 0.92 * (1.0 + 0.015 * imp * sprCyl_[1][i]); // efficiency spread
+                c.airPerFuel = bp.airUsed;
+                c.yNew = bp.products;
+                // combustion efficiency 0.97: unburned hydrocarbons (crevices, quench layers) - Heywood gives 95-98 %
+                // for lambda >= 1; the rich-mixture losses (CO / H2) are counted separately above
+                c.qTotal = c.fuelBurn * std::max(0.0, fuel_.lhv - bp.energyLeft) * 0.97 *
+                           (1.0 + 0.015 * imp * sprCyl_[1][i]); // efficiency spread
                 c.burnDur = burnDuration(c, rpm, lam) * (1.0 - 0.06 * clampv(((double)p_.comp.plugGap_mm - 0.8) / 0.3, -1.0, 1.5)) *
                             (1.0 + 0.03 * imp * sprCyl_[2][i]) *
                             (1.0 + 0.01 * imp * rng_.gauss());                    // extra cycle-to-cycle variation
                 c.burnStart = wrapPos(sparkAt + 0.25 * imp * rng_.gauss(), cycle_);
                 c.xPrev = 0;
                 c.burning = true;
+                c.fired = true;
                 fireTimer_ = 0;
             }
         } else c.misfired = true;   // spark cut (limiter / launch / shift / traction control) or ignition off: the charge stays unburned
@@ -536,7 +714,8 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
         dU += c.qTotal * dx;
         double fb = c.fuelBurn * dx;
         dmf -= fb;
-        dmb += fb * (1.0 + kStoich);
+        dmb += fb * (1.0 + c.airPerFuel);
+        dmbNew += fb * (1.0 + c.airPerFuel);
         if (c.burnEnded) {
             // fuel left over after a rich burn ends up as CO/HC products, not as fuel
             // for the next cycle (no rich run-away through the residual gas)
@@ -546,49 +725,92 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
             double left = std::max(0.0, c.mf + dmf);
             dmf -= left * 0.9;
             dmb += left * 0.9;
+            dmbNew += left * 0.9;
         }
-        if (x < 0.9 && c.pIvc > 0) {
-            double tu = c.tIvc * std::pow(std::max(1.0, c.p / c.pIvc), (kGamma - 1.0) / kGamma);
-            // end-gas autoignition gets much easier at high absolute pressure (boost)
-            tu += 1.3e-5 * std::max(0.0, c.p - 90e5);
-            // a too-hot plug tip glows: surface ignition heats the end gas (pre-ignition -> knock)
-            tu += 3.0 * std::max(0.0, plugTempC - 850.0);
-            tu += 0.6 * (thermal.coolantC - 90.0);             // hot coolant / walls
-            c.knockCycle = std::max(c.knockCycle, tu);
-        }
+        if (x >= 0.9) closeKnockWindow(c);   // the end gas is consumed
     }
 
-    // ---- wall heat transfer (Woschni-like)
+    // ---- end-gas autoignition (Livengood-Wu, Douaud-Eyzat delay): the unburned charge compressed isentropically
+    //      from intake closing (variable cp), heated by a glowing plug tip and hot coolant / walls
+    if (c.lwOpen && c.pIvc > 0 && !diesel_) {
+        c.tEnd = thermo::isentropicAir(c.tIvc, std::max(1.0, c.p / c.pIvc), c.tEnd);
+        double tu = c.tEnd;
+        tu += 3.0 * std::max(0.0, plugTempC - 850.0);    // surface ignition from a too-hot plug (pre-ignition)
+        tu += 0.6 * (thermal.coolantC - 90.0);           // hot coolant / walls
+        if (tu > 650.0) {
+            const double on = fuel_.octaneIndex(knockOnK(c.pIvc / 101325.0));
+            c.lwI += dt / knockDelayS(on, c.p, tu);
+        }
+        if (tu > c.knockCycle) { c.knockCycle = tu; c.knockPCycle = c.p; }
+        if (exOpen) closeKnockWindow(c);   // no burn this cycle (misfire / cut): closes at exhaust opening
+    }
+
+    // ---- wall heat transfer: Woschni (SAE 670931), h = 3.26 B^-0.2 p^0.8 T^-0.55 w^0.8 (B m, p kPa, T K, w m/s),
+    //      w = C1 Sp + C2 (Vd Tr) / (pr Vr) (p - pm): C1 = 6.18 while a valve is open (gas exchange), 2.28 with the
+    //      valves shut; C2 = 3.24e-3 m/(s K) from combustion to exhaust opening (0 during compression). pm = motored
+    //      pressure from the state at intake closing (polytropic n = 1.32). (+0.5 m/s: an engine at rest still
+    //      exchanges some heat.)
     {
-        double Sp = 2.0 * geom_.strokeEq * rpm / 60.0;
-        double w = 2.28 * Sp + (c.burning ? 3.0 : 0.0) + 0.5;
+        const double Sp = 2.0 * geom_.strokeEq * rpm / 60.0;
+        double w = (inOpen || exOpen ? 6.18 : 2.28) * Sp + 0.5;
+        if (c.fired && !inOpen && !exOpen && c.vIvc > 0 && c.pIvc > 0) {
+            const double pm = c.pIvc * std::pow(c.vIvc / c.V, 1.32);
+            w += 3.24e-3 * geom_.Vd * c.tIvc / (c.pIvc * c.vIvc) * std::max(0.0, c.p - pm);
+        }
         double h = 3.26 * std::pow(geom_.boreEq, -0.2) * std::pow(std::max(1.0, c.p / 1000.0), 0.8) *
                    std::pow(std::max(200.0, c.T), -0.55) * std::pow(w, 0.8);
         dU -= h * wallArea * (c.T - (thermal.coolantC + 273.15 + 87.0)) * dt;
     }
 
     // ---- integrate
+    // burned-gas composition: the new products mix with the burned gas already there (residual / reverted exhaust)
+    if (dmbNew > 0) {
+        const double w = dmbNew / std::max(1e-12, c.mb + dmbNew);
+        for (int k = 0; k < kSpCount; ++k) c.yb.y[k] += (c.yNew.y[k] - c.yb.y[k]) * w;
+    }
     c.U += dU;
     c.m = std::max(1e-8, c.m + dm);
     c.mf = clampv(c.mf + dmf, 0.0, c.m);
     c.mb = clampv(c.mb + dmb, 0.0, c.m - c.mf);
     c.V = Vn;
-    c.T = c.U / (c.m * kCv);
-    if (c.T < 150 || c.T > 3600) { c.T = clampv(c.T, 150.0, 3600.0); c.U = c.m * kCv * c.T; }
+    c.solveT();
+    if (c.T <= thermo::kTmin + 1e-6 || c.T >= thermo::kTmax - 1e-6) c.setT(c.T);   // (out of the table range)
     double pPrev = c.p;
     c.p = c.m * kR * c.T / c.V;
     c.pmax = std::max(c.pmax, c.p);
+    {
+        const double dTh = wrapPos(phi - phiPrev, cycle_);
+        const double dp = dTh > 1e-6 && dTh < 10.0 ? (c.p - pPrev) / dTh : 0.0;
+        c.dpMax = std::max(c.dpMax, dp);
+        // diesel: the sudden premixed burn excites the gas in the chamber at its acoustic modes (ringing): peak-to-peak
+        // amplitude beta (dP/dt)max at the first tangential mode (CombustionNoise.h). Only for the sound - the 0-D
+        // thermodynamics stay as they are.
+        // (the peak is taken as the highest rate since the start of combustion, once the rate has fallen to half of it
+        //  - step-to-step jitter right at ignition must not count as the peak)
+        if (diesel_ && c.dBurning && !c.ringKicked) {
+            c.dpStep = std::max(c.dpStep, dp);
+            if (c.dpStep > 0 && dp < 0.5 * c.dpStep) {
+                c.ringA = 0.5 * kRingBeta * c.dpStep * 6.0 * std::max(rpm, 60.0);   // half the peak-to-peak, Pa
+                c.ringKickA = c.ringA;
+                c.ringPh = 0;
+                c.ringKicked = true;
+            }
+        }
+    }
+    if (c.ringA > 1.0) {
+        c.ringPh += 2.0 * kPi * ringFrequency(geom_.boreEq, c.T, kR) * dt;
+        c.ringA *= std::exp(-dt / kRingDecay);
+    } else c.ringA = 0;
 
-    // ---- per-cycle bookkeeping at firing TDC
+    // ---- per-cycle bookkeeping (at the cycle's wrap: 0 deg = firing TDC). The peaks are taken over the half cycle
+    //      either side of the wrap (combustion straddles firing TDC): read at bottom dead centre of the power stroke
     if (phi < phiPrev) {
         c.imep = c.work / geom_.Vd;
         c.work = 0;
-        c.pmaxCycle = c.pmax;
-        c.pmax = 0;
-        c.knock = clampv((c.knockCycle - 940.0) / 110.0, 0.0, 5.0);
-        ++c.cycles;
-        c.knockEvent = c.knock > 1.0;
-        c.knockCycle = 0;
+    }
+    if (crossed(phiPrev, phi, 0.5 * cycle_)) {
+        c.pmaxCycle = c.pmax; c.pmax = 0;
+        c.dpMaxCycle = c.dpMax; c.dpMax = 0;
     }
 
     // torque on the crank
@@ -639,8 +861,41 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
         vtcNow_ += clampv(vt - vtcNow_, -200.0 * dt, 200.0 * dt);
         vin_.center = vinHi_.center = 360.0 + p_.intakeCenterline - p_.intakeCamAdvance - vtcNow_;
     }
+    // glow plug tip (Bosch glow plug brochure: metal 850 C in under 5 s, max 1150 C; ceramic 1000 C in under 2 s, max
+    // 1300 C): first order towards its maximum while powered (time constants from those heat-up figures from 20 C),
+    // back towards the coolant temperature when off
+    if (diesel_ && p_.glowPlugs) {
+        const bool ceramic = p_.glowPlugs == 2;
+        const double tMax = ceramic ? 1300.0 : 1150.0, tau = ceramic ? 1.38 : 3.77;
+        const double tgt = (ecu.cmd.glow && elec.volts > 8.0) ? tMax : thermal.coolantC;
+        glowC_ += (tgt - glowC_) * (1.0 - std::exp(-dt / tau));
+    } else glowC_ = thermal.coolantC;
     double scTorque = isBoosted(p_) ? boost.step(dt, omega_, egtAvg, intake, exhaust) : 0.0;
-    intake.stepAir(dt, pedal, rpm, p_.ignition && !fuelCut);
+    // ---- exhaust gas recirculation (Package 4b): a valve from the exhaust manifold (before the turbine) into the
+    //      plenum. Compressible orifice flow, one way only - Wahlstrom & Eriksson (LiTH-ISY-R-2882 eq. 31-34) clip
+    //      the pressure ratio at 1, so no reverse flow; the gas carries its burned share (it dilutes the charge and
+    //      takes the place of fresh air the MAF sensor no longer sees). Uncooled: it arrives at the exhaust
+    //      temperature and warms the plenum (mass-weighted). Valve area = its open share of the bore; actuator 0.1 s.
+    double egrNow = 0;
+    if (p_.egrValveDia_mm > 0 && intake.inletCount() > 0) {
+        egrPos_ += (ecu.cmd.egr - egrPos_) * std::min(1.0, dt / 0.1);
+        GasNode& src = exhaust.hasTurbine() ? exhaust.turbineIn() : exhaust.port(0);
+        GasNode& dst = intake.inletNode(0);
+        const double d = p_.egrValveDia_mm * 1e-3;
+        const double a = clampv(egrPos_, 0.0, 1.0) * 0.25 * kPi * d * d;
+        double f = a > 0 ? limitedFlow(a, src.p(), src.T, src.V, dst.p(), dst.T, dst.V, dt, 0.35) : 0.0;
+        if (f > 0) {
+            const double q = std::min(f * dt, src.m * 0.3);
+            const double ff = src.fuelFrac(), bf = src.burnedFrac();
+            src.m -= q; src.mf -= q * ff; src.mb -= q * bf;
+            dst.m += q; dst.mf += q * ff; dst.mb += q * bf;
+            egrNow = q / dt;
+        }
+    } else egrPos_ = 0;
+    egrFlow_ += (egrNow - egrFlow_) * std::min(1.0, dt / 0.1);   // (averaged over the exhaust pulses)
+    // uncooled: the plenum takes the flow-weighted mix of the fresh charge and the gas at the exhaust temperature
+    intake.setEgr(egrFlow_ / std::max(1e-6, egrFlow_ + std::max(0.0, intake.airFlow())), std::max(400.0, egtAvg));
+    intake.stepAir(dt, diesel_ ? 1.0 : pedal, rpm, p_.ignition && !fuelCut);   // a diesel has no throttle
 
     // ---- cylinders
     const double dTheta = omega_ * dt / kDeg;
@@ -663,7 +918,7 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
         c.egt += (ambT_ + 150 - c.egt) * dt * 0.05; // slow cool down
         // only fuel that meets oxygen can burn: the exhaust of a complete rich burn holds unburned fuel (CO / HC)
         // but no air, so a rich engine does not pop - a misfired, cut or very lean charge brings both
-        const double burnable = std::min(c.afterfireFuel, c.afterfireAir / kStoich);
+        const double burnable = std::min(c.afterfireFuel, c.afterfireAir / fuel_.stoich);
         // a firing cylinder under load fills its port with hot, fast gas: mixture that slips through (scavenging
         // with a big overlap, late burning) burns there as a continuous flame. Pops need a pocket of mixture - an
         // unburned (misfired or cut) charge, or the cooler gas of the overrun.
@@ -671,20 +926,20 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
         //  of everything leaving the cylinder would wrongly keep a scavenging engine's slip from ever burning)
         if (!c.misfired && std::max(c.egt, c.tEvo) > 900 && burnable > 0) {
             const double b = burnable * std::min(1.0, dt / 0.004);
-            c.afterfireFuel -= b; c.afterfireAir = std::max(0.0, c.afterfireAir - b * kStoich);
-            afHeatJ_ += b * kLHV * 0.9;
+            c.afterfireFuel -= b; c.afterfireAir = std::max(0.0, c.afterfireAir - b * fuel_.stoich);
+            afHeatJ_ += b * fuel_.lhv * 0.9;
         } else if (burnable > 1.5e-6 && c.egt > 650 && p_.ignition &&
                    // the pocket must be flammable: the trace of fuel the port walls give off during a fuel cut
                    // sits in far too much air to ignite (lean flammability limit ~ lambda 1.7)
-                   c.afterfireAir < 1.7 * kStoich * c.afterfireFuel) {
+                   c.afterfireAir < 1.7 * fuel_.stoich * c.afterfireFuel) {
             double rate = 25.0 * (burnable / 1e-5) * smoothstep(650, 950, c.egt);
             if (rng_.uniform() < rate * dt) {
                 double burn = burnable * 0.7;
                 c.afterfireFuel -= burn;
-                c.afterfireAir = std::max(0.0, c.afterfireAir - burn * kStoich);
-                afHeatJ_ += burn * kLHV * 0.9;
+                c.afterfireAir = std::max(0.0, c.afterfireAir - burn * fuel_.stoich);
+                afHeatJ_ += burn * fuel_.lhv * 0.9;
                 GasNode& ep = exhaust.port(portOf_[i]);
-                c.popPending += std::min(burn * kLHV * (kGamma - 1.0) / ep.V * 0.03, 0.7e5) * (0.6 + 0.4 * rng_.uniform());
+                c.popPending += std::min(burn * fuel_.lhv * (kGamma - 1.0) / ep.V * 0.03, 0.7e5) * (0.6 + 0.4 * rng_.uniform());
                 ++afterfires;
             }
         }
@@ -716,6 +971,9 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     double tStarter = 0;
     if (p_.starter) {
         double tmax = 60.0 + 200.0 * geom_.Vd * 1000.0 + 15.0 * nPorts_;
+        // the starter is sized for the compression it has to push through (peak compression pressure ~ CR^1.3):
+        // a diesel's is far stronger than a petrol engine's of the same size
+        tmax *= std::max(1.0, std::pow(std::max(1.0, (double)p_.compression) / 10.0, 1.3));
         tStarter = tmax * clampv(1.0 - rpm / 380.0, 0.0, 1.0);
     }
     double tLoad = signedLoad ? loadTorque + scTorque * std::tanh(omega_ / 3.0)
@@ -795,16 +1053,63 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
         // closely at full load, and a short hot burst at low flow barely moves it.
         const double area = kPi * 0.25 * D * D;
         const double G = mPort / area;                                // kg / m^2 s through a primary
-        const double hProbe = 800.0 * std::sqrt(std::max(0.02, G) / 32.0);
-        const double hGasWall = 120.0 * std::pow(std::max(0.02, G) / 32.0, 0.8);
         const double hOut = 20.0 + 1.2 * std::min(40.0, vehSpeed_);   // pipe outside: radiation + air
         const double Ta = ambT_;
-        egtWall_ += dt * (hGasWall * (egtAvg - egtWall_) - hOut * (egtWall_ - Ta)) / 4200.0;
-        const double Tp = egtProbe_, Twl = egtWall_;
-        const double hRad = 4.0 * 0.8 * 5.67e-8 * std::pow(0.5 * (Tp + Twl), 3.0);
-        egtProbe_ += dt * (hProbe * (egtAvg - Tp) - hRad * (Tp - Twl)) / 560.0;
+        auto probe = [&](double Tgas, double Gp, double& Tp, double& Tw, double h) {
+            const double hProbe = 800.0 * std::sqrt(std::max(0.02, Gp) / 32.0);
+            const double hGasWall = 120.0 * std::pow(std::max(0.02, Gp) / 32.0, 0.8);
+            Tw += h * (hGasWall * (Tgas - Tw) - hOut * (Tw - Ta)) / 4200.0;
+            const double hRad = 4.0 * 0.8 * 5.67e-8 * std::pow(0.5 * (Tp + Tw), 3.0);
+            Tp += h * (hProbe * (Tgas - Tp) - hRad * (Tp - Tw)) / 560.0;
+        };
+        probe(egtAvg, G, egtProbe_, egtWall_, dt);
+        // the other thermocouples move slowly: updated every millisecond
+        egtSub_ += dt;
+        if (egtSub_ >= 1e-3) {
+            const double h = egtSub_;
+            egtSub_ = 0;
+            // per-cylinder probes in the primaries: each sees its own cylinder's gas after the port
+            if (p_.egtPerCyl) {
+                double sum[kMaxCyl] = {}; int cnt[kMaxCyl] = {};
+                for (int i = 0; i < (int)cyls_.size(); ++i) { const int pt = clampv(portOf_[i], 0, kMaxCyl - 1); sum[pt] += cyls_[i].egt; ++cnt[pt]; }
+                const double afRise = std::min(700.0, afPower_ / (std::max(1e-3, exhFlowAvg_) * 1150.0));
+                for (int pt = 0; pt < nPorts_ && pt < kMaxCyl; ++pt) {
+                    const double Tc = cnt[pt] ? sum[pt] / cnt[pt] : Tcyl;
+                    const double Tg = (Tc > Tw ? Tw + (Tc - Tw) * std::exp(-ntu) : Tc) + afRise;
+                    probe(Tg, G, egtCylProbe_[pt], egtCylWall_[pt], h);
+                }
+            }
+            // after the turbine: the gas has given up the turbine's work (the wastegate flow mixes back in)
+            if (exhaust.hasTurbine()) {
+                const double Dd = clampv((double)p_.pipeDia_mm, 30.0, 120.0) * 1e-3;
+                const double Gd = exhFlowAvg_ / (kPi * 0.25 * Dd * Dd);
+                // and loses heat to the turbine housing / downpipe on the way (a lot when it flows slowly)
+                const double mt = std::max(1e-5, exhFlowAvg_);
+                const double Ret = 4.0 * mt / (kPi * Dd * 4.0e-5);
+                const double Nut = 1.8 * std::max(14.0, 0.023 * std::pow(Ret, 0.8) * 0.9);
+                const double ntuT = Nut * 0.06 * kPi * (8.0 * Dd) / (mt * 1150.0);
+                const double Tt = std::max(Ta, egtAvg - boost.turbineDropK);
+                const double Tpost = egtPostWall_ + (Tt - egtPostWall_) * std::exp(-ntuT);
+                probe(std::max(Ta, Tpost), Gd, egtPost_, egtPostWall_, h);
+            } else { egtPost_ = egtProbe_; egtPostWall_ = egtWall_; }
+        }
+    }
+    // ---- the gas at the wideband: what left the cylinders, mixed in the collector (or the turbine housing and
+    //      downpipe after a turbo) - its residence time is the mixing volume over the volume flow
+    {
+        const bool post = p_.widebandPos && exhaust.hasTurbine();
+        const double disp = geom_.Vd * nPorts_ * (geom_.rotary ? 2.0 : 1.0);
+        const double V = post ? 1.0e-3 + 0.6 * disp : 0.3e-3 + 0.25 * disp;
+        const double rho = kPatm / (kR * std::max(500.0, egtAvg));
+        const double tau = clampv(V * rho / std::max(1e-4, exhFlowAvg_), 0.003, 0.3);
+        const double k = std::min(1.0, dt / tau);
+        wbA_ += (wbAirKg_ / std::max(1e-9, dt) - wbA_) * k;
+        wbF_ += (wbFuelKg_ / std::max(1e-9, dt) - wbF_) * k;
+        wbAirKg_ = wbFuelKg_ = 0;
+        lamPipe_ = wbF_ > 1e-9 ? clampv(wbA_ / (wbF_ * fuel_.stoich), 0.3, 9.99) : (wbA_ > 1e-9 ? 9.99 : lamPipe_);
     }
     exhaust.setGasTemp(egtAvg);   // pipe sound speed follows the gas temperature
+    flowStep(dt);
     knockMax = std::max(kn, knockMax - dt * 0.5);
 
     // ---- sound
@@ -813,7 +1118,14 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     sBoost = isBoosted(p_) ? boost.sound() : 0.0;
     for (const Cylinder& c : cyls_) if (c.knockEvent && c.prevPhi < 40 && c.prevPhi > 5) pingIn_ += 0.05 * c.knock;
     for (Cylinder& c : cyls_) if (c.prevPhi > 40) c.knockEvent = false;
-    double mech = head_.tick(tickIn_ * 0.0012) + block_.tick(blockIn_ * 0.08);
+    double mech = head_.tick(tickIn_ * 0.0012);
+    if (diesel_) {
+        // combustion noise: all cylinder pressures (and their ringing) through the structure attenuation -> Pa
+        double ps = 0;
+        for (const Cylinder& c : cyls_) ps += c.p - kPatm + c.ringA * std::sin(c.ringPh);
+        combNoise_ = cnStruct_.tick(ps);
+        mech += combNoise_;
+    } else mech += block_.tick(blockIn_ * 0.08);
     mech += ping_.tick(pingIn_) * 2.0;
     tickIn_ = 0; pingIn_ = 0; blockIn_ = 0;
     if (p_.starter) {
@@ -823,6 +1135,66 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
         mech += 0.08 * std::sin(starterPhase_) + starterBp_.tick(rng_.bipolar() * 0.25);
     }
     sMech = mech;
+}
+
+// the end gas is gone (90 % burned, or the exhaust opened without a burn): this cycle's knock index
+void Engine::closeKnockWindow(Cylinder& c) {
+    if (!c.lwOpen) return;
+    c.lwOpen = false;
+    c.knock = knockIndexFromIntegral(c.lwI);
+    c.knockEvent = c.knock > 1.0;
+    c.knockT = c.knockCycle; c.knockP = c.knockPCycle;
+    ++c.cycles;   // the ECU's knock window reads one value per cycle
+}
+
+// flow map (Package 3): what moves through each section of the gas path and the state of its volumes, averaged for
+// display - forward and reverse flow kept apart so that a flow pulsing back and forth shows both directions
+void Engine::flowStep(double dt) {
+    const double kF = std::min(1.0, dt / 0.15), kP = std::min(1.0, dt / 0.1);
+    FlowState& f = flow_;
+    auto both = [&](int seg, double signedKgs) {
+        f.fwd[seg] += (std::max(0.0, signedKgs) - f.fwd[seg]) * kF;
+        f.back[seg] += (std::max(0.0, -signedKgs) - f.back[seg]) * kF;
+    };
+    auto split = [&](int seg, double fwdKgs, double backKgs) {
+        f.fwd[seg] += (fwdKgs - f.fwd[seg]) * kF;
+        f.back[seg] += (backKgs - f.back[seg]) * kF;
+    };
+    const double inv = 1.0 / std::max(1e-9, dt);
+    double thrF, thrB;
+    intake.throttleFlows(thrF, thrB);
+    const bool boosted = isBoosted(p_), turbo = boosted && exhaust.hasTurbine();
+    if (boosted) both(kFlowInlet, boost.compFlow); else split(kFlowInlet, thrF, thrB);
+    split(kFlowBov, boosted ? boost.ventFlow : 0.0, 0.0);
+    split(kFlowThrottle, thrF, thrB);
+    split(kFlowIntakeValve, flInF_ * inv, flInB_ * inv);
+    split(kFlowExhaustValve, flExF_ * inv, flExB_ * inv);
+    both(kFlowTurbine, turbo ? boost.turbFlow : 0.0);
+    both(kFlowWastegate, turbo ? boost.wgFlow : 0.0);
+    // the tailpipe carries the net flow (the pulses are smoothed out by the pipes and silencers on the way)
+    flTailNet_ += ((turbo ? boost.turbFlow + boost.wgFlow : (flExF_ - flExB_) * inv) - flTailNet_) * kF;
+    f.fwd[kFlowTail] = std::max(0.0, flTailNet_); f.back[kFlowTail] = std::max(0.0, -flTailNet_);
+    flInF_ = flInB_ = flExF_ = flExB_ = 0;
+
+    auto ema = [kP](double& v, double x) { v += (x - v) * kP; };
+    const double pa = kPatm * 1e-3;
+    f.pAmb = pa; f.tAmb = ambT_;
+    ema(f.pCharge, boosted ? intake.chargeNode().p() * 1e-3 : pa);
+    ema(f.tCompOut, boosted ? boost.compOutT : ambT_);
+    ema(f.tCharge, boosted ? boost.chargeT : ambT_);
+    ema(f.pPlenum, intake.map() * 1e-3);
+    ema(f.tPlenum, intake.plenumTemp());
+    double pi = 0, ti = 0, pe = 0;
+    for (int i = 0; i < nPorts_; ++i) { pi += intake.port(i).p(); ti += intake.port(i).T; pe += exhaust.port(i).p(); }
+    const double np = std::max(1, nPorts_);
+    ema(f.pPortIn, pi / np * 1e-3);
+    ema(f.tPortIn, ti / np);
+    ema(f.pPortEx, pe / np * 1e-3);
+    ema(f.tCyl, egtCyl);
+    ema(f.tCollector, egtAvg);
+    ema(f.pTurbIn, turbo ? exhaust.turbineIn().p() * 1e-3 : pe / np * 1e-3);
+    ema(f.pTurbOut, turbo ? exhaust.turbineOut().p() * 1e-3 : pa);
+    ema(f.tPostTurb, std::max(ambT_, egtAvg - (turbo ? boost.turbineDropK : 0.0)));
 }
 
 // stress, plug temperature / fouling, oil pressure and (optionally) mechanical damage
@@ -837,7 +1209,8 @@ void Engine::updateHealth(double dt, double rpm, double mapPa) {
     if (rpm < 100) target = ambT_ - 273.15 + 20.0;
     plugTempC += (target - plugTempC) * (1.0 - std::exp(-dt / 3.0));
     // too cold + rich: carbon fouling; hot enough: it burns off
-    if (plugTempC < 450.0 && lambdaAvg < 0.95 && rpm > 300) fouling += dt * 0.02 * (450.0 - plugTempC) / 50.0;
+    // (carbon builds up over minutes of rich running on a too-cold plug, not seconds)
+    if (plugTempC < 450.0 && lambdaAvg < 0.95 && rpm > 300) fouling += dt * 0.0035 * (450.0 - plugTempC) / 50.0;
     else if (plugTempC > 500.0) fouling -= dt * 0.05;
     fouling = clampv(fouling, 0.0, 1.0);
     if (!p_.comp.allowFailure || failure) return;

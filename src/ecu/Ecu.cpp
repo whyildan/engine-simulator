@@ -5,7 +5,6 @@
 
 namespace es {
 
-static constexpr double kFuelDensity = 0.745;   // g/cc
 static constexpr double kRgas = 287.0;
 
 void Ecu::init(const EngineParams& p, double vdCyl, int ports, double revsPerEvent) {
@@ -14,7 +13,7 @@ void Ecu::init(const EngineParams& p, double vdCyl, int ports, double revsPerEve
     vdCyl_ = vdCyl; ports_ = ports; revsPerEvent_ = revsPerEvent;
     filmEst_.assign(ports, 0.0);
     evapAcc_.assign(ports, 0.0);
-    lastInjT_.assign(ports, -1.0); lastAir_.assign(ports, 0.0); lastAfr_.assign(ports, 14.7);
+    lastInjT_.assign(ports, -1.0); lastAir_.assign(ports, 0.0); lastAfr_.assign(ports, 14.7);   // (AFR of the fuel; only a starting value)
     asyncFuel.assign(ports, 0.0);
     iacI_ = 0.35; driveFf_ = 0; rpmIdle_ = 0; cmd = ActuatorCommands();
 }
@@ -59,6 +58,8 @@ void Ecu::protectionStep(double dt, const SensorReadings& s, double rpm, double 
     for (int i = 0; i < ports_ && i < kMaxCyl; ++i) kr = std::max(kr, knockRetard[i]);
     v[kProtKnock] = kr;
     v[kProtEgt] = s.value[kSnsEGT];
+    if (p_.egtPerCyl) for (int i = 0; i < ports_ && i < kMaxCyl; ++i) v[kProtEgt] = std::max(v[kProtEgt], s.egtCyl[i]);
+    v[kProtBackpressure] = s.value[kSnsEMAP] / std::max(10.0, mapUsed);   // drive pressure ratio
     static const int critical[] = {kSnsTPS, kSnsMAP, kSnsIAT, kSnsECT, kSnsCKP, kSnsCMP, kSnsWideband, kSnsKnock, kSnsOilP, kSnsFuelP};
     int failed = 0;
     for (int id : critical) failed += s.fallback[id] ? 1 : 0;
@@ -74,6 +75,8 @@ void Ecu::protectionStep(double dt, const SensorReadings& s, double rpm, double 
         if (i == kProtOilPress || i == kProtFuelPress) applicable = applicable && running && afterStart_ > 2.0;
         if (i == kProtFuelPress) applicable = applicable && efi;
         if (i == kProtOverboost) applicable = applicable && isBoosted(p_);
+        if (i == kProtBackpressure) applicable = applicable && p_.induction == Induction::Turbo && p_.emapSensor && !s.fallback[kSnsEMAP] &&
+                                                 running && mapUsed > baro() + 30.0;   // (meaningful under boost)
         if (i == kProtLean) applicable = applicable && efi && running && fuelling_ && afterStart_ > 2.0 && load > 0.85 &&
                                          !s.fallback[kSnsWideband] && sinceTransient_ > 0.3;
         double limit = r.limit, warn = r.warn;
@@ -116,7 +119,7 @@ void Ecu::knockStep(double dt, const SensorReadings& s, double rpm) {
     for (int i = 0; i < kMaxCyl; ++i) {
         bool event = false;
         if (s.knockSeq[i] != knockSeqSeen_[i]) {
-            if (knockSeqInit_ && on && i < ports_ && s.knockCyl[i] > cal_.knockThreshold) event = true;
+            if (knockSeqInit_ && on && i < ports_ && s.knockCyl[i] > cal_.knockThreshold * curveLookup(cal_.flexKnock, flexPct)) event = true;
             knockSeqSeen_[i] = s.knockSeq[i];
         }
         if (event) { knockRetard[i] = std::min((double)cal_.knockMaxRetard, knockRetard[i] + cal_.knockRetardStep); ++knockEvents; }
@@ -162,12 +165,27 @@ void Ecu::boostStep(double dt, const SensorReadings& s, double rpm, double tpsPc
     prevBoost_ = boostBar;
     boostRate_ += (rate - boostRate_) * std::min(1.0, dt / 0.03);
     const bool turbo = p_.induction == Induction::Turbo;
-    const bool ctl = turbo && cal_.boostControl && !holdIac;
+    const bool vgt = turbo && p_.vgt;
+    const bool ctl = turbo && (cal_.boostControl || vgt) && !holdIac;
+    // (a diesel has no throttle: its boost target is read over the pedal)
+    const double loadAxis = isDiesel(p_) ? s.value[kSnsAPP] : tpsPct;
     double target = 0;
-    if (ctl) target = std::max(0.0, tableLookup(cal_.boostTarget, rpm, tpsPct)) * curveLookup(cal_.boostGear, s.value[kSnsGear]) * 0.01;
+    if (ctl) target = std::max(0.0, tableLookup(cal_.boostTarget, rpm, loadAxis)) * curveLookup(cal_.boostGear, s.value[kSnsGear]) * 0.01;
     if (actBoost_ || limp) target = 0;   // back to the wastegate spring - the ECU cannot hold boost lower than that
     boostTargetBar = target;
     if (!ctl) { cmd.wgDuty = -1; boostI_ = 0; }
+    else if (vgt) {
+        // VGT: the duty closes the vanes (more boost, more back pressure). PID on the boost from a half-closed
+        // starting point; the integral only runs while the output is not pinned at an end (no wind-up)
+        if (target <= 0.02 || s.fallback[kSnsMAP]) { cmd.wgDuty = 0; boostI_ = 0; }
+        else {
+            const double err = target - boostBar;
+            const double out = 0.5 + cal_.boostKp * err + boostI_ - cal_.boostKd * boostRate_;
+            const double hi = clampv((double)cal_.wgDutyMax, 0.0, 1.0);
+            if ((out > 0.0 || err > 0) && (out < hi || err < 0)) boostI_ = clampv(boostI_ + cal_.boostKi * err * dt, -0.5, 0.5);
+            cmd.wgDuty = clampv(out, 0.0, hi);
+        }
+    }
     else if (target <= 0.02 || s.fallback[kSnsMAP]) { cmd.wgDuty = 0; boostI_ = 0; }
     else {
         const double spring = std::max(0.05, (double)p_.wastegateBar);
@@ -279,8 +297,11 @@ void Ecu::fuelTrimStep(double dt, const SensorReadings& s, double rpm, bool runn
     // with auto-tune on, learning the VE map IS the closed loop (two integrators on one error would fight)
     closedLoop = efi && cal_.closedLoop && !cal_.autoTune && targetAfr > 13.5 && s.value[kSnsECT] > cal_.clMinEct &&
                  afterStart_ > cal_.clDelay && sinceTransient_ > 0.5 * cal_.clDelay && mapUsed < cal_.clMaxMap && running && fuelling_;
-    if (closedLoop) {
-        if (!s.fallback[kSnsWideband]) stft += cal_.stftGain * (s.value[kSnsWideband] / (targetAfr / 14.7) - 1.0) * 100.0 * dt;
+    // misfires: unburned fuel makes the lambda sensor read lean - fuel adaptation is held while they happen
+    if (s.in.misfireCount != misfireSeen_) { if (misfireSeen_ >= 0) sinceMisfire_ = 0; misfireSeen_ = s.in.misfireCount; }
+    else sinceMisfire_ += dt;
+    if (closedLoop && sinceMisfire_ > 0.5) {
+        if (!s.fallback[kSnsWideband]) stft += cal_.stftGain * (s.value[kSnsWideband] / targetLambda - 1.0) * 100.0 * dt;
         else if (!s.fallback[kSnsO2]) stft += (s.value[kSnsO2] > 0.45 ? -8.0 : 8.0) * dt;
         else closedLoop = false;
     }
@@ -316,7 +337,8 @@ double Ecu::coldFactor(const SensorReadings& s) const { return 1.0 - smoothstep(
 void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     time_ += dt;
     const bool efi = p_.fuelSystem == FuelSystem::EFI;
-    const bool carb = !efi;
+    const bool carb = p_.fuelSystem == FuelSystem::Carburetor;
+    const bool diesel = isDiesel(p_);
     cmd.syncLost = s.fallback[kSnsCKP];
     // trigger decoder: no crank sync -> no spark / fuel; no cycle phase (cam not synced, no cam sensor or it failed)
     // -> injection twice per cycle (semi-sequential) unless batch fire is what the calibration asks for anyway
@@ -382,6 +404,18 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     }
     const double d = dt > 0 ? (rpm - prevRpm_) / dt : 0.0;
     prevRpm_ = rpm;
+    // ---- fuel: alcohol content from the flex fuel sensor (or the calibration's fallback) -> stoichiometric AFR
+    //      and density (by mass / volume of the blend), and the flex corrections looked up over it
+    {
+        flexLive = p_.flexSensor && !s.fallback[kSnsFlex];
+        flexPct = clampv(flexLive ? s.value[kSnsFlex] : (double)cal_.flexFallbackPct, 0.0, 100.0);
+        const double v = flexPct * 0.01;
+        const double mg = (1.0 - v) * 0.745, ma = v * 0.790;
+        const double wa = ma / std::max(1e-6, mg + ma);
+        stoichEcu = std::max(3.0, (1.0 - wa) * cal_.stoichGasoline + wa * cal_.stoichAlcohol);
+        densityEcu = mg + ma;
+        flexCold = curveLookup(cal_.flexCold, flexPct) * 0.01;
+    }
     rpmRate_ += (d - rpmRate_) * (1.0 - std::exp(-dt / 0.12));
     afterStart_ = rpm < 300 ? 0.0 : afterStart_ + dt;
     const bool running = rpm > 380 && !starter;
@@ -416,7 +450,7 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     if (capWanted && rpm > cap) capLimiter_ = true;
     else if (!capWanted || rpm < cap - 150) capLimiter_ = false;
     cmd.limiter = limiterOn_ || capLimiter_;
-    const bool limFuel = limiterOn_ && p_.limiter == Limiter::FuelCut && !carb;
+    const bool limFuel = limiterOn_ && (p_.limiter == Limiter::FuelCut || diesel) && !carb;   // (a diesel has no spark to cut)
     const bool otherCut = capLimiter_ || overboostCut || boostCut;
     cmd.fuelCut = !carb && (limFuel || otherCut || shutdown);
     cmd.sparkCut = (limiterOn_ && !limFuel) || shutdown || (carb && otherCut);
@@ -443,6 +477,7 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     if (msTimingOn_ && rpm >= 400) adv = msTiming_;              // launch / 3-step / rolling anti-lag timing
     if (rpm >= 400) adv -= msRetard_ + tcRetard + cal_.n2oRetard * cmd.n2oDuty + tqRetard_;
     if (gearCtl && rpm >= 400) adv += curveLookup(cal_.gearSpark, gear);
+    if (rpm >= 400 && !msTimingOn_) adv += curveLookup(cal_.flexSpark, flexPct);   // more knock resistance with alcohol
     // anti-lag on lift-off: very late spark + a cracked throttle keep the turbine fed
     if (pedal > 0.3) alsTimer_ = 0; else if (pedal < 0.05) alsTimer_ += dt;
     cmd.antiLag = p_.antiLag && p_.induction == Induction::Turbo && p_.ignition && pedal < 0.05 && rpm > cal_.alsMinRpm &&
@@ -504,6 +539,51 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
         }
     }
 
+    // ---- diesel (Package 4): the load is the fuel quantity. Driver demand from the pedal map; an idle governor
+    //      (PI on the idle speed) that holds at least the idle fuel; the max-speed governor that takes the fuel
+    //      away over the last band before the rev limit; the smoke limiter: never more fuel than the measured air
+    //      allows at the smoke lambda. Start of injection from its map over speed and the fuel quantity.
+    if (diesel) {
+        double q;
+        smokeLimited = false;
+        if (starter || (!running && rpm < 400)) { q = cal_.dieselStartFuel; dIdleI_ = 0.25 * cal_.dieselStartFuel; }   // start fuel until it runs
+        else {
+            q = s.fallback[kSnsAPP] ? 0.0 : tableLookup(cal_.dieselFuel, rpm, pedal * 100.0);
+            const double err = clampv(idleTarget - rpmIdle_, -400.0, 400.0);
+            if (pedal < 0.02) dIdleI_ = clampv(dIdleI_ + cal_.dieselIdleKi * err * dt, 0.0, 0.5 * (double)p_.dieselMaxFuel);
+            q = std::max(q, std::max(0.0, dIdleI_ + cal_.dieselIdleKp * err));
+            if (cal_.dieselGovBand > 1.0) q *= clampv((revLim - rpm) / cal_.dieselGovBand, 0.0, 1.0);
+            const double qSmoke = airEstimate(s, rpm, tpsPct) * 1e6 / (std::max(1.0f, cal_.smokeLambda) * kDieselStoichEcu);
+            if (q > qSmoke) { q = qSmoke; smokeLimited = true; }
+            if (actFuel_ || limp) q = std::min(q, 0.5 * (double)p_.dieselMaxFuel);
+        }
+        cmd.dieselFuelMg = std::max(0.0, q);
+        cmd.soi = tableLookup(cal_.soi, std::max(rpm, (double)p_.idleTargetRpm * 0.5), cmd.dieselFuelMg);
+        fuelling_ = cmd.dieselFuelMg > 0 && !cmd.fuelCut;
+        targetAfr = 0;
+        // EGR: valve from its map over speed and fuel quantity, only on a warm running engine (none in limp mode)
+        cmd.egr = (p_.egrValveDia_mm > 0 && running && !limp && s.value[kSnsECT] >= cal_.egrMinEct)
+                      ? clampv(tableLookup(cal_.egrMap, rpm, cmd.dieselFuelMg) * 0.01, 0.0, 1.0) : 0.0;
+        // glow plugs (BorgWarner / BERU technical information): pre-heat from key-on for the time the coolant
+        // temperature calls for (the glow lamp is on - wait for it before cranking), heating while cranking a cold
+        // engine, post-heat after the start until the coolant reaches afterglowEct or for afterglowTime at most
+        // (none when the coolant was already that warm at the start)
+        const double ect = s.value[kSnsECT];
+        if (!p_.glowPlugs || !p_.ignition) { glowPhase_ = 0; cmd.glow = false; glowLight = false; }
+        else {
+            if (glowPhase_ == 0) { glowPhase_ = 1; keyT_ = 0; preheatS_ = std::max(0.0, curveLookup(cal_.glowPreheat, ect)); }
+            keyT_ += dt;
+            if (running && glowPhase_ != 3) { glowPhase_ = 3; afterT_ = 0; afterOk_ = ect < cal_.afterglowEct; }
+            else if (!running && glowPhase_ == 3 && rpm < 100) glowPhase_ = 1;   // stalled: heat again for the restart
+            if (glowPhase_ == 3) afterT_ += dt;
+            const bool pre = glowPhase_ == 1 && keyT_ < preheatS_;
+            const bool crankHeat = glowPhase_ == 1 && starter && preheatS_ > 0;
+            const bool post = glowPhase_ == 3 && afterOk_ && afterT_ < cal_.afterglowTime && ect < cal_.afterglowEct;
+            cmd.glow = pre || crankHeat || post;
+            glowLight = pre;
+        }
+    }
+
     // ---- closed-loop fuel trims (short-term on the wideband, long-term learned per load cell)
     fuelTrimStep(dt, s, rpm, running);
 
@@ -524,13 +604,13 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
 
     // ---- auto-tune: remember what was commanded, learn once the gas reaches the wideband
     Hist& h = hist_[histW_];
-    h.t = time_; h.rpm = rpm; h.map = mapUsed; h.tps = tpsPct; h.lam = targetAfr / 14.7;
+    h.t = time_; h.rpm = rpm; h.map = mapUsed; h.tps = tpsPct; h.lam = targetLambda;
     h.w = s.fallback[kSnsMAP] ? 1.0
         : cal_.loadMode == LoadMode::Hybrid ? smoothstep(cal_.hybridTpsLo, cal_.hybridTpsHi, tpsPct)
         : cal_.loadMode == LoadMode::AlphaN ? 1.0 : 0.0;
     // the MAP only has to be steady where it is the load signal: on individual throttle bodies (alpha-N) it
     // pulses with every intake stroke, and requiring it steady kept the VE map from ever learning there
-    const bool steady = std::fabs(tpsRate_) < 20.0 && (h.w > 0.99 || std::fabs(mapRate_) < 40.0) && aeNow_ < 0.01;
+    const bool steady = std::fabs(tpsRate_) < 20.0 && (h.w > 0.99 || std::fabs(mapRate_) < 40.0) && aeNow_ < 0.01 && sinceMisfire_ > 0.5;
     h.trim = trim;
     h.ok = efi && fuelling_ && steady && running && afterStart_ > 3.0 && s.value[kSnsECT] > 60.0 && targetAfr > 0 &&
            cal_.loadMode != LoadMode::Maf;
@@ -542,7 +622,10 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
 void Ecu::autoTuneStep(double dt, const SensorReadings& s) {
     // the ECU's own estimate of exhaust transport + sensor response delay
     const double rpm = std::max(300.0, s.value[kSnsCKP]);
-    const double delay = clampv(0.015 + 25.0 / rpm, 0.02, 0.12) + 0.05;
+    double delay = clampv(0.015 + 25.0 / rpm, 0.02, 0.12) + 0.05;
+    // a wideband after the turbine sees the gas later and better mixed (turbine housing + downpipe): the ECU knows
+    // where its sensor sits
+    if (p_.widebandPos && p_.induction == Induction::Turbo) delay += 0.5 * clampv(0.015 + 25.0 / rpm, 0.02, 0.12) + 0.02 + clampv(6.0 / rpm, 0.0, 0.05);
     const double want = time_ - delay;
     int k = (histW_ - 1 + kHist) % kHist;
     for (int n = 0; n < kHist && hist_[k].t > want; ++n) k = (k - 1 + kHist) % kHist;
@@ -589,7 +672,7 @@ double Ecu::airEstimate(const SensorReadings& s, double rpm, double tpsPct) {
 
 double Ecu::pulseFor(double fuel, const SensorReadings& s) {
     if (fuel <= 0) return 0;
-    const double rated = std::max(10.0, (double)cal_.injFlow) * kFuelDensity * 1e-3 / 60.0;
+    const double rated = std::max(10.0, (double)cal_.injFlow) * densityEcu * 1e-3 / 60.0;
     const double mapGauge = (mapUsed - baro()) / 100.0;
     double rail = s.fallback[kSnsFuelP] ? p_.comp.fuelPressure_bar + (p_.comp.fuelRegulator == FuelRegulator::MapReferenced ? mapGauge : 0.0)
                                         : s.value[kSnsFuelP];
@@ -651,8 +734,11 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     double lamT = tableLookup(cal_.lambda, rpm, mapUsed);
     // power enrichment on throttle angle (wide open before the manifold / boost has caught up)
     lamT = std::min(lamT, lerp(lamT, (double)cal_.powerLambda, smoothstep(cal_.powerTpsLo, std::max(cal_.powerTpsLo + 1.0f, cal_.powerTpsHi), tpsPct)));
-    double afr = cranking ? curveLookup(cal_.crankAfr, s.value[kSnsECT]) : lamT * 14.7;
-    if (!cranking) afr = std::min(afr, lerp((double)cal_.afterStartAfr, afr, smoothstep(0.0, std::max(0.1, (double)cal_.afterStartTime), afterStart_)));
+    // (the cranking and after-start AFR are gasoline AFR: as lambda they hold for any fuel)
+    double afrG = cranking ? curveLookup(cal_.crankAfr, s.value[kSnsECT]) : lamT * 14.7;
+    if (!cranking) afrG = std::min(afrG, lerp((double)cal_.afterStartAfr, afrG, smoothstep(0.0, std::max(0.1, (double)cal_.afterStartTime), afterStart_)));
+    targetLambda = afrG / 14.7;
+    const double afr = targetLambda * stoichEcu;
     targetAfr = afr;
     lastAfr_[port] = afr;
     double fuel = air / std::max(5.0, afr);
@@ -668,6 +754,8 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     const double dfcoExit = cal_.dfcoExitEnrich * 0.01 * (1.0 + (cal_.accelColdMult - 1.0) * cold) * portDry_;
     fuel *= (1.0 + warmup) * (1.0 + (cranking ? 0.0 : aeNow_ + dfcoExit)) * (1.0 + curveLookup(cal_.iatFuel, s.value[kSnsIAT]) * 0.01) *
             (1.0 + cal_.cylFuel[clampv(port, 0, kCalMaxCyl - 1)] * 0.01);
+    // flex fuel: trim over the alcohol content, and the extra cold fuel alcohol needs (it stays liquid on cold walls)
+    fuel *= (1.0 + curveLookup(cal_.flexFuel, flexPct) * 0.01) * (1.0 + flexCold * cold);
     if (p_.injection == Injection::Port) {
         // X-tau wall-film model (the ECU's own estimate of the fuel film on the port walls)
         const double dep = 0.20 + 0.12 * cold;
@@ -681,7 +769,7 @@ double Ecu::injectionPulse(int port, const SensorReadings& s, double share) {
     fuel *= share;
     // ---- fuel mass -> pulse width with the ECU's injector data
     const double cyc = rpm > 30 ? 60.0 * revsPerEvent_ / rpm : 1.0;
-    const double rated = std::max(10.0, (double)cal_.injFlow) * kFuelDensity * 1e-3 / 60.0;   // kg/s at 3 bar
+    const double rated = std::max(10.0, (double)cal_.injFlow) * densityEcu * 1e-3 / 60.0;   // kg/s at 3 bar (volume x density)
     const double mapGauge = (mapUsed - baro()) / 100.0;
     double rail = s.fallback[kSnsFuelP] ? p_.comp.fuelPressure_bar + (p_.comp.fuelRegulator == FuelRegulator::MapReferenced ? mapGauge : 0.0)
                                         : s.value[kSnsFuelP];

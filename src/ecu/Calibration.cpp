@@ -1,5 +1,6 @@
 #include "ecu/Calibration.h"
 #include "sim/EngineParams.h"
+#include "sim/Fuel.h"
 #include "core/MathUtil.h"
 #include <algorithm>
 #include <cmath>
@@ -18,6 +19,9 @@ const TableInfo kTables[kCalTableCount] = {
     {"ltft",     "Long-term fuel trim", "rpm", "MAP kPa", "%",     -40, 40, 0.5f},
     {"boost_target", "Boost target",   "rpm", "TPS %",   "bar",    0, 4, 0.05f},
     {"vtc",      "Intake cam advance (VTC)", "rpm", "MAP kPa", "deg", 0, 60, 0.5f},
+    {"diesel_fuel", "Diesel fuel demand", "rpm", "pedal %", "mg/str", 0, 250, 0.5f},
+    {"soi",      "Start of injection", "rpm", "fuel mg", "deg BTDC", -10, 40, 0.25f},
+    {"egr",      "EGR valve", "rpm", "fuel mg", "%", 0, 100, 1},
 };
 const TableInfo kCurves[kCalCurveCount] = {
     {"crank_afr", "Cranking AFR",           "coolant C",  "", "AFR", 6, 16, 0.1f},
@@ -35,6 +39,11 @@ const TableInfo kCurves[kCalCurveCount] = {
     {"tq_gear",   "Torque limit by gear",   "gear",       "", "%",   10, 250, 1},
     {"gear_rev",  "Rev limit by gear",      "gear",       "", "rpm", 1000, 20000, 50},
     {"gear_spark", "Spark trim by gear",    "gear",       "", "deg", -15, 10, 0.5f},
+    {"flex_fuel",  "Flex fuel: fuel trim",  "alcohol %",  "", "%",   -30, 30, 0.5f},
+    {"flex_spark", "Flex fuel: spark added", "alcohol %", "", "deg", -10, 15, 0.5f},
+    {"flex_cold",  "Flex fuel: cold enrichment", "alcohol %", "", "%", 0, 400, 1},
+    {"flex_knock", "Flex fuel: knock threshold", "alcohol %", "", "x", 0.5f, 3, 0.05f},
+    {"glow_preheat", "Glow plug pre-heat time", "coolant C", "", "s", 0, 30, 0.5f},
 };
 const TriggerInfo kTriggers[kTrigCount] = {
     {"60-2 (Bosch)", 60, 1, false},
@@ -55,6 +64,7 @@ const ProtInfo kProts[kProtCount] = {
     {"knock",      "Excessive knock",        "deg",   true,  0, 30},
     {"egt",        "High EGT",               "C",     true,  500, 1300},
     {"sensor",     "Sensor failure",         "sensors", true, 0, 10},
+    {"backpressure", "High drive pressure (EMAP / MAP)", "ratio", true, 1, 5},
 };
 const char* kActNames[kActCount] = {"Warning only", "Ignition retard", "Boost reduction", "Throttle limit", "Fuel limit (rpm cap)",
                                     "Limp mode", "Engine shutdown"};
@@ -72,6 +82,7 @@ Table2D& calTable(Calibration& c, int id) {
     switch (id) {
     case kCalVeTps: return c.veTps; case kCalLambda: return c.lambda; case kCalIgnition: return c.ignition;
     case kCalLtft: return c.ltft; case kCalBoostTarget: return c.boostTarget; case kCalVtc: return c.vtcMap;
+    case kCalDieselFuel: return c.dieselFuel; case kCalSoi: return c.soi; case kCalEgr: return c.egrMap;
     default: return c.veMap;
     }
 }
@@ -84,6 +95,8 @@ Curve1D& calCurve(Calibration& c, int id) {
     case kCalTcSlip: return c.tcSlipTarget;
     case kCalDwell: return c.dwell; case kCalTqGear: return c.tqLimitGear; case kCalGearRev: return c.gearRevLimit;
     case kCalGearSpark: return c.gearSpark;
+    case kCalFlexFuel: return c.flexFuel; case kCalFlexSpark: return c.flexSpark;
+    case kCalFlexCold: return c.flexCold; case kCalFlexKnock: return c.flexKnock; case kCalGlowPreheat: return c.glowPreheat;
     default: return c.crankAfr;
     }
 }
@@ -134,6 +147,7 @@ void generateCalibration(EngineParams& p) {
     c = Calibration();
     // individual throttle bodies give a weak, pulsating MAP signal: they run on throttle angle (alpha-N)
     c.loadMode = p.itb ? LoadMode::AlphaN : LoadMode::SpeedDensity;
+    if (isDiesel(p)) c.loadMode = LoadMode::Maf;   // a diesel ECU measures its air (smoke limiter)
     // positive-displacement blowers with a bypass valve: MAP alone does not describe the air path ->
     // speed density at part throttle, throttle angle once the bypass closes (hybrid)
     // (positive-displacement blowers run fine on speed density once the blower leaks like a real one)
@@ -151,7 +165,8 @@ void generateCalibration(EngineParams& p) {
             // and return-to-idle region needs its own cells, not an interpolation from cranking speed
             tb.x[i] = i < 5 ? (float)(500 + 250 * i)
                             : (float)(std::round((1500.0 + (top - 1500.0) * (i - 4) / (kTabMax - 5)) / 50.0) * 50.0);
-            tb.y[i] = t == kCalVeTps ? tpsAxis[i] : (float)std::round(20.0 + (mapTop - 20.0) * i / (kTabMax - 1));
+            tb.y[i] = (t == kCalVeTps || t == kCalDieselFuel) ? tpsAxis[i] : (float)std::round(20.0 + (mapTop - 20.0) * i / (kTabMax - 1));
+            if (t == kCalSoi || t == kCalEgr) tb.y[i] = (float)std::round(std::max(10.0f, p.dieselMaxFuel) * 1.2 * i / (kTabMax - 1) * 2.0) / 2.0f;
         }
         // VTEC: breakpoints just either side of the cam crossover, so the step in breathing is a step in the map
         // (and the base map rig measures both sides) instead of being smeared over a whole column
@@ -202,6 +217,29 @@ void generateCalibration(EngineParams& p) {
             c.ignition.v[r][k] = (float)(std::round(adv * 2.0) / 2.0);
         }
     }
+    // ---- diesel (Package 4): driver demand linear in the pedal up to the rated fuel; start of injection from the
+    //      static timing plus the speed advance (a mechanical pump's timing device), the same at every quantity
+    for (int r = 0; r < kTabMax; ++r)
+        for (int k = 0; k < kTabMax; ++k) {
+            const double rpm = c.dieselFuel.x[k];
+            c.dieselFuel.v[r][k] = (float)(std::round(p.dieselMaxFuel * c.dieselFuel.y[r] * 0.01 * 2.0) / 2.0);
+            const double soi = p.soiBase + p.soiAdvance * smoothstep((double)p.idleTargetRpm, std::max(p.idleTargetRpm + 500.0, 0.85 * p.revLimit), rpm);
+            c.soi.v[r][k] = (float)(std::round(soi * 4.0) / 4.0);
+            // EGR (a starting point, not from a source): open at idle and light load, closed towards full load and
+            // high speed, where the engine needs all its air (the smoke limiter would take the fuel away)
+            const double q = c.egrMap.y[r] / std::max(1.0f, p.dieselMaxFuel);
+            c.egrMap.v[r][k] = (float)std::round(p.egrValveDia_mm > 0 ? 60.0 * (1.0 - smoothstep(0.25, 0.55, q)) * (1.0 - smoothstep(2500.0, 3500.0, rpm)) : 0.0);
+        }
+    c.egrMinEct = 60;
+    // smoke limit: MIT 2.61 (lecture 16) "smoke-limit A/F ~ 20" -> lambda 20 / 14.5 = 1.38
+    c.smokeLambda = 1.38f;
+    c.dieselIdleKp = 0.02f; c.dieselIdleKi = 0.04f; c.dieselGovBand = 400; c.dieselStartFuel = 0.6f * p.dieselMaxFuel;
+    // glow plugs: BorgWarner / BERU glow plug technical information p. 8 - pre-heat 0 C: 2 s, -5 C: ~5 s, -10 C: ~7 s
+    // (colder: kept at 7 s, not in the source); "2-5 s at normal outside temperatures" (p. 7) -> 2 s up to 20 C, none
+    // on a warm engine; post-heat up to 3 minutes, ending when the coolant reaches 70 C (p. 7)
+    setCurve(c.glowPreheat, {-30, -10, -5, 0, 20, 40}, [](double x, const EngineParams&) {
+        return x <= -10 ? 7.0 : x <= -5 ? 5.0 + (-5.0 - x) * 0.4 : x <= 0 ? 2.0 + (-x) * 0.6 : x <= 20 ? 2.0 : 0.0; }, p);
+    c.afterglowTime = 180; c.afterglowEct = 70;
     c.powerTpsLo = 60; c.powerTpsHi = 90; c.powerLambda = p.afrWot / 14.7f;
     c.crankAdvance = std::min(p.baseAdvance, 8.0f);
     auto cold = [](double ect) { return 1.0 - smoothstep(15.0, 75.0, ect); };
@@ -291,12 +329,19 @@ void generateCalibration(EngineParams& p) {
         for (int i = 0; i < 10; ++i) t.x[i] = (float)(std::round((1000.0 + (top - 1000.0) * i / 9.0) / 50.0) * 50.0);
         for (int r = 0; r < 6; ++r) {
             t.y[r] = tps[r];
-            for (int k = 0; k < 10; ++k)
+            for (int k = 0; k < 10; ++k) {
                 t.v[r][k] = (float)(std::round(spring * smoothstep(30.0, 90.0, tps[r]) * 20.0) / 20.0);
+                // diesel (no throttle): the axis is the PEDAL; the target rises with the load and is full from ~1800
+                // rpm (the turbo cannot make it lower down) - a starting point, not from a source
+                if (isDiesel(p))
+                    t.v[r][k] = (float)(std::round(spring * smoothstep(10.0, 70.0, tps[r]) * (0.35 + 0.65 * smoothstep(1000.0, 1800.0, t.x[k])) * 20.0) / 20.0);
+            }
         }
     }
+    // a variable geometry turbine has no spring to fall back on: its vanes are always the ECU's
     setCurve(c.boostGear, {0, 1, 2, 3, 4, 5, 6, 7, 8}, [](double, const EngineParams&) { return 100.0; }, p);
     c.boostKp = 0.6f; c.boostKi = 1.5f; c.boostKd = 0.03f; c.wgDutyMax = 0.9f;
+    if (p.induction == Induction::Turbo && p.vgt) { c.boostControl = 1; c.wgDutyMax = 1.0f; }   // (vanes may close fully)
     c.overboostMargin = 0.3f; c.overboostTime = 0.5f;
     c.boostCutBar = p.induction == Induction::Turbo ? std::max(0.5f, p.wastegateBar * 1.8f + 0.3f) : 3.0f;
     // ---- protection rules: {enabled, warn, limit, delay s, recover, action}
@@ -311,6 +356,9 @@ void generateCalibration(EngineParams& p) {
     c.prot[kProtKnock]     = {1, 6, 9, 1.5f, 2, turbo ? kActBoostReduce : kActThrottleLimit};
     c.prot[kProtEgt]       = {1, 950, 1050, 2.0f, 50, kActWarn};
     c.prot[kProtSensor]    = {1, 1, 1, 0.5f, 0.5f, kActWarn};
+    // exhaust backpressure against boost: a choked turbine housing (too small A/R) heats the charge, raises the
+    // residual gas and the EGT - and blows head gaskets
+    c.prot[kProtBackpressure] = {turbo ? 1 : 0, 2.0f, 2.6f, 1.0f, 0.2f, kActBoostReduce};
     c.limpThrottle = 35; c.limpRpm = 3500; c.protRetard = 5;
 
     // ---- motorsport (Phase 5): all off by default except where a switch arms it; engines built for
@@ -356,6 +404,28 @@ void generateCalibration(EngineParams& p) {
     c.gearControl = 0;
     setCurve(c.gearRevLimit, {1, 2, 3, 4, 5, 6}, [](double, const EngineParams& q) { return (double)q.revLimit; }, p);
     setCurve(c.gearSpark, {1, 2, 3, 4, 5, 6}, [](double, const EngineParams&) { return 0.0; }, p);
+
+    // ---- fuel / flex fuel: the ECU is set up for the fuel the engine is filled with
+    {
+        const FuelBlend b = fuelTypeBlend(p.fuelType);
+        c.stoichGasoline = 14.7f;
+        c.stoichAlcohol = b.methanol > b.ethanol ? 6.45f : 9.0f;
+        c.flexFallbackPct = (float)fuelProps(b).alcoholPct;
+    }
+    auto flexCurve = [](Curve1D& cv, std::initializer_list<float> v) {
+        static const float xs[] = {0, 10, 20, 30, 50, 70, 85, 100};
+        cv.n = 8; cv.locked = 0;
+        int i = 0;
+        for (float y : v) { cv.x[i] = xs[i]; cv.v[i] = y; ++i; }
+    };
+    // the cooler (denser) charge of an alcohol blend carries more air than the VE map made on gasoline says
+    flexCurve(c.flexFuel, {0, 0.3f, 0.6f, 1, 1.8f, 2.6f, 3.1f, 3.6f});
+    // more knock resistance with alcohol: a few degrees more where the gasoline map was knock limited
+    flexCurve(c.flexSpark, {0, 0.5f, 1, 1.5f, 2, 3, 3.5f, 4});
+    // alcohol stays liquid on cold walls: E85 needs about half again the cold fuel, E100 twice (much more floods it:
+    // the liquid film keeps feeding the cylinders after the start)
+    flexCurve(c.flexCold, {0, 0, 1, 3.5f, 10, 25, 48, 100});
+    flexCurve(c.flexKnock, {1, 1, 1, 1, 1, 1, 1, 1});
 }
 
 } // namespace es

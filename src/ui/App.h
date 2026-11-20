@@ -18,6 +18,8 @@ struct ImVec4;
 
 namespace es {
 
+struct HealthReport;
+
 // one widget of the custom dashboard
 struct DashWidget {
     int ch = 0;                 // log channel
@@ -50,6 +52,8 @@ public:
     ~App();
     void frame(float dt);                 // called once per UI frame
     void setSection(int s) { section_ = s; }
+    void openTab(const char* key) { jumpTab_ = key; }           // a tab of the current section (see tabJump keys)
+    void startEngine() { autoStart_ = true; autoStartTimer_ = 0; }
 
 private:
     // application shell (Layout.cpp)
@@ -147,6 +151,18 @@ private:
     std::string baseMapInfo_;
     void sectionSensors();
     int section_ = kLiveDashboard;
+    // flow map and health panel (FlowMap.cpp, Package 3)
+    void panelFlowMap();
+    void healthPanel(const HealthReport& h);
+    struct FlowParticle { float s, dir; };       // position along the pipe (px), +1 with the flow / -1 backwards
+    std::vector<std::vector<FlowParticle>> fmParts_;
+    std::vector<float> fmSpawn_;
+    uint64_t fmKey_ = 0;
+    bool fmDiag_ = false, fmLabels_ = true, fmParticles_ = true;
+    // jump to another section, optionally to one of its tabs (clicks on the flow map / health panel)
+    void jumpTo(int section, const char* tab);
+    int tabJump(const char* key);                // ImGuiTabItemFlags_SetSelected once for the tab asked for
+    std::string jumpTab_;
     // panels (Panels.cpp)
     void panelDashboard();
     void panelEngine();

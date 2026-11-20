@@ -81,8 +81,10 @@ int main() {
             p.cal.autoTune = tune; p.cal.closedLoop = 1;
             Simulator sim(p); startIdle(sim, p, tune ? 20.0 : 12.0);   // auto-tune learns a few % per second at a hunting idle
             int clN = 0, n = 0;   // share of the time in closed loop over the last 2 s (a single sample can hit a transient)
-            for (; n < 40; ++n) { run(sim, 0.05); clN += tel(sim).closedLoop ? 1 : 0; }
+            double lamSum = 0;    // ... and the wideband averaged over the same 2 s, for the same reason
+            for (; n < 40; ++n) { run(sim, 0.05); const Telemetry x = tel(sim); clN += x.closedLoop ? 1 : 0; lamSum += x.snsValue[kSnsWideband]; }
             Telemetry t = tel(sim);
+            t.snsValue[kSnsWideband] = (float)(lamSum / n);
             std::printf("  closed loop %.0f %% of the time\n", 100.0 * clN / n);
             t.closedLoop = clN > n / 2;
             std::printf("  %s: battery real %.2f V, ECU sees %.2f V, trim %.3f, wideband lambda %.3f (target %.3f)\n",

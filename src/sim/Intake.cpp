@@ -4,7 +4,6 @@
 namespace es {
 
 static double circ(double d_mm) { double d = d_mm * 1e-3; return kPi * d * d * 0.25; }
-static constexpr double kFuelDensity = 0.745; // g/cc
 
 void IntakeSystem::build(const EngineParams& p, double fs, double displacement) {
     p_ = p;
@@ -25,6 +24,7 @@ void IntakeSystem::build(const EngineParams& p, double fs, double displacement) 
     for (GasNode& g : inlets_) {
         g.V = p.itb ? 0.12e-3 : std::max(0.2, (double)p.plenum_L) * 1e-3;
         g.T = ambT_;
+        plenumT0_ = g.T;
         g.setPressure(kPatm);
     }
     ports_.assign(n, GasNode());
@@ -146,12 +146,22 @@ void IntakeSystem::stepAir(double dt, double pedal, double rpm, bool fuelEnabled
                 g.m -= dm; g.mf -= dm * ff; g.mb -= dm * bf;
                 charge_.m += dm; charge_.mf += dm * ff; charge_.mb += dm * bf;
             }
-            // the plenum takes the charge temperature at constant pressure (its composition stays the same)
+            // the plenum takes the charge temperature at constant pressure (its composition stays the same) - with
+            // EGR the flow-weighted mix of the charge and the recirculated gas
             const double pNow = g.p(), m0 = g.m;
-            g.T += (charge_.T - g.T) * std::min(1.0, dt / 0.3);
+            const double tIn = (1.0 - egrShare_) * charge_.T + egrShare_ * egrT_;
+            g.T += (tIn - g.T) * std::min(1.0, dt / 0.3);
             g.setPressure(pNow);
             if (m0 > 1e-12) { const double s = g.m / m0; g.mf *= s; g.mb *= s; }
         } else {
+            if (egrShare_ > 1e-4 || std::fabs(g.T - plenumT0_) > 0.5) {
+                // EGR into a naturally aspirated plenum: the flow-weighted mix of the fresh air and the gas
+                const double pNow = g.p(), m0 = g.m;
+                const double tIn = (1.0 - egrShare_) * plenumT0_ + egrShare_ * egrT_;
+                g.T += (tIn - g.T) * std::min(1.0, dt / 0.3);
+                g.setPressure(pNow);
+                if (m0 > 1e-12) { const double s = g.m / m0; g.mf *= s; g.mb *= s; }
+            }
             flow = limitedFlow(cda, kPatm, inletT_, 1e3, g.p(), g.T, g.V, dt, 0.4);
             if (flow >= 0) {
                 const double q = flow * dt;
@@ -190,6 +200,9 @@ void IntakeSystem::stepAir(double dt, double pedal, double rpm, bool fuelEnabled
             double afrMain = 12.8 / std::max(0.3, (double)p_.mainJet);
             double afrIdle = 13.0 / std::max(0.3, (double)p_.idleMixture);
             double fr = s / afrMain + (1 - s) * (idleF / afrIdle + (1 - idleF) * 0.82 / afrMain);
+            // the jets are sized for gasoline: they pass about the same volume of another fuel (mass ~ sqrt of the
+            // density through an orifice) - on E85 or methanol the same jets run very lean
+            fr *= std::sqrt(fuel_.density / 0.745);
             fr *= 1.0 + 0.9 * std::max((double)p_.choke, 0.4 * cold_);   // manual choke or the automatic (bimetal) choke
             fr *= 1.0 + 0.5 * (1.0 - smoothstep(250, 600, rpm)); // cranking / just-started richness
             double mf = std::max(0.0, fresh) * fr;   // ... but the standoff puff already carries its fuel
@@ -202,7 +215,7 @@ void IntakeSystem::stepAir(double dt, double pedal, double rpm, bool fuelEnabled
             totalFuel += mf * dt;
         }
         // film evaporation
-        double ev = inletFilm_[k] * dt / ((carb ? 0.22 : 0.12) * (1.0 + 1.5 * cold_));
+        double ev = inletFilm_[k] * dt / ((carb ? 0.22 : 0.12) * filmSlow());
         inletFilm_[k] -= ev; g.mf += ev; g.m += ev;
     }
 
@@ -223,7 +236,7 @@ void IntakeSystem::stepAir(double dt, double pedal, double rpm, bool fuelEnabled
             totalFuel += q;
         }
         for (int i = 0; i < n; ++i) {
-            double ev = portFilm_[i] * dt / (0.07 * (1.0 + 1.5 * cold_));
+            double ev = portFilm_[i] * dt / (0.07 * filmSlow());
             portFilm_[i] -= ev; ports_[i].mf += ev; ports_[i].m += ev;
         }
     }

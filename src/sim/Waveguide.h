@@ -51,13 +51,18 @@ struct NodeEnd {
 
 struct OpenEnd {
     PipeEnd e;
-    double lp = 0;         // reflection lowpass state
     double prevU = 0;
     double radiated = 0;   // far-field pressure at 1 m (Pa)
     double u = 0;          // outgoing volume velocity (m^3/s)
     float pan = 0;         // -1 left .. +1 right
     // tone extras
     double sound = 0;      // radiated + body + jet noise (Pa @ 1 m) - what the listener gets
+    // reflection at the open (unflanged) pipe end: Silva, Guillemain, Kergomard, Mallaroni & Norris, "Approximation
+    // formulae for the acoustic radiation impedance of a cylindrical pipe" (arXiv 0811.3625), causal rational model
+    // (eq. 16, table 1): R = -(1 + n1 tau s) / (1 + d1 tau s + d2 tau^2 s^2), tau = a / c, n1 0.167, d1 1.393,
+    // d2 0.457 - Levine & Schwinger's |R| = 1 - (ka)^2 / 2 and end correction 0.6133 a at low frequency, the
+    // radiation loss rising with ka (a wide tailpipe radiates more of the highs). Bilinear transform per end.
+    double rb0 = -1, rb1 = 0, rb2 = 0, ra1 = 0, ra2 = 0, rx1 = 0, rx2 = 0, ry1 = 0, ry2 = 0, rTau = -1;
     double uDc = 0, bodyLp = 0, vLp = 0, presHp = 0;
     Biquad jetBp, jetHi;
     Biquad sm1, sm2, air1, air2;   // smooth style: output low-pass, air-noise low-pass (4th-order Butterworth)
@@ -108,7 +113,7 @@ private:
     double fs_ = 96000, c_ = 343, rho0_ = 1.2, p0_ = kPatm, T0_ = 293;
     double hotT_ = 0, coldT_ = 0, nl_ = 0;
     double glide_ = 0.0004;
-    double openA_ = 0.5, dcA_ = 0.0001, radA_ = 0.5;
+    double dcA_ = 0.0001, radA_ = 0.5;
     double rasp_ = 1.0, punch_ = 0.4, uDcA_ = 0.001, bodyA_ = 0.02, vA_ = 0.05, stA_ = 0.1;
     int style_ = 0;
     double pmix_ = 0.85, smoothHz_ = 1900;

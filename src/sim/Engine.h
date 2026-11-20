@@ -6,9 +6,12 @@
 #include "sim/Components.h"
 #include "sim/Thermal.h"
 #include "sim/Valvetrain.h"
+#include "sim/Fuel.h"
+#include "sim/FlowStats.h"
 #include "ecu/Sensors.h"
 #include "ecu/Ecu.h"
 #include "audio/Filters.h"
+#include "sim/CombustionNoise.h"
 #include <vector>
 
 namespace es {
@@ -71,8 +74,21 @@ public:
     // carry thermal / electrical state (and the nitrous bottle) over a rebuild (structural change while running)
     void copyThermalFrom(const Engine& o) {
         thermal = o.thermal; elec = o.elec; rail = o.rail; n2oBottle = o.n2oBottle; n2oRefillSeen_ = o.n2oRefillSeen_;
-        egtProbe_ = o.egtProbe_; egtWall_ = o.egtWall_;
+        egtProbe_ = o.egtProbe_; egtWall_ = o.egtWall_; egtPost_ = o.egtPost_; egtPostWall_ = o.egtPostWall_;
+        for (int i = 0; i < kMaxCyl; ++i) { egtCylProbe_[i] = o.egtCylProbe_[i]; egtCylWall_[i] = o.egtCylWall_[i]; }
+        tank_ = o.tank_; line_ = o.line_; tankL_ = o.tankL_; fuel_ = o.fuel_; tankProps_ = o.tankProps_;
+        refuelSeen_ = o.refuelSeen_; fuelTypeSeen_ = o.fuelTypeSeen_;
+        intake.setFuel(fuel_);
     }
+    // fuel (Package 1): the tank, and the fuel line that feeds the injectors - a new fuel reaches them gradually
+    // (the return line circulates the rail contents back to the tank)
+    const FuelProps& fuel() const { return fuel_; }          // what the engine burns now
+    double glowTipC() const { return glowC_; }
+    double egrPos() const { return egrPos_; }
+    double egrFlow() const { return egrFlow_; }
+    const FuelProps& tankFuel() const { return tankProps_; }
+    double tankLitres() const { return tankL_; }
+    static constexpr double kTankCapL = 50.0;
     // nitrous: what flows now and what is left in the bottle
     double n2oFlow = 0;           // kg/s of N2O
     double n2oBottle = 0;         // kg
@@ -110,12 +126,39 @@ public:
     double exhFlowGs() const { return exhFlowAvg_ * 1e3; }      // exhaust mass flow (averaged)
     double vtcAdvance() const { return vtcNow_; }       // intake cam advance now, crank deg
 
+    // exhaust sensors (Package 2)
+    double lambdaPipe() const { return lamPipe_; }                 // gas at the wideband (before its transport delay)
+    double emapKPa() const { return emapKPa_; }
+    double egtPostProbe() const { return egtPost_; }               // K, thermocouple after the turbine
+    double egtCylProbe(int port) const { return egtCylProbe_[clampv(port, 0, kMaxCyl - 1)]; }   // K
+    static constexpr double kHcSensed = 0.6;   // unburned fuel as a wideband counts it (slow diffusion)
+
+    // flow map (Package 3): forward / reverse flow per section of the gas path, pressures and temperatures
+    const FlowState& flowState() const { return flow_; }
+
+
 private:
+    FlowState flow_;
+    double flInF_ = 0, flInB_ = 0, flExF_ = 0, flExB_ = 0;   // valve flows this step (kg)
+    double flTailNet_ = 0;
+    void flowStep(double dt);
+    void closeKnockWindow(Cylinder& c);
+    double wbAirKg_ = 0, wbFuelKg_ = 0, wbA_ = 0, wbF_ = 0, lamPipe_ = 1, emapKPa_ = 101.3;
+    double egtPost_ = 300, egtPostWall_ = 300, egtCylProbe_[kMaxCyl] = {}, egtCylWall_[kMaxCyl] = {}, egtSub_ = 0;
+    FuelBlend tank_, line_;
+    FuelProps fuel_, tankProps_;
+    double tankL_ = 30;
+    int refuelSeen_ = 0, fuelTypeSeen_ = -1;
+    void fuelSetup(bool fresh);
+    void fuelStep(double dt, double fuelKgs);
     double exhFlowAvg_ = 0;
     void stepCylinder(int i, double dt, double phiPrev, double phi, double rpm, bool spark, bool fuelCut);
     void updateValves();
     void setupChambers();
     void apexLeakage(double dt);
+    // diesel (Package 4): injection, ignition delay and the burn of one cylinder for this step
+    void dieselStep(Cylinder& c, double dt, double phiPrev, double phi, double rpm, bool exOpen, bool fuelCut,
+                    double& dm, double& dmf, double& dmb, double& dmbNew, double& dU);
     double valveLift(const ValveSpec& v, double phi, const ValveDynamics& dyn) const;
     double camLift(const ValveSpec& lo, const ValveSpec& hi, double phi, bool intake) const;
     void updateValveDynamics(double rpm);
@@ -146,7 +189,7 @@ private:
     bool fuelCutNow_ = false;
     ComponentModel comp_;
     int repairSeen_ = 0;
-    double burnDuration(const Cylinder& c, double rpm, double lambda);
+    double burnDuration(Cylinder& c, double rpm, double lambda);
 
     EngineParams p_;
     double fs_;
@@ -165,6 +208,9 @@ private:
     int tqBin_ = 0;
     double advance_ = 10;
     bool running_ = false;
+    bool diesel_ = false;          // compression ignition, direct injection (fuelSystem DieselDI)
+    double glowC_ = 20;            // glow plug tip temperature, C
+    double egrPos_ = 0, egrFlow_ = 0; // EGR valve opening 0..1, flow kg/s (averaged)
     double fireTimer_ = 10;    // time since last combustion
     double ambT_ = 298;
     Rng rng_{12345};
@@ -173,6 +219,10 @@ private:
     // structure-borne sound: block / sump modes driven by combustion pressure rise and pops,
     // head / valvetrain modes driven by valve seating; frequencies scale with the bore
     ModalBank block_, head_;
+    // diesel combustion noise (Package 4c): the cylinder pressures (with their ringing) through the structure
+    // attenuation of an engine block (AVL generic curve, fitted) -> radiated sound pressure, Pa
+    StructureAttenuation cnStruct_;
+    double combNoise_ = 0;
     Biquad ping_, starterBp_;
     double blockIn_ = 0, tickIn_ = 0, pingIn_ = 0, starterPhase_ = 0;
 };

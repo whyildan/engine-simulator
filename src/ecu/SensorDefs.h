@@ -7,7 +7,7 @@ namespace es {
 
 enum SensorId : int {
     kSnsTPS, kSnsAPP, kSnsMAP, kSnsMAF, kSnsIAT, kSnsECT, kSnsO2, kSnsWideband, kSnsCKP, kSnsCMP,
-    kSnsKnock, kSnsEGT, kSnsOilP, kSnsOilT, kSnsFuelP, kSnsVSS, kSnsGear, kSnsBattery, kSensorCount
+    kSnsKnock, kSnsEGT, kSnsOilP, kSnsOilT, kSnsFuelP, kSnsVSS, kSnsGear, kSnsBattery, kSnsFlex, kSnsEMAP, kSnsEGT2, kSensorCount
 };
 
 enum class SensorFault : int32_t { None = 0, Open = 1, Short = 2, Stuck = 3, Noisy = 4 };

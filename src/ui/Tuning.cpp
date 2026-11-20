@@ -240,7 +240,38 @@ void App::sectionFuelTuning() {
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Closed loop")) { tabFuelTrims(); ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Fuel system")) { panelFuelIntake(); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Flex fuel")) {
+            ImGui::PushItemWidth(-260);
+            ImGui::TextDisabled("How the ECU adapts to the fuel: alcohol content -> stoich AFR, injector mass, spark, cold enrichment.");
+            char b[160];
+            std::snprintf(b, sizeof(b), "%.1f %% %s", tel_.ecuFlexPct, tel_.ecuFlexLive ? "(flex fuel sensor)" : p_.flexSensor ? "(sensor failed: fallback)" : "(no sensor: fallback)");
+            label("Alcohol content used", b);
+            std::snprintf(b, sizeof(b), "%.2f   (fuel in the line: %.2f)", tel_.ecuStoich, tel_.fuelStoich);
+            label("Stoich AFR used", b);
+            std::snprintf(b, sizeof(b), "%.3f   measured %.3f", tel_.ecuTargetLambda, tel_.snsValue[kSnsWideband]);
+            label("Target lambda", b);
+            std::snprintf(b, sizeof(b), "+%.0f %% when fully cold", tel_.ecuFlexCold * 100);
+            label("Cold enrichment now", b);
+            ImGui::SeparatorText("Fuel definition");
+            ImGui::SliderFloat("Stoich AFR, gasoline", &c.stoichGasoline, 12, 15.5f, "%.2f");
+            ImGui::SliderFloat("Stoich AFR, alcohol", &c.stoichAlcohol, 5, 10, "%.2f");
+            Help("The two fuels the ECU blends by the measured alcohol content (by mass). Ethanol 9.0, methanol 6.45 -\n"
+                 "a flex fuel sensor cannot tell them apart, so a methanol engine needs 6.45 here.");
+            ImGui::SliderFloat("Fallback alcohol content", &c.flexFallbackPct, 0, 100, "%.0f %%");
+            Help("Used without a flex fuel sensor, or when it fails (no signal). Must match the fuel in the tank.");
+            ImGui::PopItemWidth();
+            const float x = tel_.ecuFlexPct;
+            ImGui::SeparatorText("Fuel trim over alcohol content");
+            curveEd_[kCalFlexFuel].drawCurve("flexfuel", c.flexFuel, calCurveInfo(kCalFlexFuel), x, tel_.running, ref ? &ref->flexFuel : nullptr);
+            ImGui::SeparatorText("Spark added over alcohol content");
+            curveEd_[kCalFlexSpark].drawCurve("flexspark", c.flexSpark, calCurveInfo(kCalFlexSpark), x, tel_.running, ref ? &ref->flexSpark : nullptr);
+            ImGui::SeparatorText("Cold enrichment over alcohol content (at full cold, fades as the coolant warms)");
+            curveEd_[kCalFlexCold].drawCurve("flexcold", c.flexCold, calCurveInfo(kCalFlexCold), x, tel_.running, ref ? &ref->flexCold : nullptr);
+            ImGui::SeparatorText("Knock threshold multiplier over alcohol content");
+            curveEd_[kCalFlexKnock].drawCurve("flexknock", c.flexKnock, calCurveInfo(kCalFlexKnock), x, tel_.running, ref ? &ref->flexKnock : nullptr);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Fuel system", nullptr, tabJump("fuel_sys"))) { panelFuelIntake(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Measured")) { panelFuelMap(); ImGui::EndTabItem(); }
         ImGui::EndTabBar();
     }
@@ -275,7 +306,7 @@ void App::sectionIgnitionTuning() {
             ImGui::PopItemWidth();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Knock control")) { tabKnock(); ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Knock control", nullptr, tabJump("knock"))) { tabKnock(); ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Limiter & base curve")) {
             panelIgnition();
             if (ImGui::Button("Rebuild ignition map from this curve")) {

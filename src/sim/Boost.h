@@ -42,6 +42,8 @@ public:
     double compEff = 0;         // compressor isentropic efficiency now
     double compFlowCorr = 0;    // kg/s corrected to 298 K / 101.325 kPa (map axis)
     double turbEff = 0;         // turbine efficiency now
+    double turbineDropK = 0;    // exhaust temperature drop across turbine + wastegate (mixed, K)
+    double turbPowAvg_ = 0, turbFlowAvg_ = 0;
     double turbEr = 1;          // turbine expansion ratio
     double turbUc = 0;          // blade speed ratio U / C
     double turbMfp = 0;         // turbine reduced flow, kg/s sqrt(K) / kPa
@@ -50,6 +52,8 @@ public:
     bool mapTurbine() const { return mapT_; }
     const CompressorModel& compressorModel() const { return cm_; }
     double powerKw = 0;         // compressor power (turbo: also the turbine power at balance)
+    // flow map: compressor outlet temperature (before the intercooler, K) and this step's flows (kg/s, signed)
+    double compOutT = 300, ventFlow = 0, turbFlow = 0, wgFlow = 0;
     bool surging = false, bovOpen = false;
 
 private:
@@ -71,6 +75,7 @@ private:
     double ambT_ = 298;
     double omegaT_ = 0;         // turbo shaft rad/s
     double wgPos_ = 0, wgTrim_ = 0, prevBoost_ = 0, boostRate_ = 0;
+    double vanePos_ = 1;       // VGT vane opening 0 (closed) .. 1 (open)
     double sound_ = 0, phase_ = 0, phase2_ = 0, phase3_ = 0, flutterPh_ = 0;
     // sound shaping
     Biquad whooshBp_, bovHiss_, bovBody_, surgeBp_, surgeLow_, scHiss_;

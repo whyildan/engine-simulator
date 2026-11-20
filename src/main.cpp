@@ -113,6 +113,11 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
     // optional: --section N  (open navigation section N, 1..12)
     int startSection = 0;
     if (const wchar_t* s = cmdLine ? wcsstr(cmdLine, L"--section") : nullptr) startSection = _wtoi(s + 9);
+    // optional: --tab KEY  (open a tab of that section, e.g. --section 9 --tab flowmap) and --start (start the engine)
+    char startTab[32] = {};
+    if (const wchar_t* s = cmdLine ? wcsstr(cmdLine, L"--tab ") : nullptr)
+        for (int i = 0; i < 31 && s[6 + i] && s[6 + i] != L' '; ++i) startTab[i] = (char)s[6 + i];
+    const bool startEngine = cmdLine && wcsstr(cmdLine, L"--start");
     ImGui_ImplWin32_EnableDpiAwareness();
     timeBeginPeriod(1); // 1 ms sleep granularity for the simulation thread
 
@@ -162,6 +167,8 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
         }
         es::App app(startPreset);
         if (startSection >= 1 && startSection <= es::App::kSectionCount) app.setSection(startSection - 1);
+        if (startTab[0]) app.openTab(startTab);
+        if (startEngine) app.startEngine();
         auto last = std::chrono::steady_clock::now();
         bool done = false;
         while (!done) {

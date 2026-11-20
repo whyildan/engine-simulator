@@ -42,6 +42,10 @@ private:
     double lengthFor(const Pipe& pp) const;
 
     std::vector<GasNode> ports_;
+    std::vector<GasNode> helm_;   // Helmholtz resonator volumes (one per exhaust path; reserved - pointers stay valid)
+    // expansion chamber of length L (m) and area ratio ar; extended inlet / outlet tubes (L/2, L/4) when asked
+    PipeEnd chamber(PipeEnd from, double ar, double L, double fc, double loss, bool extTubes);
+    double helmholtzHz() const;
     GasNode burned_;   // composition of gas flowing back from the pipes (pure products)
     GasNode tin_, tout_;
     bool hasTurbine_ = false;

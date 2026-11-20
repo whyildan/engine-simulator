@@ -25,6 +25,10 @@ const SensorDef kDefs[kSensorCount] = {
     {"Vehicle speed",         "km/h",  0,   400,   0,       0,     0, false, "monitoring"},
     {"Gear position",         "gear",  0,     8,   0,       0,     0, false, "monitoring"},
     {"Battery voltage",       "V",     6,    18,   0.02,   20,    14, true,  "injector dead-time compensation"},
+    // frequency output (50 Hz = E0 .. 150 Hz = E100): a broken wire is no signal at all
+    {"Flex fuel (alcohol)",   "%",     0,   100,   0.3,   800,     0, false, "stoich AFR, injector flow, spark, cold enrichment by alcohol content"},
+    {"EMAP exhaust pressure", "kPa",  10,   710,   0.5,    15,   101, true,  "backpressure, drive pressure ratio (EMAP / MAP) protection"},
+    {"EGT after turbine",     "C",     0,  1250,   2,     400,     0, true,  "monitoring (turbine heat drop)"},
 };
 
 double toVolts(const SensorDef& d, double x) { return 0.5 + 4.0 * (x - d.lo) / (d.hi - d.lo); }
@@ -50,7 +54,7 @@ void SensorLayer::update(double dt, const SensorTruth& t, const EngineParams& p)
     // exhaust gas reaches the lambda sensors after a transport delay (shorter at high flow)
     lamHist_[histW_] = t.v[kSnsWideband];
     const double rpm = std::max(300.0, t.v[kSnsCKP]);
-    const double delay = clampv(0.015 + 25.0 / rpm, 0.02, 0.12);
+    const double delay = t.lamDelay >= 0 ? clampv(t.lamDelay, 0.005, 0.4) : clampv(0.015 + 25.0 / rpm, 0.02, 0.12);
     const int back = clampv((int)(delay / std::max(1e-5, dt)), 0, kHist - 1);
     const double lamDelayed = lamHist_[(histW_ - back + kHist) % kHist];
     histW_ = (histW_ + 1) % kHist;
@@ -106,6 +110,8 @@ void SensorLayer::update(double dt, const SensorTruth& t, const EngineParams& p)
     for (int i = 0; i < kMaxCyl; ++i) {
         r.knockCyl[i] = r.fallback[kSnsKnock] ? 0.0 : std::max(0.0, t.knockCyl[i] + knockOffset);
         r.knockSeq[i] = t.knockSeq[i];
+        // per-cylinder thermocouples share the EGT channel's noise class (no separate fault injection)
+        r.egtCyl[i] = p.egtPerCyl ? t.egtCyl[i] + 2.0 * clampv((double)p.sensors[kSnsEGT].noiseScale, 0.0, 10.0) * rng_.gauss() : 0.0;
     }
     init_ = true;
 }

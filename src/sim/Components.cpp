@@ -57,7 +57,7 @@ void ComponentModel::build(const EngineParams& p) {
     const double mr = std::max(50.0, (double)c.rodMass_g) * 1e-3;
     recipMass = mp + mr / 3.0;
     rotMass = mr * 2.0 / 3.0;
-    if (!piston) { extraInertia = 0; safeRpm = 1e9; floatRpmIn = floatRpmEx = 1e9; return; }
+    if (!piston) { extraInertia = 0; safeRpm = 1e9; partSafeRpm[0] = partSafeRpm[1] = partSafeRpm[2] = 1e9; floatRpmIn = floatRpmEx = 1e9; return; }
     // equivalent crank inertia: rotating part fully, reciprocating part on average half
     extraInertia = p.cylinders * (rotMass + 0.5 * recipMass) * crankRadius * crankRadius;
     allowInertiaPa[0] = kPistonAllow[clampv((int)c.pistonType, 0, 2)] * 1e6;
@@ -71,6 +71,7 @@ void ComponentModel::build(const EngineParams& p) {
     for (int i = 0; i < 3; ++i) {
         double w = std::sqrt(allowInertiaPa[i] / load[i]);
         double rpm = w * 60.0 / (2.0 * kPi);
+        partSafeRpm[i] = rpm;
         if (rpm < safeRpm) { safeRpm = rpm; weakest = i; }
     }
     // valve float: spring force at full lift vs mass * cam deceleration

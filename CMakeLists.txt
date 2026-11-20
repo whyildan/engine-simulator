@@ -49,6 +49,8 @@ endif()
 add_library(enginesim_core STATIC
   src/sim/Presets.cpp
   src/sim/Waveguide.cpp
+  src/sim/Fuel.cpp
+  src/sim/Thermo.cpp
   src/sim/Exhaust.cpp
   src/sim/Intake.cpp
   src/sim/Cylinder.cpp
@@ -67,6 +69,7 @@ add_library(enginesim_core STATIC
   src/sim/Vehicle.cpp
   src/sim/Simulator.cpp
   src/sim/DataLog.cpp
+  src/sim/Health.cpp
   src/audio/Listener.cpp
   src/audio/Convolver.cpp
   src/audio/ImpulseResponses.cpp
@@ -109,6 +112,7 @@ add_executable(enginesim WIN32
   src/ui/FileDialog.cpp
   src/ui/Logging.cpp
   src/ui/Dashboard.cpp
+  src/ui/FlowMap.cpp
   src/ui/Widgets.cpp
   src/ui/EngineView3D.cpp
 )
@@ -219,3 +223,33 @@ target_link_libraries(stop_probe PRIVATE enginesim_core)
 
 add_executable(op_trace tests/op_trace.cpp)
 target_link_libraries(op_trace PRIVATE enginesim_core)
+
+add_executable(diesel_test tests/diesel_test.cpp)
+target_link_libraries(diesel_test PRIVATE enginesim_core)
+if(MSVC)
+  target_link_options(diesel_test PRIVATE /STACK:16777216)
+endif()
+
+add_executable(fuel_test tests/fuel_test.cpp)
+target_link_libraries(fuel_test PRIVATE enginesim_core)
+if(MSVC)
+  target_link_options(fuel_test PRIVATE /STACK:16777216)
+endif()
+
+add_executable(exhaust_sensor_test tests/exhaust_sensor_test.cpp)
+target_link_libraries(exhaust_sensor_test PRIVATE enginesim_core)
+if(MSVC)
+  target_link_options(exhaust_sensor_test PRIVATE /STACK:16777216)
+endif()
+
+add_executable(flow_test tests/flow_test.cpp)
+target_link_libraries(flow_test PRIVATE enginesim_core)
+if(MSVC)
+  target_link_options(flow_test PRIVATE /STACK:16777216)
+endif()
+
+add_executable(knock_probe tests/knock_probe.cpp)
+target_link_libraries(knock_probe PRIVATE enginesim_core)
+
+add_executable(sound_test tests/sound_test.cpp)
+target_link_libraries(sound_test PRIVATE enginesim_core)

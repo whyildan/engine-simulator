@@ -30,15 +30,18 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | ⚙️ **Any layout** | Inline, V, boxer, 1–16 cylinders, odd-fire / big-bang, custom firing orders — and **Wankel rotaries** with 1–4 rotors and four porting styles. |
 | 🌀 **The rotary "brap"** | A bridge-ported 13B idles lumpy because exhaust floods back through the port overlap and the diluted charges misfire — modelled, not faked. |
 | 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control; trigger wheels (60-2, 36-1, 36-2-2-2 …) with crank / cam sync, sequential / semi-sequential / batch injection, coil dwell table. |
+| 🛢️ **Diesel** | Compression ignition with direct injection: Hardenberg–Hase ignition delay, premixed / diffusion burn, no throttle (the load is the fuel quantity), smoke limiter, idle and max-speed governors, glow plugs with pre- and post-heat, variable geometry turbo and EGR — and the diesel clatter from the chamber ringing through the engine structure. |
+| ⛽ **Fuels and flex fuel** | Regular / premium / race gasoline, E10, E20, E85, E100 and methanol, each with its own stoichiometric AFR, heating value, octane (knock), charge cooling, flame speed and cold start; a tank you can refuel with a blend, and a flex fuel sensor the ECU uses to adapt its fuelling, spark and cold enrichment. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
 | 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; compressor / turbine maps (built in or loaded from CSV) with efficiency islands, surge and choke; intercooler heat soak; Roots, twin-screw and centrifugal superchargers. |
 | 📈 **Virtual dyno** | WOT sweeps, steady-state step tests and holds, SAE J1349 / DIN 70020 / ISO 1585 / SAE J607 correction, altitude, cell fan, BSFC / EGT / boost per point, before / after comparison, CSV export. |
 | 🔩 **Valvetrain dynamics** | Spring-mass valves on an elastic train: valve float, loft, late closing and seat bounce past the float speed, from the springs, moving mass and lifter type. |
 | 🏁 **Motorsport** | Launch control (2-step) with pops and bangs, 3-step / flat shift, shift cut, traction control, transbrake, rolling anti-lag, progressive wet / dry nitrous, torque management and rev limit / timing by gear. |
-| 🗂️ **Data logging** | 55 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
+| 🗂️ **Data logging** | 62 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
 | 🎛️ **Custom dashboard** | Your own grid of gauges, digital readouts and bars with warning / alarm thresholds and a sensor status strip. |
+| 🗺️ **Flow map and engine health** | The gas path drawn from the engine's own configuration: particles move at the gas velocity, coloured by temperature, and gas pushed backwards (reversion, standoff, compressor surge) moves the other way. Components turn green / yellow / red from their real state, hover shows pressures, temperatures, flows and turbo efficiencies, and a health panel covers check engine, knock, plugs, sensors, valves, rods, crank, pistons and repair. |
 | 🚗 **Drive it** | Car or motorcycle as the load: manual / auto-clutch / automatic gearbox, clutch, tyre slip, 0–100 and 1/4-mile timers. |
-| 🧪 **Virtual sensors** | Lag, noise, 10-bit ADC, transport delay, faults (open / short / stuck / noisy) and the ECU's fallbacks. |
+| 🧪 **Virtual sensors** | Lag, noise, 10-bit ADC, transport delay, faults (open / short / stuck / noisy) and the ECU's fallbacks. The wideband reads the gas in the pipe (misfires read lean, rich products rich; collector or downpipe), EMAP with the drive pressure ratio, EGT per cylinder and after the turbine. |
 | 💾 **Calibration manager** | JSON calibrations per engine, version history, compare, locks, validation. |
 | 📤 **Share engines** | Save the whole engine (hardware, car, sound and its calibration) as your own preset under *My engines*, export it as one `.engine.json` file and import someone else's. |
 
@@ -95,6 +98,7 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 | 9 | V-twin 1.6 45° carb | 21 | I5 2.5 EFI |
 | 10 | Single 0.5 thumper carb | 22 | Flat-6 3.6 boxer |
 | 11 | I4 1.6 ITB race | 23 | **Rotary 13B bridge port (brap idle)** |
+|  |  | 24 | **I4 1.9 turbo diesel (VGT, EGR, glow plugs)** |
 
 ## Building from source
 
@@ -121,14 +125,16 @@ warning lamps) and a 12-section navigation in the style of ECU software:
    **engine view**: flat cutaways of every cylinder / rotor laid out along the crankshaft in a rotatable 3D
    scene (drag to orbit, wheel to zoom; live valve lift, VTEC cam, spark and gas by stroke)
 2. **ECU Setup** — loop rate, trigger wheel and cam sensor, injection timing, coil type and dwell, cold start, simulation pause / reset
-3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, base map
+3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, flex fuel, fuel system (fuel type, tank, refuel), base map
 4. **Ignition Tuning** — ignition map, corrections, knock control, per-cylinder trims
 5. **Boost Control** — turbo / supercharger hardware (generic or compressor / turbine maps), ECU boost control, anti-lag, nitrous
 6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter, cam control (VTEC / VTC), launch / shift, traction control, torque limit and rev limit / spark trim by gear
 7. **Sensor Configuration** — true vs measured values, noise, lag, fault injection
 8. **Engine Protection** — protection rules, limp mode, shutdown
-9. **Live Dashboard** — gauges, readouts, scopes (pressure, P-V, boost, fuel map, sound) and a configurable
-   *Custom* dashboard (layout saved to `dashboard.cfg` next to the exe)
+9. **Live Dashboard** — gauges, readouts, scopes (pressure, P-V, boost, fuel map, sound), a configurable
+   *Custom* dashboard (layout saved to `dashboard.cfg` next to the exe) and the **Flow map**: the gas path of
+   the engine as configured with live flow particles, component health colours, hover values, a diagnosis mode
+   (every sensor at its mounting position, faulty ones blink) and the engine health panel
 10. **Data Logging** — record channels, markers, graphs vs time / rpm, CSV export / import, session compare
 11. **Virtual Dyno** — sweeps, step tests, holds, correction standards, cell fan, before / after comparison, Nm / kW or lb-ft / hp, CSV export
 12. **Calibration Manager** — files, versions, compare, validation
@@ -145,7 +151,9 @@ warning lamps) and a 12-section navigation in the style of ECU software:
 - **Fuel & intake**: EFI (port / throttle body, injector size and dead time) or a carburettor (barrels, venturi,
   jets, idle screw, accelerator pump, choke); throttle body or ITBs, plenum, runners, air filter.
 - **Exhaust**: log manifold / N-into-1 / tri-Y headers, per-cylinder primary lengths ("boxer rumble"),
-  collector, true dual / H / X / Y crossover, cat, resonator, muffler type, tailpipe.
+  collector, true dual / H / X / Y crossover, cat, resonator (inline chamber or a Helmholtz side branch tuned
+  against the cruise drone), muffler type (chambered with optional extended inlet / outlet tubes), tailpipe. The
+  open tailpipe end radiates like a real unflanged pipe (Levine & Schwinger reflection and end correction).
 - **Sound**: *Smooth* (engine-sim style: exhaust pulse pressure + band limit + air noise + impulse response) or
   *Raw* (pure tailpipe flow radiation); pulse pressure mix, rasp (jet noise), punch, optional wave steepening,
   environment reverb (open road, garage, dyno cell, tunnel), impulse responses (built-in or **your own WAV**),
@@ -162,6 +170,13 @@ warning lamps) and a 12-section navigation in the style of ECU software:
 - **Ambient**: temperature and altitude (barometric pressure from the standard atmosphere; the ECU reads it).
 - **Thermal, fuel supply, electrics**: coolant / oil / intake temperatures, thermostat, radiator and fan;
   rail pressure from pump + regulator; battery and alternator (injector dead time follows the voltage).
+- **Exhaust sensors**: the wideband sees the gas leaving the cylinders, mixed in the collector (or turbine housing and downpipe) after its transport delay - unburned fuel from a misfire diffuses through the sensor more slowly than oxygen and reads lean, rich-burn products read rich. EMAP before the turbine and the drive pressure ratio (EMAP / MAP) with a protection rule; EGT thermocouples per primary and after the turbine (the turbine's work comes out of the gas).
+- **Fuels**: gasoline RON 90 / 92 / 95 / 98 / race 104, E10, E20, E85, E100, methanol and any blend (refuelling mixes
+  by volume; a new fuel reaches the injectors through the fuel line over about half a minute). Each has its
+  stoichiometric AFR, heating value, octane (RON / MON → knock threshold), heat of vaporisation (charge cooling),
+  flame speed and cold-wall vaporisation. Injectors and carburettor jets pass volume, so a gasoline setup runs lean
+  on alcohol. Flex fuel sensor (alcohol %) → ECU stoich AFR, injector mass flow, spark, cold enrichment and knock
+  threshold curves; without it the ECU uses its calibration's fallback.
 - **ECU calibration**: VE maps (speed density and alpha-N), target lambda, ignition, cranking / warm-up /
   after-start / acceleration / DFCO-exit enrichments, IAT / ECT corrections, injector data, per-cylinder trims,
   load mode SD / alpha-N / MAF / hybrid. The base VE map is **measured on a virtual motoring dyno** for every
@@ -268,6 +283,23 @@ build/Release/engine_file_test.exe  # engine files: every preset round trips, pa
 ```
 
 ```bash
+build/Release/fuel_test.exe          # fuels: properties, knock by octane, E85 / methanol with and without flex fuel, refuel, cold start
+```
+
+```bash
+build/Release/exhaust_sensor_test.exe   # wideband from the pipe gas, EMAP / drive pressure protection, EGT per cylinder / after the turbine
+```
+
+```bash
+build/Release/flow_test.exe          # flow map: the gas-path flows add up, reversion / standoff / surge show, health levels follow their thresholds
+```
+
+```bash
+build/Release/sound_test.exe         # exhaust acoustics vs theory: open-end reflection (Levine & Schwinger), chamber / side-branch / Helmholtz transmission loss
+build/Release/diesel_test.exe        # diesel: ignition delay vs hand calculation, governors, smoke limit, cetane, clatter, glow plugs / cold start, VGT, EGR
+```
+
+```bash
 build/Release/parts_test.exe        # physical effect of each component
 ```
 
@@ -354,6 +386,11 @@ python tools/analyze_wav.py brap.wav 0 8 900       # level + spectral peaks (eng
 - [x] Phase 5 — launch control, 2-step / 3-step, flat shift, traction control, transbrake, nitrous
 - [x] Phase 6 — compressor / turbine maps, valvetrain dynamics, altitude, intercooler heat soak, dyno step test and correction
 - [x] Phase 7 — trigger wheels and sync, sequential / semi-sequential / batch injection, coil dwell, torque management, gear-based control
+- [x] Package 1 — fuel types (gasoline grades, ethanol blends, methanol), tank and refuelling, flex fuel sensor
+- [x] Package 2 — exhaust sensors: wideband reading the pipe gas, EMAP and drive pressure, EGT per cylinder / after the turbine
+- [x] Package 3 — flow map of the gas path and the engine health panel
+- [x] Package 4 — diesel (compression ignition, direct injection, VGT + EGR, smoke limit, glow plugs, diesel clatter)
+- [ ] Package 5 — two-stroke engines (crankcase scavenging, piston-controlled ports, expansion chamber)
 
 ## Acknowledgements
 

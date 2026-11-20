@@ -19,6 +19,7 @@ struct DigitalInputs {
     double wheelKmh = 0;        // driven wheel speed
     bool crankSync = true;      // trigger decoder: crank angle known (a gap / the cam tooth has passed)
     bool camSync = true;        // cycle phase known (cam tooth seen): sequential injection possible
+    int misfireCount = 0;       // crank-speed misfire detection: running count of detected misfires
 };
 
 struct SensorTruth {
@@ -26,6 +27,8 @@ struct SensorTruth {
     // knock per cylinder (port) from the crank-angle window, and its cycle counter (one value per combustion)
     double knockCyl[kMaxCyl] = {};
     int knockSeq[kMaxCyl] = {};
+    double egtCyl[kMaxCyl] = {};   // per-cylinder EGT thermocouples (C), when fitted
+    double lamDelay = -1;          // s from the exhaust valve to the lambda sensor (< 0: default estimate)
     DigitalInputs in;
 };
 
@@ -39,6 +42,7 @@ struct SensorReadings {
     bool fallback[kSensorCount] = {};
     double knockCyl[kMaxCyl] = {};       // windowed knock intensity per cylinder (0 when the knock sensor failed)
     int knockSeq[kMaxCyl] = {};
+    double egtCyl[kMaxCyl] = {};         // per-cylinder EGT (C)
     DigitalInputs in;
     bool ok(int id) const { return !fallback[id]; }
 };

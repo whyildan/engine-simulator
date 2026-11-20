@@ -1,4 +1,5 @@
 #include "sim/EngineParams.h"
+#include "sim/Fuel.h"
 #include "core/MathUtil.h"
 #include <cstdio>
 
@@ -74,11 +75,16 @@ static EngineParams base() {
     p.injectionAngle = 330; p.idleTargetRpm = 850;
     p.carbBarrels = 2; p.venturi_mm = 32; p.mainJet = 1.0f; p.idleMixture = 1.0f;
     p.idleScrew = 3.0f; p.accelPump = 1.0f; p.choke = 0;
+    p.fuelType = 2; p.flexSensor = 1;   // premium RON 95 (kFuelPremium95), flex fuel sensor fitted
+    p.dieselInjRate = 40; p.dieselMaxFuel = 40; p.soiBase = 4; p.soiAdvance = 8; p.glowPlugs = 0;   // (diesel presets only)
+    p.egrValveDia_mm = 0; p.vgt = 0; p.vgtMinArea = 0.3f;
+    p.emapSensor = 1; p.widebandPos = 1; p.egtPerCyl = 0; p.egtPostTurbo = 1;
+    p.refuelType = 7; p.refuelLitres = 20;   // E85
 
     p.header = HeaderType::Collector; p.primaryDia_mm = 38; p.secondaryLen_mm = 400;
     p.collectorLen_mm = 300; p.collectorDia_mm = 55; p.crossover = Crossover::TrueDual;
     p.pipeDia_mm = 55; p.midpipeLen_mm = 1500; p.cat = 1; p.resonator = 1;
-    p.muffler = Muffler::Chambered; p.tailpipeLen_mm = 600;
+    p.muffler = Muffler::Chambered; p.tailpipeLen_mm = 600; p.resonatorHz = 0; p.mufflerExtTubes = 0;
 
     p.throttle = 0; p.ignition = 0; p.starter = 0; p.ambientTemp_C = 25;
     p.listener = ListenerPos::Tailpipe; p.volume = 1.0f; p.oversample = 2;
@@ -251,6 +257,7 @@ static const char* kNames[] = {
     "I5 2.5 EFI (five cylinder)",
     "Flat-6 3.6 EFI (boxer six)",
     "Rotary 2-rotor 1.3L bridge port (brap idle)",
+    "I4 1.9 turbo diesel (TDI-style)",
 };
 
 int presetCount() { return (int)(sizeof(kNames) / sizeof(kNames[0])); }
@@ -382,7 +389,9 @@ EngineParams makePreset(int idx) {
         p.bore_mm = 92; p.stroke_mm = 75; p.rod_mm = 130; p.compression = 10.2f;
         p.intakeValves = 2; p.exhaustValves = 2; p.intakeValveDia_mm = 36; p.exhaustValveDia_mm = 30;
         p.fuelSystem = FuelSystem::Carburetor; p.carbBarrels = 1; p.venturi_mm = 36; p.throttleBore_mm = 38;
-        p.idleScrew = 4.0f; p.accelPump = 1.8f; p.primaryLen_mm[0] = 900; p.primaryDia_mm = 42; p.collectorDia_mm = 45; p.pipeDia_mm = 45;
+        // accelerator pump 1.3 (was 1.8: a full stroke sprayed ~3x a WOT charge of fuel - lambda ~0.5, rich misfire and a
+        // stall at the tip-in once the physics got more exact)
+        p.idleScrew = 4.0f; p.accelPump = 1.3f; p.primaryLen_mm[0] = 900; p.primaryDia_mm = 42; p.collectorDia_mm = 45; p.pipeDia_mm = 45;
         p.midpipeLen_mm = 200; p.cat = 0; p.resonator = 0; p.muffler = Muffler::StraightThrough; p.tailpipeLen_mm = 250;
         p.revLimit = 7500; p.flywheel = 0.055f; p.plenum_L = 0.4f; p.runnerLen_mm = 150; p.runnerDia_mm = 36;
         break;
@@ -504,12 +513,41 @@ EngineParams makePreset(int idx) {
         applyRotaryPorting(p, 2);
         std::snprintf(p.name, sizeof(p.name), "%s", "Rotary 2-rotor 1.3L bridge port (brap idle)");
         p.idleTargetRpm = 1450; p.afrCruise = 14.0f; p.injector_ccmin = 720; p.flywheel = 0.16f;
-        p.throttleBore_mm = 65; p.plenum_L = 3.0f; p.revLimit = 9000;
+        // short common intake (both rotors' ports into a 0.3 L chamber behind one throttle, 50 mm runners): the
+        // exhaust that one rotor reverts at idle reaches the other rotor within its next intake, so both rotors share
+        // the slowly building dilution. That makes them fire and misfire *together* - runs of ~6 firing events, then
+        // ~6 weak / misfiring ones, a 12-event cycle - like a recorded bridge-port 13B idle (2026-11-20, ECU_PLAN
+        // "Target brap"). With the earlier 3 L plenum / long runners each rotor ran its own cycle, half a cycle apart,
+        // and the misfires spread out into a fast flutter instead of the brap.
+        p.throttleBore_mm = 65; p.plenum_L = 0.3f; p.runnerLen_mm = 50; p.revLimit = 9000;
         p.header = HeaderType::Collector; p.primaryDia_mm = 55; p.collectorDia_mm = 65; p.pipeDia_mm = 65;
         for (int i = 0; i < kMaxCyl; ++i) p.primaryLen_mm[i] = 350;
         p.cat = 0; p.resonator = 0; p.muffler = Muffler::StraightThrough;
         p.limiter = Limiter::IgnitionCut;
         p.sweepStartRpm = 2000; p.sweepEndRpm = p.revLimit - 200;
+        break;
+    case 24: // turbo diesel I4 (Package 4): 1.9 L long stroke, compression 19.5, direct injection, no throttle,
+             // a small wastegated turbo. The load is the fuel per stroke (pedal map, smoke limiter, governors).
+        p = base();
+        p.cylinders = 4; p.layout = Layout::Inline; applyLayoutDefaults(p);
+        p.bore_mm = 79.5f; p.stroke_mm = 95.5f; p.rod_mm = 144; p.compression = 19.5f;
+        p.intakeValves = 1; p.exhaustValves = 1; p.intakeValveDia_mm = 36; p.exhaustValveDia_mm = 31;
+        p.intakeDuration = 224; p.exhaustDuration = 228; p.intakeCenterline = 112; p.exhaustCenterline = 112;
+        p.header = HeaderType::Log; p.primaryDia_mm = 36; p.collectorDia_mm = 45; p.pipeDia_mm = 50;
+        p.revLimit = 4800; p.flywheel = 0.16f; p.idleTargetRpm = 900;
+        applyInductionDefaults(p, Induction::Turbo);
+        p.compression = 19.5f;   // (after the turbo defaults, which set a petrol turbo's 9.5)
+        p.compFlow_gs = 150; p.turbineAR = 0.30f; p.turboInertia = 0.04f; p.wastegateBar = 0.8f;
+        p.fuelSystem = FuelSystem::DieselDI; p.fuelType = kFuelDiesel; p.flexSensor = 0;
+        // timing / fuel set so the peak cylinder pressure stays at ~105-150 bar over the speed range (with 19.5:1
+        // and 0.8 bar boost the motored pressure alone is ~100 bar): ~230 Nm at 2000 rpm, ~210 Nm at 4000
+        p.dieselInjRate = 40; p.dieselMaxFuel = 45; p.soiBase = 2; p.soiAdvance = 5;
+        p.glowPlugs = 1;   // metal sheathed-element glow plugs
+        // variable geometry turbine (closed vanes: a fraction of the open flow area) and an uncooled high-pressure EGR
+        // valve - starting values, set so the boost target is held from ~1500 rpm and EGR flows at part load
+        p.vgt = 1; p.vgtMinArea = 0.12f; p.turbineAR = 0.8f; p.egrValveDia_mm = 25;
+        p.limiter = Limiter::FuelCut; p.muffler = Muffler::Chambered;
+        p.sweepStartRpm = 1000; p.sweepEndRpm = 4700;
         break;
     case 20: // centrifugal supercharged V6
         p = makePreset(3);
@@ -529,6 +567,21 @@ EngineParams makePreset(int idx) {
     if (idx == 0) p.comp.plugHeatRange = 6;   // K20A street plug: hot enough to stay clean at idle
     // a nitrous kit sized to the engine (~30 hp per litre, in 25 hp jet steps)
     p.n2oShotHp = (float)(std::round(std::max(50.0, 30.0 * equivalentDisplacementL(p)) / 25.0) * 25.0);
+    // Idle retune after Group A4 (burn duration from the laminar burning velocity): the idle charges now burn faster
+    // than the old empirical factors made them (CA50 ~20-29 deg ATDC instead of 36-44), so the high-overlap engines
+    // fired harder between their dilution misfires and idled rougher. Like a calibrator re-tuning for it: a little
+    // higher idle speed (more manifold pressure, less residual) and / or less idle advance (`retard`: base advance
+    // down, the same added to the mechanical advance - full-load timing at high rpm unchanged). Chosen from an idle
+    // grid (idle +0/100/200 rpm x retard 0/4/8 deg) as the smallest change that idles at least as smoothly as before.
+    {
+        struct Retune { int preset; float idleAdd, retard; };
+        static const Retune kRetune[] = {
+            {1, 0, 4}, {8, 0, 4}, {5, 100, 4}, {6, 100, 8}, {7, 100, 8}, {22, 100, 8}, {19, 100, 8}, {17, 200, 0},
+            {13, 200, 8}, {16, 100, 0},
+        };
+        for (const Retune& r : kRetune)
+            if (r.preset == idx) { p.idleTargetRpm += r.idleAdd; p.baseAdvance -= r.retard; p.mechAdvance += r.retard; }
+    }
     generateCalibration(p);
     if (idx == 0) {   // free-revving, small ports: the revs and the manifold react fast - less acceleration fuel,
                       // a little more idle valve damping

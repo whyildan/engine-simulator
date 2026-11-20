@@ -1,6 +1,7 @@
 #pragma once
 #include "sim/EngineParams.h"
 #include "sim/Gas.h"
+#include "sim/Thermo.h"
 
 namespace es {
 
@@ -93,7 +94,10 @@ struct ValveSpec {
 
 struct Cylinder {
     // composition / thermo state
-    double m = 0, mf = 0, mb = 0, U = 0;
+    double m = 0, mf = 0, mb = 0, U = 0;   // U: sensible internal energy (J), temperature-dependent properties (Thermo.h)
+    GasComp yb;                // composition of the burned gas (mb); the rest of the charge is air + fuel vapour
+    GasComp yNew;              // composition of the products the current burn makes
+    double airPerFuel = 14.7;  // kg air that ends up in the products per kg fuel burned (current burn)
     double p = kPatm, T = 300, V = 1e-4;
     double phase = 0;          // firing phase (deg)
     double prevPhi = 0;
@@ -102,13 +106,20 @@ struct Cylinder {
     // combustion
     bool burning = false, burnEnded = false;
     double burnStart = 0, burnDur = 50, qTotal = 0, fuelBurn = 0, xPrev = 0;
-    double pIvc = kPatm, tIvc = 300;
+    double pIvc = kPatm, tIvc = 300, vIvc = 5e-4;   // state at intake valve closing (Woschni reference)
+    bool fired = false;        // from the spark of a burning charge until the exhaust valve opens (Woschni C2 term)
 
     // per cycle results
     double pmax = 0, pmaxCycle = 0;
+    double dpMax = 0, dpMaxCycle = 0;     // peak pressure rise rate this / last cycle, Pa per crank degree
     double work = 0, imep = 0;            // J, Pa
     double trappedAir = 0, trappedFuel = 0, lambda = 1, ve = 0;
     double knock = 0, knockCycle = 0;
+    double slSpark = 0, tuSpark = 300, pSpark = 1e5;   // laminar burning velocity (cm/s), unburned T, p at the last spark
+    double lwI = 0;            // Livengood-Wu integral of the current end gas
+    bool lwOpen = false;       // end gas alive: from intake closing to 90 % burned (or the exhaust opening)
+    double tEnd = 300;         // end-gas temperature (isentropic from intake closing)
+    double knockP = 0, knockPCycle = 0, knockT = 0;   // end-gas pressure (Pa) / temperature (K) at the peak (diagnostics)
     int cycles = 0;               // completed working cycles (the knock window counts per cycle)
     double egt = 800;
     double tEvo = 1000;                   // K: burned gas temperature when the exhaust valve opened (blowdown)
@@ -116,13 +127,27 @@ struct Cylinder {
     double afterfireFuel = 0;             // unburned fuel sitting in the primary
     double afterfireAir = 0;              // ... and the fresh air (oxygen) next to it
     double popPending = 0;                // afterfire pressure still to be released (Pa)
+    // diesel (Package 4): direct injection, ignition delay, premixed / diffusion / tail burn
+    double injLeft = 0, injRate = 0, injDone = 0;   // kg still to inject, kg/s, kg injected this cycle
+    double idI = 0;                       // ignition delay integral (dt / tau, Hardenberg-Hase) since the start of injection
+    bool idOpen = false;                  // injecting / injected but not lit yet
+    bool dBurning = false;                // diesel burn running
+    double socPhi = 0, soiPhi = 0;        // deg: start of combustion / of injection
+    double dPre = 0, dDiff = 0, dTail = 0, dBurned = 0, dPhi = 0.5;   // kg per phase, kg burned, overall phi
+    double idDeg = 0;                     // last ignition delay, deg CA (diagnostics)
+    double ringA = 0, ringPh = 0;         // combustion chamber pressure ringing: amplitude Pa, phase rad
+    double ringKickA = 0;                 // amplitude the last burn excited (diagnostics), Pa
+    double dpStep = 0;                    // highest pressure rise rate since the start of combustion, Pa / deg
+    bool ringKicked = false;              // the ringing of this burn has been excited
     bool misfired = false;
     double dilution = 0;                  // burned gas share of the charge at the spark (residual + reverted exhaust)
     double burnEta = 1;                   // 1 fired, 0 misfired (diagnostics)
     bool valveSeatEvent = false;          // set on the step a valve closes (mechanical click)
     bool knockEvent = false;
 
-    void init(const CylGeom& g, double phi, double Tamb);
+    void init(const CylGeom& g, double phi, double Tamb, const GasComp& products);
+    void setT(double t) { T = t; U = thermo::energy(m - mb, mb, yb, T); }   // after a direct change of T
+    void solveT() { T = thermo::temperature(m - mb, mb, yb, U, T); }
 };
 
 } // namespace es

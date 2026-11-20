@@ -1,4 +1,5 @@
 #pragma once
+#include "sim/Fuel.h"
 #include "sim/EngineParams.h"
 #include "sim/Waveguide.h"
 #include <vector>
@@ -24,6 +25,9 @@ public:
     // thermal state from the engine: inlet air temperature (K) and how cold the port walls are (0..1)
     void setInletTemp(double K) { inletT_ = K; }
     void setColdWalls(double cold) { cold_ = clampv(cold, 0.0, 1.0); }
+    // the fuel in the line: a carburettor meters it by volume through its jets, and alcohols evaporate off cold
+    // walls far more slowly
+    void setFuel(const FuelProps& f) { fuel_ = f; }
 
     GasNode& port(int i) { return ports_[i]; }
     // nitrous: air-equivalent charge and fuel fed straight into a port, and the charge cooling it causes
@@ -33,10 +37,19 @@ public:
     double throttlePosition() const { return throttlePos_; }
     int inletCount() const { return (int)inlets_.size(); }
     const GasNode& inlet(int i) const { return inlets_[i]; }
+    GasNode& inletNode(int i) { return inlets_[i]; }   // (EGR enters the plenum)
+    // EGR: share of the gas entering the plenum that is recirculated exhaust, and its temperature (K)
+    void setEgr(double share, double tK) { egrShare_ = std::max(0.0, std::min(1.0, share)); egrT_ = tK; }
 
     // telemetry
     double map() const;                  // Pa, mean inlet pressure
     double airFlow() const { return airFlow_; }   // kg/s through throttle(s)
+    // the throttle flow of the last step split into forward (into the plenum) and reverse (pushed back out), kg/s
+    void throttleFlows(double& fwd, double& back) const {
+        fwd = back = 0;
+        for (double f : inletFlow_) { if (f > 0) fwd += f; else back -= f; }
+    }
+    double plenumTemp() const { double s = 0; for (const GasNode& g : inlets_) s += g.T; return inlets_.empty() ? inletT_ : s / (double)inlets_.size(); }
     double fuelFlow() const { return fuelFlowAvg_; }
     double iacPct() const { return iac_ * 100.0; }
     double radiated() const { return radiated_; } // induction noise (Pa @1m)
@@ -54,6 +67,7 @@ private:
     double ambT_ = 298;
     std::vector<GasNode> inlets_;    // plenum (1) or ITB stacks (n)
     GasNode charge_;                 // boost: charge piping + intercooler volume
+    double egrShare_ = 0, egrT_ = 600, plenumT0_ = 300;   // EGR mix into the plenum; NA plenum temperature without it
     bool boosted_ = false;
     std::vector<GasNode> ports_;
     std::vector<double> inletFilm_, portFilm_;
@@ -67,6 +81,9 @@ private:
     double iac_ = 0.35;
     double sprayRate_ = 1e-3;          // kg/s an open injector delivers right now
     double inletT_ = 298, cold_ = 0;
+    FuelProps fuel_;
+    // wall film evaporation time: longer when cold, and much longer for alcohols when cold
+    double filmSlow() const { return 1.0 + 1.5 * cold_ * (fuel_.coldVap / 0.25); }
     double radiated_ = 0, prevFlow_ = 0, radLp_ = 0;
     double filtA_ = 0.5;
 };

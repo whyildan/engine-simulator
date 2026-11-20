@@ -121,7 +121,7 @@ void App::sectionEngineControl() {
             ImGui::PopItemWidth();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Throttle (DBW)")) {
+        if (ImGui::BeginTabItem("Throttle (DBW)", nullptr, tabJump("dbw"))) {
             const bool dbw = p_.comp.throttleType == ThrottleType::DriveByWire;
             if (!dbw) ImGui::TextColored(ImVec4(1, 0.75f, 0.35f, 1), "Cable throttle: the pedal moves the butterfly directly - this map is not used (Engine Setup > Components > Throttle).");
             char b[128];
@@ -153,6 +153,52 @@ void App::sectionEngineControl() {
             char b[96];
             std::snprintf(b, sizeof(b), "%s   cut %.0f %%", tel_.limiter ? "LIMITER ON" : "-", tel_.cutFraction * 100);
             rowLabel("Now", b);
+            ImGui::EndTabItem();
+        }
+        if (isDiesel(p_) && ImGui::BeginTabItem("Diesel")) {
+            char b[160];
+            std::snprintf(b, sizeof(b), "%.1f mg/stroke   SOI %.1f deg BTDC   ignition delay %.1f deg   %s", tel_.dieselFuelMg, tel_.soi,
+                          tel_.ignDelayDeg, tel_.smokeLimited ? "SMOKE LIMITED" : "");
+            rowLabel("Now", b);
+            ImGui::PushItemWidth(-260);
+            ImGui::SliderFloat("Smoke limit lambda", &c.smokeLambda, 1.0f, 2.0f, "%.2f");
+            Help("Never more fuel than the measured air allows at this lambda. Richer (lower) = more torque and black\n"
+                 "smoke. 1.38 = air-fuel 20, the smoke limit quoted for diesels (MIT 2.61 lecture notes).");
+            ImGui::SliderFloat("Idle governor P", &c.dieselIdleKp, 0, 0.1f, "%.3f mg/rpm");
+            ImGui::SliderFloat("Idle governor I", &c.dieselIdleKi, 0, 0.2f, "%.3f mg/rpm s");
+            ImGui::SliderFloat("Max-speed governor band", &c.dieselGovBand, 0, 1500, "%.0f rpm");
+            Help("The fuel falls to zero over this band below the rev limit (a diesel governs its speed with the fuel).");
+            ImGui::SliderFloat("Cranking fuel", &c.dieselStartFuel, 0, 150, "%.0f mg/stroke");
+            ImGui::SeparatorText("Glow plugs");
+            ImGui::SliderFloat("Post-heat at most", &c.afterglowTime, 0, 600, "%.0f s");
+            ImGui::SliderFloat("Post-heat until coolant", &c.afterglowEct, 0, 100, "%.0f C");
+            Help("BorgWarner / BERU: post-heating up to 3 minutes, ending when the coolant reaches 70 C - it cuts white\n"
+                 "smoke and the cold-start knock (none when the engine was already that warm at the start).");
+            curveEd_[kCalGlowPreheat].drawCurve("glowpre", c.glowPreheat, calCurveInfo(kCalGlowPreheat), tel_.snsValue[kSnsECT], true,
+                                                ref ? &ref->glowPreheat : nullptr);
+            ImGui::Text("Tip %.0f C  %s", tel_.glowTipC, tel_.glowLight ? "PRE-HEATING" : tel_.glowOn ? "heating" : "off");
+            ImGui::SeparatorText("EGR valve: % over rpm x fuel mg/stroke");
+            if (p_.egrValveDia_mm <= 0) ImGui::TextDisabled("No EGR valve fitted (Engine Setup > Intake / fuel).");
+            ImGui::PushItemWidth(-260);
+            ImGui::SliderFloat("EGR only above coolant", &c.egrMinEct, 0, 100, "%.0f C");
+            ImGui::PopItemWidth();
+            {
+                OpPoint eo; eo.valid = tel_.running; eo.x = tel_.rpm; eo.y = tel_.dieselFuelMg;
+                tabEd_[kCalEgr].draw("egr", c.egrMap, calTableInfo(kCalEgr), eo, nullptr, ref ? &ref->egrMap : nullptr, refName_.c_str());
+            }
+            Help("Open at idle and light load, closed towards full load (the engine needs all its air there - the smoke\n"
+                 "limiter would take the fuel away). The starting map is a guess, not from a source.");
+            ImGui::Text("Now: valve %.0f %%   %.1f g/s   %.0f %% of the charge", tel_.egrPos * 100.0f, tel_.egrGs, tel_.egrRate * 100.0f);
+            ImGui::PopItemWidth();
+            OpPoint op; op.valid = tel_.running;
+            ImGui::SeparatorText("Driver demand: fuel mg/stroke over rpm x pedal %");
+            op.x = tel_.rpm; op.y = tel_.snsValue[kSnsAPP];
+            tabEd_[kCalDieselFuel].draw("dieselfuel", c.dieselFuel, calTableInfo(kCalDieselFuel), op, nullptr, ref ? &ref->dieselFuel : nullptr, refName_.c_str());
+            ImGui::SeparatorText("Start of injection: deg BTDC over rpm x fuel mg/stroke");
+            op.y = tel_.dieselFuelMg;
+            tabEd_[kCalSoi].draw("soi", c.soi, calTableInfo(kCalSoi), op, nullptr, ref ? &ref->soi : nullptr, refName_.c_str());
+            Help("Earlier = higher peak pressure, louder premixed burn, more efficient up to a point. Later = quieter,\n"
+                 "hotter exhaust, less torque.");
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Cam control")) {

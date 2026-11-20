@@ -163,7 +163,7 @@ void ExhaustSchematic(const EngineParams& p, ImVec2 size) {
         float xx = xs;
         section(xx, y, nullptr, seg, 0);
         if (p.cat) { section(xx, y, "CAT", seg * 1.1f, 11); section(xx, y, nullptr, seg * 0.5f, 0); }
-        if (p.resonator) { section(xx, y, "RES", seg * 1.1f, 9); section(xx, y, nullptr, seg * 0.5f, 0); }
+        if (p.resonator) { section(xx, y, p.resonator == 2 ? "HELM" : "RES", seg * 1.1f, 9); section(xx, y, nullptr, seg * 0.5f, 0); }
         const char* mn = p.muffler == Muffler::StraightThrough ? "GLASSPACK" : p.muffler == Muffler::Chambered ? "CHAMBERED"
                        : p.muffler == Muffler::Turbo ? "TURBO" : nullptr;
         if (mn) section(xx, y, mn, seg * 2.2f, 13);

@@ -191,8 +191,22 @@ void Simulator::render(float* out, int frames) {
     t.torque = (float)e.netTorque();
     t.powerKw = (float)(e.netTorque() * e.omega() / 1000.0);
     t.mapKPa = (float)(e.intake.map() / 1000.0);
-    t.afr = (float)(e.lambdaAvg * kStoich);
+    t.afr = (float)(e.lambdaAvg * e.fuel().stoich);
     t.targetAfr = (float)e.ecu.targetAfr;
+    t.lambda = (float)e.lambdaAvg;
+    t.fuelStoich = (float)e.fuel().stoich; t.fuelAlcohol = (float)e.fuel().alcoholPct;
+    t.fuelRon = (float)e.fuel().ron; t.fuelMon = (float)e.fuel().mon; t.fuelLhv = (float)(e.fuel().lhv * 1e-6);
+    t.tankAlcohol = (float)e.tankFuel().alcoholPct; t.tankRon = (float)e.tankFuel().ron;
+    t.tankLitres = (float)e.tankLitres(); t.tankCap = (float)Engine::kTankCapL;
+    t.ecuFlexPct = (float)e.ecu.flexPct; t.ecuStoich = (float)e.ecu.stoichEcu; t.ecuTargetLambda = (float)e.ecu.targetLambda;
+    t.ecuFlexCold = (float)e.ecu.flexCold; t.ecuFlexLive = e.ecu.flexLive;
+    t.lambdaPipe = (float)e.lambdaPipe(); t.emapKPa = (float)e.emapKPa();
+    t.driveRatio = (float)(e.sensors.r.value[kSnsEMAP] / std::max(10.0, e.ecu.mapUsed));   // as the ECU sees it
+    t.egtPostC = (float)(e.egtPostProbe() - 273.15); t.turbineDropK = (float)e.boost.turbineDropK;
+    for (int i = 0; i < kMaxCyl; ++i) t.egtCylC[i] = (float)(e.egtCylProbe(i) - 273.15);
+    t.flow = e.flowState();
+    t.egtPerCyl = e.params().egtPerCyl != 0; t.emapFitted = e.params().emapSensor != 0;
+    t.widebandPost = e.params().widebandPos != 0 && e.exhaust.hasTurbine();
     t.ve = (float)e.veAvg;
     t.airFlow = (float)(e.intake.airFlow() * 1000.0);
     t.fuelFlow = (float)(e.intake.fuelFlow() * 1000.0);
@@ -211,6 +225,12 @@ void Simulator::render(float* out, int frames) {
         t.snsVolts[k] = (float)e.sensors.r.volts[k]; t.snsStatus[k] = e.sensors.r.status[k]; t.snsFallback[k] = e.sensors.r.fallback[k];
     }
     t.knock = (float)e.knockMax;
+    t.dieselFuelMg = (float)e.ecu.cmd.dieselFuelMg; t.soi = (float)e.ecu.cmd.soi; t.smokeLimited = e.ecu.smokeLimited;
+    t.ignDelayDeg = e.cylinders() > 0 ? (float)e.cyl(0).idDeg : 0.0f;
+    t.glowTipC = (float)e.glowTipC(); t.glowOn = e.ecu.cmd.glow; t.glowLight = e.ecu.glowLight;
+    t.egrPos = (float)e.egrPos(); t.egrGs = (float)(e.egrFlow() * 1000.0);
+    t.egrRate = (float)(e.egrFlow() / std::max(1e-6, e.egrFlow() + std::max(0.0, e.intake.airFlow())));
+    t.vgtOpen = e.params().vgt ? (float)e.boost.wastegate : 1.0f;
     t.stress = (float)e.stress; t.floatIn = (float)e.floatIn; t.floatEx = (float)e.floatEx;
     t.sparkMargin = (float)e.sparkMargin; t.sparkAvail = (float)e.sparkAvail; t.oilBar = (float)e.oilBar;
     t.plugTempC = (float)e.plugTempC; t.fouling = (float)e.fouling; t.damage = (float)e.damage; t.failure = e.failure;

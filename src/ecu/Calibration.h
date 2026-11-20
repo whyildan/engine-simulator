@@ -37,7 +37,7 @@ const char* injModeNames();
 
 // engine protection (Phase 3): one rule per monitored condition
 enum ProtId : int { kProtOverRev, kProtOverboost, kProtCoolant, kProtOilTemp, kProtOilPress, kProtFuelPress, kProtLean,
-                    kProtKnock, kProtEgt, kProtSensor, kProtCount };
+                    kProtKnock, kProtEgt, kProtSensor, kProtBackpressure, kProtCount };
 enum ProtAction : int { kActWarn, kActRetard, kActBoostReduce, kActThrottleLimit, kActFuelLimit, kActLimp, kActShutdown, kActCount };
 struct ProtRule {
     int32_t enabled;
@@ -188,13 +188,40 @@ struct Calibration {
     int32_t gearControl;
     Curve1D gearRevLimit;   // rpm limit over gear (above the main rev limit: the main limiter)
     Curve1D gearSpark;      // spark trim deg over gear
+
+    // ---- fuel and flex fuel (Package 1). The ECU's picture of the fuel: its stoichiometric AFR follows the
+    //      alcohol content (flex fuel sensor, or the fallback below without one / when it fails), blending the
+    //      two stoich values by mass. Curves over the alcohol content add fuel / spark / cold enrichment.
+    float stoichGasoline;   // AFR of the gasoline part (14.7)
+    float stoichAlcohol;    // AFR of the alcohol the sensor measures (ethanol 9.0, methanol 6.45)
+    float flexFallbackPct;  // alcohol % the ECU assumes without a (working) flex fuel sensor
+    Curve1D flexFuel;       // fuel trim % over alcohol %
+    Curve1D flexSpark;      // spark added (deg) over alcohol %
+    Curve1D flexCold;       // extra cranking / warm-up fuel % when fully cold, over alcohol %
+    Curve1D flexKnock;      // knock threshold multiplier over alcohol %
+
+    // ---- diesel (Package 4): the load is the fuel quantity (no throttle)
+    Table2D dieselFuel;     // driver demand: injected fuel mg/stroke over rpm x pedal %
+    Table2D soi;            // start of injection deg BTDC over rpm x fuel mg/stroke
+    float smokeLambda;      // smoke limiter: never more fuel than the measured air / (smokeLambda x stoich)
+    float dieselIdleKp, dieselIdleKi;   // idle governor: mg per rpm of error, mg per rpm s
+    float dieselGovBand;    // rpm: the max-speed governor takes the fuel to zero over this band below the rev limit
+    float dieselStartFuel;  // mg/stroke while cranking
+    // glow plugs: pre-heat when the key turns on (time over coolant temperature), heating while cranking, post-heat
+    // after the start until the coolant reaches afterglowEct or for afterglowTime at most
+    Curve1D glowPreheat;    // s over coolant C
+    float afterglowTime;    // s
+    float afterglowEct;     // C
+    // exhaust gas recirculation (Package 4b): valve opening over rpm x fuel, only with a warm engine
+    Table2D egrMap;         // % over rpm x fuel mg/stroke
+    float egrMinEct;        // C
 };
 
 // table identities (UI / files)
-enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalLtft, kCalBoostTarget, kCalVtc, kCalTableCount };
+enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalLtft, kCalBoostTarget, kCalVtc, kCalDieselFuel, kCalSoi, kCalEgr, kCalTableCount };
 enum CalCurveId : int { kCalCrankAfr, kCalWarmup, kCalAccel, kCalIatFuel, kCalIatSpark, kCalEctSpark, kCalDeadTime,
                         kCalIdleTarget, kCalDbwMap, kCalBoostGear, kCalTcSlip, kCalDwell, kCalTqGear, kCalGearRev,
-                        kCalGearSpark, kCalCurveCount };
+                        kCalGearSpark, kCalFlexFuel, kCalFlexSpark, kCalFlexCold, kCalFlexKnock, kCalGlowPreheat, kCalCurveCount };
 // what the launch / shift limiters are doing (telemetry)
 enum LaunchState : int { kLaunchOff, kLaunch2Step, kLaunch3Step, kLaunchFlatShift, kLaunchShiftCut, kLaunchRollingAls, kLaunchStateCount };
 const char* launchStateName(int s);

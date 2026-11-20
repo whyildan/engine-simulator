@@ -74,7 +74,9 @@ int main() {
             startIdle(sim, p, 1.5);
             hold(sim, p, 3000, 1.0f);
             run(sim, 4.0);
-            knock = avg(sim, 2.0, [](const Telemetry& x) { return x.knock; });
+            // 6 s: the knock control steps its retard per knock event and recovers between them - a short window
+            // right after the hold catches it still converging and depends on the random burn sequence
+            knock = avg(sim, 6.0, [](const Telemetry& x) { return x.knock; });
             Telemetry t = tel(sim);
             retard = 0; for (int i = 0; i < p.cylinders; ++i) retard = std::max(retard, (double)t.knockRetard[i]);
             torque = t.torque;

@@ -131,12 +131,18 @@ int main() {
                 for (int k = 0; k < 300; ++k) { run(sim, 0.02); Telemetry x = tel(sim); if (x.clutchLocked && x.rpm > 2500) break; }
                 p.throttle = 1; sim.setParams(p);
                 run(sim, 0.4);
-                clutch[on] = avg(sim, 0.6, [](const Telemetry& x) { return x.clutchTq; });
+                // engine torque, not clutch torque: right after the clutch locks in first gear the driveline shuffles
+                // and the clutch torque swings 20-180 Nm from sample to sample (the average depended on the random
+                // burn sequence); the engine torque averages cleanly. 1.5 s: the cable throttle's share of random
+                // spark cuts needs a few hundred sparks to average out (0.6 s spread 72-98 Nm over seeds)
+                double sum = 0; int n = 0;
+                for (int k = 0; k < 75; ++k) { run(sim, 0.02); sum += tel(sim).torque; ++n; }
+                clutch[on] = sum / n;
                 Telemetry t = tel(sim);
                 load[on] = t.tqLoad;
                 if (on) { red = t.tqReduction; cap = t.tqThrCap; }
             }
-            std::printf("  %s: clutch torque %.0f -> %.0f Nm, ECU load %.0f -> %.0f %% (limit 60), reduction %.2f, throttle cap %.2f\n",
+            std::printf("  %s: engine torque %.0f -> %.0f Nm, ECU load %.0f -> %.0f %% (limit 60), reduction %.2f, throttle cap %.2f\n",
                         cable ? "cable throttle" : "drive-by-wire", clutch[0], clutch[1], load[0], load[1], red, cap);
             CHECK(clutch[1] < 0.8 * clutch[0], "%s: the limit takes torque off in first gear", cable ? "cable" : "DBW");
             if (!cable) CHECK(cap < 0.9 && load[1] < 75, "DBW: the throttle cap holds the load near the limit (%.0f %%)", load[1]);

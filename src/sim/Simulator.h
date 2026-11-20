@@ -18,6 +18,10 @@ struct Telemetry {
     float mapKPa = 101, afr = 14.7f, targetAfr = 14.7f, ve = 0;
     float airFlow = 0, fuelFlow = 0, injDuty = 0, advance = 0, iac = 0;
     float knock = 0, egt = 0, egtGas = 0, dynoLoad = 0, dynoTarget = 0, dynoProgress = 0;
+    // diesel (Package 4)
+    float dieselFuelMg = 0, soi = 0, ignDelayDeg = 0; bool smokeLimited = false;
+    float glowTipC = 0; bool glowOn = false, glowLight = false;
+    float egrPos = 0, egrGs = 0, egrRate = 0, vgtOpen = 0;   // EGR valve 0..1, flow g/s, share of the charge; VGT vane opening
     int dynoState = 0, dynoRun = 0;
     int misfires = 0, afterfires = 0;
     bool running = false, limiter = false;
@@ -50,6 +54,17 @@ struct Telemetry {
     float dwellMs = 0, syncDeg = 0, tqLoad = 0, tqLimit = 0, tqReduction = 0, tqThrCap = 1, gearLimitRpm = 0;
     float loftIn = 0, loftEx = 0, bounceIn = 0, bounceEx = 0, lateCloseIn = 0, lateCloseEx = 0;   // mm, deg
     // vehicle
+    // fuel (Package 1): what burns now (fuel line), what is in the tank, and what the ECU believes
+    float lambda = 1, fuelStoich = 14.7f, fuelAlcohol = 0, fuelRon = 95, fuelMon = 85, fuelLhv = 43.5f;
+    float tankAlcohol = 0, tankRon = 95, tankLitres = 30, tankCap = 50;
+    float ecuFlexPct = 0, ecuStoich = 14.7f, ecuTargetLambda = 1, ecuFlexCold = 0;
+    bool ecuFlexLive = false;
+    // exhaust sensors (Package 2): gas at the wideband (before its delay), EMAP, drive pressure ratio, EGT after the
+    // turbine and per cylinder (thermocouple readings, C), the sensor positions
+    float lambdaPipe = 1, emapKPa = 101, driveRatio = 1, egtPostC = 0, egtCylC[kMaxCyl] = {}, turbineDropK = 0;
+    bool egtPerCyl = false, widebandPost = false, emapFitted = false;
+    // flow map (Package 3): forward / reverse flow per section of the gas path, pressures and temperatures
+    FlowState flow;
     bool vehicle = false;
     int gear = 0;
     float speedKmh = 0, clutchEng = 0, clutchTq = 0, wheelSlip = 0, distance = 0, t100 = 0, tQuarter = 0, vQuarter = 0, runTime = 0;
