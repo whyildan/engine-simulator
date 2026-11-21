@@ -2,6 +2,8 @@
 // placed in 3D - each cylinder's cutaway in its own plane along the crankshaft, the V banks tilted, the boxer
 // opposed, rotors stacked. A small software projection onto ImGui's draw list, painter-sorted, back faces culled.
 #include "ui/EngineView3D.h"
+#include "ui/EngineModel.h"
+#include "ui/Gpu3D.h"
 #include "core/MathUtil.h"
 #include <algorithm>
 #include <cmath>
@@ -482,11 +484,9 @@ void render(ImDrawList* dl, const Scene& sc, const Cam3& cam) {
 
 } // namespace
 
-void EngineView3D(const EngineParams& p, const float phases[kMaxCyl], float crankDeg, const EngineViewLive& live,
-                  ViewCam& cam, ImVec2 size) {
-    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+// orbit (left drag), pan (right / middle drag), zoom (wheel), reset (double click) on an invisible button over the view
+static void viewInput(ViewCam& cam, ImVec2 size) {
     ImGui::InvisibleButton("engine_view3d", size, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
-    // orbit (left drag), pan (right / middle drag), zoom (wheel), reset (double click)
     if (ImGui::IsItemActive()) {
         const ImVec2 dlt = ImGui::GetIO().MouseDelta;
         if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -496,9 +496,16 @@ void EngineView3D(const EngineParams& p, const float phases[kMaxCyl], float cran
     }
     if (ImGui::IsItemHovered()) {
         const float wh = ImGui::GetIO().MouseWheel;
-        if (wh != 0) cam.zoom = clampv(cam.zoom * std::pow(1.12f, wh), 0.25f, 6.0f);
-        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) cam = ViewCam{};
+        if (wh != 0) cam.zoom = clampv(cam.zoom * std::pow(1.12f, wh), 0.25f, 8.0f);
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { const bool f = cam.flat; const float g = cam.glass; cam = ViewCam{}; cam.flat = f; cam.glass = g; }
     }
+}
+
+// the flat (2.5D) view: vector cutaways as layered slabs, drawn with ImGui
+static void EngineView3DFlat(const EngineParams& p, const float phases[kMaxCyl], float crankDeg, const EngineViewLive& live,
+                             ViewCam& cam, ImVec2 size) {
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    viewInput(cam, size);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(p0, ImVec2(p0.x + size.x, p0.y + size.y), kBg, 4);
     dl->PushClipRect(p0, ImVec2(p0.x + size.x, p0.y + size.y), true);
@@ -538,6 +545,117 @@ void EngineView3D(const EngineParams& p, const float phases[kMaxCyl], float cran
         c.scr = ImVec2(p0.x + size.x * 0.5f - c.f * (u0 + u1) * 0.5f + cam.panX,
                        p0.y + (size.y - ImGui::GetFontSize() * 1.5f) * 0.5f + c.f * (w0 + w1) * 0.5f + cam.panY);
         render(dl, sc, c);
+    }
+    dl->AddText(ImVec2(p0.x + 8, p0.y + size.y - ImGui::GetFontSize() - 6), rgba(0.45f, 0.45f, 0.5f),
+                "drag: rotate   right-drag: pan   wheel: zoom   double-click: reset");
+    dl->PopClipRect();
+}
+
+// ------------------------------------------------------------------ the GPU 3D view
+void EngineView3D(const EngineParams& p, const float phases[kMaxCyl], float crankDeg, const EngineViewLive& live,
+                  ViewCam& cam, ImVec2 size) {
+    if (cam.flat || !gpu::ready()) { EngineView3DFlat(p, phases, crankDeg, live, cam, size); return; }
+    static EngineModel model;
+    buildEngineModel(p, phases, crankDeg, live, cam.glass, model);
+    if (model.items.empty() || !(model.hi.x > model.lo.x)) { EngineView3DFlat(p, phases, crankDeg, live, cam, size); return; }
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    viewInput(cam, size);
+    const int w = std::max(8, (int)size.x), h = std::max(8, (int)size.y);
+    // camera: orbit around the model's centre, far enough to see all of it
+
+    const m3::V3 c = (model.lo + model.hi) * 0.5f;
+    const float rad = 0.5f * m3::len(model.hi - model.lo);
+    const float fov = 30.0f * (float)kDeg;
+    const float aspect = (float)w / (float)h;
+    const float yaw = cam.yaw * (float)kDeg, pitch = cam.pitch * (float)kDeg;
+    const m3::V3 dir = m3::v3(std::cos(pitch) * std::sin(yaw), std::sin(pitch), -std::cos(pitch) * std::cos(yaw));
+    // fit: look from a distance that surely shows everything, measure where the parts' corners land on screen, then
+    // centre on them and move in until they fill ~88 % of the view (twice: the second pass corrects the perspective).
+    // Eased over ~0.25 s so moving parts and engine changes do not make the view jump.
+    const float t = std::tan(0.5f * fov);
+    float D0 = rad / std::sin(0.5f * fov * std::min(1.0f, aspect));
+    m3::V3 tc = c;
+    std::vector<m3::V3> box2;
+    const std::vector<m3::V3>& pts = model.hull.empty() ? (box2 = {model.lo, model.hi}) : model.hull;
+    for (int pass = 0; pass < 2; ++pass) {
+        const m3::V3 e0 = tc + dir * D0;
+        const m3::M4 v0 = m3::lookAt(e0, tc, m3::v3(0, 1, 0));
+        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+        for (const m3::V3& q0 : pts) {
+            const m3::V3 q = m3::xform(v0, q0);
+            const float zc = std::max(1e-3f, -q.z);
+            const float sx = q.x / (zc * t * aspect), sy = q.y / (zc * t);
+            x0 = std::min(x0, sx); x1 = std::max(x1, sx); y0 = std::min(y0, sy); y1 = std::max(y1, sy);
+        }
+        const m3::V3 fwd = m3::norm(tc - e0), right = m3::norm(m3::cross(fwd, m3::v3(0, 1, 0))), up = m3::cross(right, fwd);
+        tc = tc + right * (0.5f * (x0 + x1) * D0 * t * aspect) + up * (0.5f * (y0 + y1) * D0 * t);
+        const float ext = std::max(0.5f * (x1 - x0), 0.5f * (y1 - y0));
+        if (ext > 1e-3f) D0 *= std::clamp(ext / 0.88f, 0.2f, 2.0f);
+    }
+    static m3::V3 sTarget;
+    static float sD = -1;
+    {
+        const float k = sD < 0 ? 1.0f : 1.0f - std::exp(-ImGui::GetIO().DeltaTime / 0.25f);
+        if (sD < 0) { sTarget = tc; sD = D0; }
+        sTarget = sTarget + (tc - sTarget) * k;
+        sD += (D0 - sD) * k;
+    }
+    const float D = sD / cam.zoom;
+    m3::V3 target = sTarget, eye = sTarget + dir * D;
+    {   // pan: pixels -> world in the view plane
+        const m3::V3 fwd = m3::norm(target - eye), right = m3::norm(m3::cross(fwd, m3::v3(0, 1, 0))), up = m3::cross(right, fwd);
+        const float perPx = 2.0f * D * t / (float)h;
+        const m3::V3 shift = right * (-cam.panX * perPx) + up * (cam.panY * perPx);
+        target = target + shift; eye = eye + shift;
+    }
+    const m3::M4 view = m3::lookAt(eye, target, m3::v3(0, 1, 0));
+    const float dc = m3::len(eye - c);
+    const m3::M4 proj = m3::perspective(fov, aspect, std::max(1.0f, dc - rad * 1.3f), dc + rad * 1.5f);
+    const float bg[3] = {0.065f, 0.067f, 0.075f};   // the app's window background
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (gpu::begin(w, h, bg, view, proj, eye)) {
+        for (const ModelItem& it : model.items) gpu::draw(it.mesh, it.world, it.mat);
+        for (const ModelGlow& g : model.glows) gpu::glow(g.p, g.size, g.r, g.g, g.b, g.a);
+        gpu::end();
+        dl->AddImage((ImTextureID)gpu::texture(), p0, ImVec2(p0.x + w, p0.y + h));
+    }
+    dl->PushClipRect(p0, ImVec2(p0.x + size.x, p0.y + size.y), true);
+    // labels (cylinder numbers), projected
+    const m3::M4 vp = proj * view;
+    auto toScreen = [&](m3::V3 q, ImVec2& s) {
+        const float x = vp.at(0, 0) * q.x + vp.at(0, 1) * q.y + vp.at(0, 2) * q.z + vp.at(0, 3);
+        const float y = vp.at(1, 0) * q.x + vp.at(1, 1) * q.y + vp.at(1, 2) * q.z + vp.at(1, 3);
+        const float ww = vp.at(3, 0) * q.x + vp.at(3, 1) * q.y + vp.at(3, 2) * q.z + vp.at(3, 3);
+        if (ww <= 1e-4f) return false;
+        s = ImVec2(p0.x + (x / ww * 0.5f + 0.5f) * w, p0.y + (1.0f - (y / ww * 0.5f + 0.5f)) * h);
+        return true;
+    };
+    for (const ModelLabel& lb : model.labels) {
+        ImVec2 s;
+        if (!toScreen(lb.p, s)) continue;
+        const ImVec2 ts = ImGui::CalcTextSize(lb.text.c_str());
+        dl->AddText(ImVec2(s.x - ts.x * 0.5f, s.y - ts.y * 0.5f), lb.accent ? rgba(1.0f, 0.62f, 0.25f) : rgba(0.62f, 0.63f, 0.68f), lb.text.c_str());
+    }
+    // firing order along the bottom, the cylinder that fires now in the app's orange
+    if (!isRotary(p)) {
+        const int n = clampv(p.cylinders, 1, kMaxCyl);
+        const double cycle = isTwoStroke(p) ? 360.0 : 720.0;
+        int firing = -1; double best = 1e9;
+        for (int i = 0; i < n; ++i) {
+            const double since = wrapPos(wrapPos(crankDeg - phases[i], cycle) + live.advance, cycle);
+            if (since < best) { best = since; firing = i; }
+        }
+        const float slot = ImGui::GetFontSize() * 2.4f, y = p0.y + size.y - ImGui::GetFontSize() * 3.0f;
+        float x = p0.x + size.x * 0.5f - slot * n * 0.5f;
+        for (int k = 0; k < n; ++k, x += slot) {
+            const int cylIdx = clampv((int)p.firingOrder[k], 0, n - 1);
+            const bool on = cylIdx == firing && best < cycle / n;
+            const ImU32 col = on ? rgba(1.0f, 0.62f, 0.25f) : rgba(0.50f, 0.51f, 0.56f);
+            char b[8]; std::snprintf(b, sizeof(b), "%d", cylIdx + 1);
+            const ImVec2 ts = ImGui::CalcTextSize(b);
+            dl->AddText(ImVec2(x + slot * 0.5f - ts.x * 0.5f, y), col, b);
+            dl->AddRectFilled(ImVec2(x + slot * 0.15f, y + ts.y + 3), ImVec2(x + slot * 0.85f, y + ts.y + 5), col);
+        }
     }
     dl->AddText(ImVec2(p0.x + 8, p0.y + size.y - ImGui::GetFontSize() - 6), rgba(0.45f, 0.45f, 0.5f),
                 "drag: rotate   right-drag: pan   wheel: zoom   double-click: reset");

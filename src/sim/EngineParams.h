@@ -28,6 +28,10 @@ enum class EngineType : int32_t { Piston = 0, Rotary = 1, TwoStroke = 2 };   // 
 enum class Induction : int32_t { Natural = 0, Turbo = 1, Supercharger = 2 };
 enum class Supercharger : int32_t { Roots = 0, TwinScrew = 1, Centrifugal = 2 };
 enum class TransMode : int32_t { Manual = 0, ManualAutoClutch = 1, Automatic = 2 };
+// how the engine is built (the engine view draws it; the simulation does not use these yet)
+enum class CamLayout : int32_t { DOHC = 0, SOHC = 1, OHV = 2 };   // OHV: one cam in the block, pushrods and rockers
+enum class CamDrive : int32_t { Belt = 0, Chain = 1, Gears = 2 };
+enum class Cooling : int32_t { Liquid = 0, Air = 1 };              // Air: finned cylinders and heads
 constexpr int kMaxGears = 8;
 
 struct EngineParams {
@@ -54,6 +58,9 @@ struct EngineParams {
     float exhaustCenterline;  // deg BTDC (overlap TDC)
     float intakeCamAdvance, exhaustCamAdvance; // deg (+ = earlier)
     float valveLash_mm;
+    CamLayout camLayout;      // valvetrain / timing drive / cooling hardware: drawn by the engine view only (for now)
+    CamDrive camDrive;
+    Cooling cooling;
     // two-stage cam switching (VTEC-style): a second, high-rpm profile the ECU locks the rockers onto
     int32_t vtec;
     float vtecInDuration, vtecInLift_mm, vtecExDuration, vtecExLift_mm;

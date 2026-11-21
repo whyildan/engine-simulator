@@ -211,6 +211,9 @@ void App::panelEngine() {
         if (equalPrimaries_) for (int i = 1; i < kMaxCyl; ++i) p_.primaryLen_mm[i] = p_.primaryLen_mm[0];
     }
     if (p_.layout == Layout::V) SliderF("Bank angle", &p_.bankAngle, 15, 135, "%.0f deg", "Visual + for your firing-phase design. Use the firing phases below for odd-fire engines.");
+    Combo("Cooling", &p_.cooling, "Liquid (water jacket)\0Air (finned cylinders)\0");
+    Help("How the cylinders are cooled. Drawn by the engine view (fins on an air-cooled engine); the\n"
+         "simulation's warm-up and temperatures do not use it yet.");
 
     ImGui::SeparatorText("Geometry");
     SliderF("Bore", &p_.bore_mm, 40, 140, "%.1f mm");
@@ -433,6 +436,11 @@ void App::panelValvetrain() {
     if (isRotary(p_)) { panelPorts(); return; }
     if (isTwoStroke(p_)) { panelTwoStroke(); return; }
     ImGui::PushItemWidth(-170);
+    ImGui::SeparatorText("Layout");
+    Combo("Camshafts", &p_.camLayout, "DOHC (two cams per head)\0SOHC (one cam per head)\0OHV (cam in the block, pushrods)\0");
+    Combo("Cam drive", &p_.camDrive, "Toothed belt\0Chain\0Gears\0");
+    Help("How the valves are worked and how the crank turns the cams. Drawn by the engine view; the\n"
+         "simulation does not use them yet (the cam profiles below set the valve motion).");
     ImGui::SeparatorText("Intake");
     SliderI("Intake valves / cyl", &p_.intakeValves, 1, 3);
     SliderF("Intake valve dia", &p_.intakeValveDia_mm, 15, 60, "%.1f mm");
@@ -1612,16 +1620,44 @@ void App::panelEngineView() {
     if (ImGui::SmallButton("3/4")) { engCam_.yaw = 38; engCam_.pitch = 18; engCam_.panX = engCam_.panY = 0; }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(140);
-    ImGui::SliderFloat("Cutaway depth", &engCam_.depth, 0.3f, 2.5f, "%.1f");
-    Help("Each cylinder / rotor is a flat cutaway in its own plane along the crankshaft. Drag to orbit the\n"
-         "view, right-drag to pan, wheel to zoom, double-click to reset. Cutaway depth sets how thick the\n"
-         "layered parts are.");
+    if (engCam_.flat) {
+        ImGui::SliderFloat("Cutaway depth", &engCam_.depth, 0.3f, 2.5f, "%.1f");
+        Help("Each cylinder / rotor is a flat cutaway in its own plane along the crankshaft. Drag to orbit the\n"
+             "view, right-drag to pan, wheel to zoom, double-click to reset. Cutaway depth sets how thick the\n"
+             "layered parts are.");
+    } else {
+        ImGui::SliderFloat("Glass", &engCam_.glass, 0.0f, 0.6f, "%.2f");
+        Help("How solid the see-through cylinders and heads look (0 = invisible). Drag to orbit the view,\n"
+             "right-drag to pan, wheel to zoom, double-click to reset. The model is built from the engine's own\n"
+             "dimensions: bore, stroke, rod, layout, valves, cams, induction and exhaust.");
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Flat view", &engCam_.flat);
+    Help("The older flat cutaway drawing (also used when the 3D renderer is not available).");
     float phases[kMaxCyl];
     computePhases(p_, phases);
     ui::EngineViewLive live;
     live.advance = tel_.running ? tel_.advance : p_.baseAdvance + p_.mechAdvance * 0.5f;
     live.vtecBlend = tel_.vtecEngaged;
     live.vtcAdvance = tel_.vtcAdvance;
+    if (isDiesel(p_) && tel_.running) live.advance = tel_.soi;   // start of injection, deg BTDC
+    live.time = (float)ImGui::GetTime();
+    live.shaftRpm = tel_.running ? tel_.shaftRpm : 0.0f;
+    live.boostBar = tel_.boostBar;
+    live.egtGas = tel_.running ? tel_.egtGas : 0.0f;
+    if (tel_.running && tel_.egtPerCyl)
+        for (int i = 0; i < kMaxCyl; ++i) live.egtC[i] = tel_.egtCylC[i];
+    live.glowPlugOn = tel_.glowOn;
+    live.egr = tel_.running ? tel_.egrPos : 0.0f;
+    {   // an afterfire pop flashes a flame at the tail pipe, fading over ~0.25 s
+        static int lastAf = 0;
+        static float flash = 0, lastT = 0;
+        const float now = live.time;
+        flash *= std::exp(-std::max(0.0f, now - lastT) / 0.08f);
+        lastT = now;
+        if (tel_.afterfires != lastAf) { if (tel_.afterfires > lastAf) flash = 1.0f; lastAf = tel_.afterfires; }
+        live.popFlash = flash;
+    }
     ImVec2 avail = ImGui::GetContentRegionAvail();
     EngineView3D(p_, phases, animAngle_, live, engCam_, ImVec2(avail.x, std::max(120.0f, avail.y)));
 }

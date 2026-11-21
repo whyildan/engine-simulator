@@ -1,5 +1,6 @@
 // EngineSim - Win32 + Direct3D 11 + Dear ImGui host.
 #include "ui/App.h"
+#include "ui/Gpu3D.h"
 #include "resource.h"
 #include "ecu/BaseMap.h"
 #include "ecu/CalibrationIO.h"
@@ -154,6 +155,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
     setStyle(dpi);
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_device, g_context);
+    es::ui::gpu::setDevice(g_device, g_context);   // the engine view's 3D renderer (falls back to the flat view)
 
     {
         {   // measured base maps are cached next to the executable
@@ -207,6 +209,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int) {
         }
     }
 
+    es::ui::gpu::shutdown();
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImPlot3D::DestroyContext();

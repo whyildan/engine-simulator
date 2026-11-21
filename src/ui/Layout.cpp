@@ -247,7 +247,7 @@ void App::workArea() {
         splitNext("##dash_right");
         if (ImGui::BeginTabBar("dashtabs")) {
             if (ImGui::BeginTabItem("Scope")) { panelScope(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Engine view")) { panelEngineView(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem("Engine view", nullptr, tabJump("engview"))) { panelEngineView(); ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         endSplit();

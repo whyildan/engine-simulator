@@ -1,0 +1,712 @@
+// Parametric 3D engine model (GPU engine view). Units: mm. World: crank axis along z, y up, x across.
+// Palette: the app's own (dark background, neutral steel / silver, the orange accent for heat and combustion, blue for
+// the fresh charge) - see the engine view plan in the project notes.
+#include "ui/EngineModel.h"
+#include "ui/EngineModelParts.h"
+#include "ui/EngineView3D.h"
+#include "sim/Exhaust.h"
+#include "core/MathUtil.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <functional>
+#include <unordered_map>
+
+namespace es::ui {
+
+using namespace m3;
+using gpu::Material;
+using mesh::Data;
+using mesh::Poly;
+using mesh::Prof;
+
+namespace {
+
+constexpr float kPiF = 3.14159265358979f;
+constexpr float kDegF = kPiF / 180.0f;
+
+} // namespace
+
+// ------------------------------------------------------------------ shared pieces (EngineModelParts.h)
+namespace model {
+
+namespace { std::unordered_map<std::string, Cached> g_cache; }
+
+const Cached& meshOf(const std::string& key, const std::function<Data()>& make) {
+    auto it = g_cache.find(key);
+    if (it != g_cache.end()) return it->second;
+    const Data d = make();
+    Cached c;
+    c.id = gpu::meshCreate(d);
+    c.lo = v3(1e9f, 1e9f, 1e9f); c.hi = v3(-1e9f, -1e9f, -1e9f);
+    for (const auto& q : d.v) {
+        c.lo = v3(std::min(c.lo.x, q.px), std::min(c.lo.y, q.py), std::min(c.lo.z, q.pz));
+        c.hi = v3(std::max(c.hi.x, q.px), std::max(c.hi.y, q.py), std::max(c.hi.z, q.pz));
+    }
+    return g_cache.emplace(key, c).first->second;
+}
+void cacheTrim() { if (g_cache.size() > 600 || gpu::meshCount() > 800) { gpu::meshClear(); g_cache.clear(); } }
+
+std::string key(const char* name, std::initializer_list<float> v) {
+    std::string s = name;
+    char b[24];
+    for (float x : v) { std::snprintf(b, sizeof(b), "|%.2f", x); s += b; }
+    return s;
+}
+
+void Scene::put(const Cached& c, const M4& w, const Material& m) {
+    if (c.id < 0) return;
+    out->items.push_back({c.id, w, m});
+    for (int k = 0; k < 8; ++k) {
+        const V3 q = xform(w, v3(k & 1 ? c.hi.x : c.lo.x, k & 2 ? c.hi.y : c.lo.y, k & 4 ? c.hi.z : c.lo.z));
+        if (fit) out->hull.push_back(q);
+        out->lo = v3(std::min(out->lo.x, q.x), std::min(out->lo.y, q.y), std::min(out->lo.z, q.z));
+        out->hi = v3(std::max(out->hi.x, q.x), std::max(out->hi.y, q.y), std::max(out->hi.z, q.z));
+    }
+}
+
+Material mat(float r, float g, float b, float metal, float rough) { Material m; m.r = r; m.g = g; m.b = b; m.metal = metal; m.rough = rough; return m; }
+const Material kSteel = mat(0.60f, 0.61f, 0.64f, 0.90f, 0.32f);
+const Material kSilver = mat(0.80f, 0.81f, 0.84f, 0.85f, 0.24f);
+const Material kSteelDark = mat(0.30f, 0.31f, 0.34f, 0.70f, 0.45f);
+const Material kFrame = mat(0.22f, 0.23f, 0.25f, 0.55f, 0.55f);
+const Material kGold = mat(0.85f, 0.70f, 0.30f, 0.90f, 0.30f);
+const Material kRubber = mat(0.10f, 0.10f, 0.11f, 0.0f, 0.75f);
+const Material kCeramic = mat(0.88f, 0.88f, 0.86f, 0.0f, 0.35f);
+const Material kAlu = mat(0.74f, 0.75f, 0.78f, 0.80f, 0.38f);
+const Material kHotPipe = mat(0.44f, 0.45f, 0.47f, 0.80f, 0.38f);
+Material glassMat(float a, float r, float g, float b) { Material m = mat(r, g, b, 0.0f, 0.08f); m.a = a; m.glass = true; return m; }
+Material emissive(Material m, float r, float g, float b) { m.er = r; m.eg = g; m.eb = b; return m; }
+const float kAccent[3] = {1.0f, 0.62f, 0.25f};     // the app's orange
+const float kCharge[3] = {0.30f, 0.55f, 0.95f};    // fresh charge blue (the existing gas colours)
+
+namespace { uint32_t hash32(uint32_t x) { x ^= x >> 16; x *= 0x7feb352d; x ^= x >> 15; x *= 0x846ca68b; x ^= x >> 16; return x; } }
+float rnd(uint32_t a, uint32_t b) { return (hash32(a * 9781u + b * 6271u + 17u) & 0xffffff) / 16777216.0f; }
+
+std::vector<V3> spline(const std::vector<V3>& c, int per) {
+    std::vector<V3> out;
+    const int n = (int)c.size();
+    if (n < 2) return c;
+    for (int k = 0; k + 1 < n; ++k) {
+        const V3 p0 = c[std::max(0, k - 1)], p1 = c[k], p2 = c[k + 1], p3 = c[std::min(n - 1, k + 2)];
+        for (int j = 0; j < per; ++j) {
+            const float t = (float)j / per, t2 = t * t, t3 = t2 * t;
+            out.push_back((p1 * 2.0f + (p2 - p0) * t + (p0 * 2.0f - p1 * 5.0f + p2 * 4.0f - p3) * t2 + (p1 * 3.0f - p0 - p2 * 3.0f + p3) * t3) * 0.5f);
+        }
+    }
+    out.push_back(c.back());
+    return out;
+}
+
+} // namespace model
+
+namespace {
+using namespace model;
+
+Poly hull2(Poly p) {   // convex hull (monotone chain), counter-clockwise
+    std::sort(p.begin(), p.end());
+    if (p.size() < 3) return p;
+    Poly h(2 * p.size());
+    size_t k = 0;
+    auto cr = [](const std::pair<float, float>& o, const std::pair<float, float>& a, const std::pair<float, float>& b) {
+        return (a.first - o.first) * (b.second - o.second) - (a.second - o.second) * (b.first - o.first);
+    };
+    for (size_t i = 0; i < p.size(); ++i) { while (k >= 2 && cr(h[k - 2], h[k - 1], p[i]) <= 0) --k; h[k++] = p[i]; }
+    for (size_t i = p.size() - 1, t = k + 1; i > 0; --i) { while (k >= t && cr(h[k - 2], h[k - 1], p[i - 1]) <= 0) --k; h[k++] = p[i - 1]; }
+    h.resize(k - 1);
+    return h;
+}
+Poly circlesHull(std::initializer_list<std::tuple<float, float, float>> cs, int n = 28) {
+    Poly all;
+    for (const auto& c : cs) for (const auto& q : mesh::circleOutline(std::get<2>(c), n, std::get<0>(c), std::get<1>(c))) all.push_back(q);
+    return hull2(all);
+}
+
+
+double liftAt(double phi, double center, double dur, double lift) {
+    const double d = wrapSym(phi - center, 720.0), h = dur * 0.5;
+    if (std::fabs(d) >= h) return 0;
+    return lift * std::pow(0.5 * (1.0 + std::cos(kPi * d / h)), 0.75);
+}
+
+// gas colour by stroke (phi: cycle angle, 0 = firing TDC): rgb + alpha + how much it glows
+struct Gas { float r, g, b, a, burn; };
+Gas gasAt(double phi, double adv, double cycle) {
+    const double since = wrapPos(phi + adv, cycle);
+    const double burn = cycle > 800 ? 130.0 : 90.0;
+    if (since < burn) { const float t = (float)(1 - since / burn); return {kAccent[0], 0.45f + 0.30f * t, 0.12f, 0.35f + 0.45f * t, t}; }
+    const double q = cycle / 4;
+    if (phi < q) return {0.85f, 0.45f, 0.15f, 0.22f, 0.15f};          // late expansion
+    if (phi < 2 * q) return {0.45f, 0.38f, 0.33f, 0.28f, 0.0f};       // exhaust
+    if (phi < 3 * q) return {kCharge[0], kCharge[1], kCharge[2], 0.22f, 0.0f};   // intake
+    return {kCharge[0] * 1.05f, kCharge[1] * 1.05f, kCharge[2], 0.30f, 0.0f};    // compression
+}
+
+// two-stroke: burn, blowdown once the exhaust port opens, fresh charge from the transfers, compression
+Gas gasTwoStroke(double phi, double adv, double epo, double tpo) {
+    const double since = wrapPos(phi + adv, 360.0);
+    if (since < 75.0) { const float t = (float)(1 - since / 75.0); return {kAccent[0], 0.45f + 0.30f * t, 0.12f, 0.35f + 0.45f * t, t}; }
+    if (phi < epo) return {0.85f, 0.45f, 0.15f, 0.22f, 0.15f};
+    if (phi < tpo) return {0.45f, 0.38f, 0.33f, 0.28f, 0.0f};
+    if (phi < 360.0 - tpo) return {kCharge[0], kCharge[1], kCharge[2], 0.24f, 0.0f};
+    return {kCharge[0] * 1.05f, kCharge[1] * 1.05f, kCharge[2], 0.30f, 0.0f};
+}
+
+// ------------------------------------------------------------------ meshes
+Data pistonMesh(float B, bool bowl) {
+    const float R = 0.497f * B, pinOff = 0.30f * B, skirt = -0.34f * B;
+    Prof p = {{0, skirt + 0.06f * B}, {R * 0.80f, skirt + 0.04f * B}, {R * 0.97f, skirt}, {R * 0.985f, pinOff - 0.22f * B}};
+    // three ring grooves near the crown
+    for (int g = 2; g >= 0; --g) {
+        const float y = pinOff - 0.055f * B - g * 0.05f * B;
+        p.push_back({R, y - 0.025f * B}); p.push_back({R * 0.955f, y - 0.022f * B}); p.push_back({R * 0.955f, y}); p.push_back({R, y + 0.003f * B});
+    }
+    p.push_back({R, pinOff - 0.01f * B});
+    if (bowl) {   // diesel: flat crown with a re-entrant combustion bowl
+        p.push_back({R * 0.98f, pinOff}); p.push_back({0.34f * B, pinOff}); p.push_back({0.31f * B, pinOff - 0.05f * B});
+        p.push_back({0.30f * B, pinOff - 0.13f * B}); p.push_back({0.20f * B, pinOff - 0.19f * B}); p.push_back({0.07f * B, pinOff - 0.12f * B});
+        p.push_back({0, pinOff - 0.10f * B});
+    } else {      // spark ignition: a shallow dome
+        p.push_back({R * 0.96f, pinOff}); p.push_back({0.32f * B, pinOff + 0.025f * B}); p.push_back({0, pinOff + 0.035f * B});
+    }
+    return mesh::lathe(p, 48);
+}
+
+Data linerMesh(float B, float y0, float y1, float wall) {
+    const float ri = 0.5f * B, ro = ri + wall;
+    return mesh::lathe({{ri, y0}, {ro, y0}, {ro, y1}, {ri, y1}, {ri, y0}}, 48);
+}
+
+Data rodMesh(float B, float l) {
+    // I-section look: a slimmer web between two flanged ends
+    Data d = mesh::extrude(circlesHull({{0, 0, 0.29f * B}, {0, l, 0.155f * B}}), -0.055f * B, 0.055f * B);
+    mesh::append(d, mesh::extrude(circlesHull({{0, 0, 0.27f * B}, {0, l, 0.14f * B}}), -0.10f * B, 0.10f * B), M4{});
+    // big end cap bolts
+    for (int s = -1; s <= 1; s += 2) mesh::append(d, mesh::box(0.035f * B, 0.11f * B, 0.035f * B), translate(v3(s * 0.23f * B, -0.02f * B, 0.06f * B)));
+    return d;
+}
+
+Data throwMesh(float B, float r, float web) {
+    const float pinR = 0.20f * B;
+    Poly fan;
+    for (int k = 0; k <= 16; ++k) { const float a = kPiF * (1.5f + (-0.40f + 0.80f * k / 16.0f)); fan.push_back({1.30f * r * std::cos(a), 1.30f * r * std::sin(a)}); }
+    for (const auto& q : mesh::circleOutline(0.36f * B, 24, 0, r)) fan.push_back(q);
+    for (const auto& q : mesh::circleOutline(0.30f * B, 24)) fan.push_back(q);
+    const Poly webOut = hull2(fan);
+    const float zi = 0.115f * B;
+    Data d = mesh::extrude(webOut, zi, zi + web);
+    mesh::append(d, mesh::extrude(webOut, -zi - web, -zi), M4{});
+    // crank pin between the webs
+    mesh::append(d, mesh::extrude(mesh::circleOutline(pinR, 28, 0, r), -zi, zi), M4{});
+    return d;
+}
+
+Data valveMesh(float B, float dia) {
+    const float R = std::min(0.5f * dia, 0.23f * B), stem = 0.032f * B, L = 0.66f * B;
+    return mesh::lathe({{0, 0}, {R, 0}, {R, 0.018f * B}, {R * 0.55f, 0.05f * B}, {stem, 0.16f * B}, {stem, L}, {0, L}}, 32);
+}
+
+Data springMesh(float B) {   // unit height (scaled along y with the valve), wire in mm
+    std::vector<V3> path;
+    std::vector<float> rad;
+    const float rc = 0.085f * B, turns = 6.5f;
+    const int n = 220;
+    for (int k = 0; k <= n; ++k) { const float t = (float)k / n, a = t * turns * 2 * kPiF; path.push_back(v3(rc * std::cos(a), t, rc * std::sin(a))); rad.push_back(0.014f * B); }
+    return mesh::tube(path, rad, 8);
+}
+
+Data lobeMesh(float Rb, float rn, float nd, float w) { return mesh::extrude(circlesHull({{0, 0, Rb}, {nd, 0, rn}}, 32), -0.5f * w, 0.5f * w); }
+
+Data rodZ(float r, float z0, float z1, int seg = 24) { return mesh::extrude(mesh::circleOutline(r, seg), z0, z1); }
+
+Data gearMesh(float r, float teethH, int teeth, float w, float hubR) {
+    Data d = mesh::extrude(mesh::gearOutline(r - teethH, r, teeth), -0.5f * w, 0.5f * w);
+    mesh::append(d, mesh::extrude(mesh::circleOutline(hubR, 24), -0.9f * w, 0.9f * w), M4{});
+    return d;
+}
+
+Data sparkPlugMesh(float B) {
+    const float s = B / 86.0f;   // a real plug is ~14 mm thread: scale gently with the bore
+    return mesh::lathe({{0, -2 * s}, {1.2f * s, -2 * s}, {1.2f * s, 0}, {7 * s, 0}, {7 * s, 19 * s}, {10.4f * s, 19 * s}, {10.4f * s, 27 * s},
+                        {5.5f * s, 30 * s}, {5.0f * s, 52 * s}, {2.5f * s, 56 * s}, {0, 56 * s}}, 24);
+}
+
+Data injectorMesh(float B) {
+    const float s = B / 80.0f;
+    return mesh::lathe({{0, -1 * s}, {2.5f * s, -1 * s}, {3 * s, 6 * s}, {6 * s, 8 * s}, {6 * s, 34 * s}, {9 * s, 38 * s}, {9 * s, 60 * s}, {4 * s, 64 * s}, {0, 64 * s}}, 24);
+}
+
+// rocker arm in its pivot frame: cam / pushrod end vC, valve end vT, a hub on the pivot
+Data rockerMesh(V3 vC, V3 vT, float B) {
+    Data d = mesh::tube({vC, v3(0, 0.02f * B, 0), vT}, {0.026f * B, 0.036f * B, 0.026f * B}, 10);
+    mesh::append(d, rodZ(0.042f * B, -0.045f * B, 0.045f * B, 16), M4{});
+    mesh::append(d, mesh::box(0.03f * B, 0.015f * B, 0.03f * B), translate(vT - v3(0, 0.01f * B, 0)));
+    return d;
+}
+
+// cooling fins: thin rings about +y from y0 to y1, `pitchY` apart
+Data finsMesh(float ri, float ro, float y0, float y1, float pitchY, float t) {
+    Data d;
+    for (float y = y0; y <= y1; y += pitchY) mesh::append(d, mesh::lathe({{ri, y}, {ro, y}, {ro, y + t}, {ri, y + t}, {ri, y}}, 40), M4{});
+    return d;
+}
+
+// closed path around a set of pulleys (circle centre x, y, radius): the belt / chain line
+std::vector<V3> beltPath(const std::vector<std::tuple<float, float, float>>& pulleys, float z) {
+    Poly all;
+    for (const auto& c : pulleys) for (const auto& q : mesh::circleOutline(std::get<2>(c), 40, std::get<0>(c), std::get<1>(c))) all.push_back(q);
+    const Poly h = hull2(all);
+    std::vector<V3> out;
+    for (const auto& q : h) out.push_back(v3(q.first, q.second, z));
+    return out;
+}
+
+// ------------------------------------------------------------------ piston engines
+struct CylGeo { float z, axDeg; int bank; };
+
+void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMaxCyl], float crankDeg, const EngineViewLive& live, float glassA,
+                       EngineBits& eb) {
+    const int n = clampv(p.cylinders, 1, kMaxCyl);
+    const bool boxer = p.layout == Layout::Boxer, vee = p.layout == Layout::V;
+    const bool diesel = isDiesel(p), two = isTwoStroke(p);
+    const double cycle = two ? 360.0 : 720.0;
+    const float r = p.stroke_mm * 0.5f, l = std::max(p.rod_mm, r * 1.2f), B = p.bore_mm;
+    const float pinOff = 0.30f * B;
+    const float deck = r + l + pinOff + 0.03f * B;
+    const float wall = 0.07f * B;
+    // the liner reaches down past the skirt at BDC (the crank webs swing ~1.3 r: they stay clear of it)
+    const float linerBottom = std::max(1.32f * r + 0.05f * B, l - r - 0.36f * B);
+    int bankCount[2] = {0, 0}, column[kMaxCyl];
+    for (int i = 0; i < n; ++i) { const int b = p.layout == Layout::Inline ? 0 : clampv(p.bank[i], 0, 1); column[i] = bankCount[b]++; }
+    const int cols = std::max(1, std::max(bankCount[0], bankCount[1]));
+    const float pitch = B * 1.32f, bankOff = (vee || boxer) ? B * 0.46f : 0.0f;
+    const float zOf0 = -(cols - 1) * pitch * 0.5f;
+    const float zFront = zOf0 - pitch * 0.72f - bankOff * 0.5f, zRear = -zOf0 + pitch * 0.72f + bankOff * 0.5f;
+    const float vtec = p.vtec ? clampv(live.vtecBlend, 0.0f, 1.0f) : 0.0f;
+    const double inC = 360.0 + p.intakeCenterline - p.intakeCamAdvance - (p.vtc ? live.vtcAdvance : 0.0f);
+    const double exC = 360.0 - p.exhaustCenterline - p.exhaustCamAdvance;
+    const float crankRad = -crankDeg * kDegF;
+    eb.zFront = zFront; eb.zRear = zRear; eb.B = B; eb.r = r; eb.vee = vee; eb.boxer = boxer;
+    eb.crankFront = v3(0, 0, zFront - 0.25f * B);
+
+    std::vector<CylGeo> cyl(n);
+    for (int i = 0; i < n; ++i) {
+        const int b = p.layout == Layout::Inline ? 0 : clampv(p.bank[i], 0, 1);
+        float ax = 0;
+        if (vee) ax = (b == 0 ? -1.0f : 1.0f) * p.bankAngle * 0.5f;
+        if (boxer) ax = b == 0 ? -90.0f : 90.0f;
+        cyl[i] = {zOf0 + column[i] * pitch + (b == 0 ? -0.5f : 0.5f) * bankOff, ax, b};
+    }
+
+    // ---- shared meshes
+    const Cached& mPiston = meshOf(key("piston", {B, diesel ? 1.0f : 0.0f}), [&] { return pistonMesh(B, diesel); });
+    const Cached& mRod = meshOf(key("rod", {B, l}), [&] { return rodMesh(B, l); });
+    const Cached& mThrow = meshOf(key("throw", {B, r}), [&] { return throwMesh(B, r, 0.15f * B); });
+    const Cached& mLiner = meshOf(key("liner", {B, linerBottom, deck, wall}), [&] { return linerMesh(B, linerBottom, deck, wall); });
+    const Cached& mGas = meshOf(key("gas", {B}), [&] { return mesh::lathe({{0, 0}, {0.492f * B, 0}, {0.492f * B, 1}, {0, 1}}, 40); });
+    const Cached& mPin = meshOf(key("pin", {B}), [&] { return rodZ(0.11f * B, -0.21f * B, 0.21f * B); });
+    const Cached& mBigEnd = meshOf(key("bigend", {B}), [&] { return mesh::lathe({{0.205f * B, -0.1f * B}, {0.215f * B, -0.1f * B}, {0.215f * B, 0.1f * B}, {0.205f * B, 0.1f * B}}, 28); });
+
+    // ---- crankshaft: main journals between the throws, gold main bearings, front sprocket, rear flywheel
+    {
+        const Cached& mMain = meshOf(key("mainjournal", {B, zFront, zRear}), [&] { return rodZ(0.25f * B, zFront - 0.2f * B, zRear + 0.2f * B, 32); });
+        sc.put(mMain, rotZ(crankRad), kSteel);
+        const Cached& mBear = meshOf(key("mainbear", {B}), [&] { return mesh::extrude(mesh::circleOutline(0.30f * B, 28), -0.06f * B, 0.06f * B); });
+        for (int c = 0; c <= cols; ++c) {
+            const float z = zOf0 + (c - 0.5f) * pitch;
+            sc.put(mBear, translate(v3(0, 0, z)), kGold);
+        }
+    }
+    // ---- cradle frame under the crank (the app's dark steel, no block in the way)
+    {
+        const float half = (vee || boxer) ? 1.15f * B : 0.75f * B, yb = -1.45f * r - 0.25f * B;
+        const float len = zRear - zFront + 0.6f * B;
+        const Cached& mRail = meshOf(key("rail", {len, B}), [&] { return mesh::box(0.06f * B, 0.06f * B, 0.5f * len); });
+        const Cached& mCross = meshOf(key("cross", {half, B}), [&] { return mesh::box(half, 0.05f * B, 0.05f * B); });
+        const Cached& mPost = meshOf(key("post", {r, B}), [&] { return mesh::box(0.05f * B, 0.5f * (-yb), 0.05f * B); });
+        for (int s = -1; s <= 1; s += 2) sc.put(mRail, translate(v3(s * half, yb, 0.5f * (zFront + zRear))), kFrame);
+        for (int c = 0; c <= cols; ++c) {
+            const float z = zOf0 + (c - 0.5f) * pitch;
+            sc.put(mCross, translate(v3(0, yb, z)), kFrame);
+            sc.put(mPost, translate(v3(0, 0.5f * yb, z)), kFrame);
+        }
+    }
+
+    // ---- per cylinder
+    struct CamLine { float x, y, axDeg, sgn; int bank; bool shaft; };   // camshaft (or rocker shaft) lines in the bank plane
+    const bool ohv = p.camLayout == CamLayout::OHV && !two, sohc = p.camLayout == CamLayout::SOHC && !two, dohc = !ohv && !sohc;
+    const bool air = p.cooling == Cooling::Air;
+    const Material finM = glassMat(std::min(0.85f, 0.22f + glassA * 1.6f), 0.74f, 0.76f, 0.80f);
+    // OHV: one cam in the block - in the V's valley above the crank, under the crank of a boxer, beside an inline's
+    V3 ohvCam = v3(0, 1.30f * r + 0.30f * B, 0), ohvCamXY = v3(0, 0, 0);
+    if (boxer) ohvCam.y = -(1.30f * r + 0.30f * B);
+    bool ohvCamSet = false;
+    std::vector<CamLine> camLines;
+    float valveTop = deck;
+    for (int i = 0; i < n; ++i) {
+        const CylGeo& cg = cyl[i];
+        const M4 cf = translate(v3(0, 0, cg.z)) * rotZ(-cg.axDeg * kDegF);   // cylinder frame: +y up the bore
+        const double phi = wrapPos(crankDeg - phases[i], cycle);
+        const float th = (float)(wrapPos(phi, 360.0) * kDeg);
+        const float sn = std::sin(th), cs = std::cos(th);
+        const float dist = r * cs + std::sqrt(std::max(1.0f, l * l - r * r * sn * sn));
+        const V3 pin = v3(r * sn, r * cs, 0);
+        // crank throw (rotates with the crank)
+        sc.put(mThrow, cf * rotZ(-th), kSteel);
+        // rod: big end on the pin, small end on the piston pin
+        const V3 sm = v3(0, dist, 0), dv = sm - pin;
+        const M4 rodW = cf * translate(pin) * rotZ(std::atan2(-dv.x, dv.y));
+        sc.put(mRod, rodW, kSteel);
+        sc.put(mBigEnd, cf * translate(pin) * rotX(kPiF * 0.5f), kGold);
+        // piston and pin
+        sc.put(mPiston, cf * translate(sm), kSilver);
+        sc.put(mPin, cf * translate(sm), kSteelDark);
+        // liner (glass) and the gas column above the crown
+        sc.put(mLiner, cf, glassMat(glassA * 0.9f));
+        if (air) {   // air cooling: fins round the barrel (and the two-stroke's head dome)
+            const float fb = std::max(linerBottom + 0.15f * B, deck - 1.05f * B);
+            const Cached& mFins = meshOf(key("barrelfins", {B, fb, deck}), [&] { return finsMesh(0.5f * B + wall, 0.5f * B + wall + 0.27f * B, fb, deck - 0.05f * B, 0.085f * B, 0.022f * B); });
+            sc.put(mFins, cf, finM);
+            if (two) {
+                const Cached& mHf = meshOf(key("2theadfins", {B, deck}), [&] { return finsMesh(0.25f * B, 0.5f * B + wall + 0.30f * B, deck + 0.02f * B, deck + 0.26f * B, 0.06f * B, 0.02f * B); });
+                sc.put(mHf, cf, finM);
+            }
+        }
+        const float crownTop = dist + pinOff + (diesel ? 0.0f : 0.03f * B);
+        const Gas gas = two ? gasTwoStroke(phi, live.advance, p.tsExhaustOpen, p.tsTransferOpen) : gasAt(phi, live.advance, 720.0);
+        if (deck - crownTop > 0.5f) {
+            Material gm = mat(gas.r, gas.g, gas.b, 0.0f, 0.6f);
+            gm.a = gas.a; gm.er = gas.r * gas.burn * 0.9f; gm.eg = gas.g * gas.burn * 0.7f; gm.eb = gas.b * gas.burn * 0.4f;
+            sc.put(mGas, cf * translate(v3(0, crownTop, 0)) * scale(v3(1, deck - crownTop, 1)), gm);
+        }
+        // combustion: sparkles in the burning charge (the accent), a few charge dots on the intake stroke
+        const double since = wrapPos(phi + live.advance, cycle);
+        if (since < 110.0) {
+            const float k = 1.0f - (float)(since / 110.0);
+            const int nDots = 14;
+            for (int d = 0; d < nDots; ++d) {
+                const float a = rnd(i, d) * 2 * kPiF, rr = std::sqrt(rnd(i + 31, d)) * 0.45f * B;
+                const float y = crownTop + rnd(i + 57, d) * std::max(1.0f, deck - crownTop);
+                const V3 pw = xform(cf, v3(rr * std::cos(a), y, rr * std::sin(a)));
+                sc.glow(pw, 0.05f * B * (0.6f + 0.6f * rnd(i + 3, d)), kAccent[0], 0.55f, 0.18f, 0.55f * k);
+            }
+            sc.glow(xform(cf, v3(0, 0.5f * (crownTop + deck), 0)), 0.55f * B, kAccent[0], 0.45f, 0.12f, 0.35f * k);
+        } else if (two ? (phi >= p.tsTransferOpen && phi < 360.0 - p.tsTransferOpen) : (phi >= 360.0 && phi < 540.0)) {
+            for (int d = 0; d < 6; ++d) {
+                const float a = rnd(i + 91, d) * 2 * kPiF, rr = std::sqrt(rnd(i + 7, d)) * 0.42f * B;
+                const float y = crownTop + rnd(i + 13, d) * std::max(1.0f, deck - crownTop);
+                sc.glow(xform(cf, v3(rr * std::cos(a), y, rr * std::sin(a))), 0.035f * B, kCharge[0], kCharge[1], kCharge[2], 0.35f);
+            }
+        }
+
+        if (two) {
+            buildTwoStrokeCyl(sc, p, cf, phi, crankDeg, live, glassA, deck, crownTop, i);
+            sc.label(xform(cf, v3(0, deck + 0.95f * B, 0)), std::to_string(i + 1));
+            continue;
+        }
+        // ---- valvetrain: valves (intake one side, exhaust the other), springs, buckets, cam lobes. V / boxer: the
+        //      exhaust side faces out on both banks (bank 0 mirrored)
+        const float flip = ((vee || boxer) && cg.bank == 0) ? -1.0f : 1.0f;
+        struct Side { float sgn; int count; float dia; double lift, maxLift, dur, center; bool intake; };
+        double li = liftAt(phi, inC, p.intakeDuration, p.intakeLift_mm), le = liftAt(phi, exC, p.exhaustDuration, p.exhaustLift_mm);
+        if (vtec > 0) {
+            const double liHi = liftAt(phi, inC, p.vtecInDuration, p.vtecInLift_mm), leHi = liftAt(phi, exC, p.vtecExDuration, p.vtecExLift_mm);
+            li += vtec * (std::max(liHi, li) - li); le += vtec * (std::max(leHi, le) - le);
+        }
+        const Side sides[2] = {
+            {-flip, clampv((int)p.intakeValves, 1, 3), p.intakeValveDia_mm, li, p.intakeLift_mm + vtec * (p.vtecInLift_mm - p.intakeLift_mm),
+             p.intakeDuration + vtec * (p.vtecInDuration - p.intakeDuration), inC, true},
+            {flip, clampv((int)p.exhaustValves, 1, 3), p.exhaustValveDia_mm, le, p.exhaustLift_mm + vtec * (p.vtecExLift_mm - p.exhaustLift_mm),
+             p.exhaustDuration + vtec * (p.vtecExDuration - p.exhaustDuration), exC, false}};
+        const float stemL = 0.66f * B, bucketH = 0.075f * B, Rb = 0.12f * B, lifterH = 0.13f * B;
+        const float sIn = -flip;   // the intake side (OHV: the pushrods come up on it)
+        float cylTop = deck;
+        for (const Side& s : sides) {
+            // DOHC: splayed valves under their own cams; SOHC: one cam between them, rockers; OHV: nearly upright
+            // valves in a row, rockers worked by pushrods from the cam in the block
+            const float tilt = s.sgn * (ohv ? 4.0f : sohc ? 10.0f : 13.0f) * kDegF;
+            const V3 ax = v3(std::sin(tilt), std::cos(tilt), 0);   // up the valve, towards its cam / rocker
+            const float seatX = s.sgn * (ohv ? 0.17f : 0.23f) * B;
+            const Cached& mValve = meshOf(key("valve", {B, s.dia}), [&] { return valveMesh(B, s.dia); });
+            const Cached& mSpring = meshOf(key("spring", {B}), [&] { return springMesh(B); });
+            const Cached& mRet = meshOf(key("retainer", {B}), [&] { return mesh::lathe({{0.03f * B, 0}, {0.10f * B, 0.01f * B}, {0.10f * B, 0.025f * B}, {0.03f * B, 0.03f * B}}, 24); });
+            const float rn = Rb * (0.36f + 0.0011f * (float)s.dur);
+            const float lift = (float)s.lift;
+            const bool open = s.lift > 0.3;
+            const double rot = wrapSym(phi - s.center, 720.0) * 0.5 * kDeg;
+            const Material lobeM = open ? emissive(kSteel, 0.05f, 0.05f, 0.05f) : kSteel;
+            for (int k = 0; k < s.count; ++k) {
+                const float zoff = s.count == 1 ? 0.0f : (s.count == 2 ? (k ? 0.21f : -0.21f) * B : (k - 1) * 0.27f * B);
+                const V3 seat = v3(seatX, deck, zoff);
+                const V3 face = seat - ax * lift;
+                const M4 vf = cf * translate(face) * rotZ(-tilt);   // valve frame: +y up the stem
+                Material vm = kSteel;
+                if (open) vm = s.intake ? emissive(kSteel, kCharge[0] * 0.10f, kCharge[1] * 0.12f, kCharge[2] * 0.18f)
+                                        : emissive(kSteel, kAccent[0] * 0.18f, kAccent[1] * 0.10f, kAccent[2] * 0.04f);
+                sc.put(mValve, vf, vm);
+                // spring from its seat in the head to the retainer (moves with the valve)
+                const float sBot = 0.27f * B, sTop = stemL - 0.06f * B - lift;
+                sc.put(mSpring, cf * translate(seat + ax * sBot) * rotZ(-tilt) * scale(v3(1, std::max(1.0f, sTop - sBot), 1)), kSteelDark);
+                sc.put(mRet, vf * translate(v3(0, stemL - 0.06f * B, 0)), kSteel);
+                const V3 tip0 = seat + ax * stemL;   // the stem's tip with the valve shut
+                if (dohc) {
+                    // bucket on the stem, the lobe right above it: base circle on the bucket when shut, the nose
+                    // pushes it down to full lift
+                    const Cached& mBucket = meshOf(key("bucket", {B}), [&] { return mesh::lathe({{0, 0}, {0.085f * B, 0}, {0.085f * B, bucketH}, {0, bucketH}}, 28); });
+                    sc.put(mBucket, vf * translate(v3(0, stemL, 0)), kSilver);
+                    const float nd = Rb + (float)s.maxLift - rn;
+                    const Cached& mLobe = meshOf(key("lobe", {Rb, rn, nd, B}), [&] { return lobeMesh(Rb, rn, nd, 0.11f * B); });
+                    const V3 cc = seat + ax * (stemL + bucketH + Rb);
+                    sc.put(mLobe, cf * translate(cc) * rotZ(std::atan2(-ax.y, -ax.x) - (float)rot), lobeM);
+                    cylTop = std::max(cylTop, cc.y + Rb);
+                } else if (sohc) {
+                    // rocker: pivot on a shaft beside the cam; the cam lifts its inner end, the outer end pushes the valve
+                    const V3 P = v3(s.sgn * 0.17f * B, tip0.y + 0.10f * B, zoff);
+                    const V3 vT = v3(tip0.x, tip0.y, zoff) - P, vC = v3(s.sgn * 0.03f * B, tip0.y + 0.07f * B, zoff) - P;
+                    const Cached& mRock = meshOf(key("rockerS", {B, s.sgn, tilt}), [&] { return rockerMesh(vC, vT, B); });
+                    sc.put(mRock, cf * translate(P) * rotZ(-lift / vT.x), kSilver);
+                    const V3 contact = P + vC, cc = v3(0, contact.y - Rb - 0.025f * B, zoff);
+                    const float nd = Rb + (float)s.maxLift * std::fabs(vC.x / vT.x) - rn;
+                    const Cached& mLobe = meshOf(key("lobe", {Rb, rn, nd, B}), [&] { return lobeMesh(Rb, rn, nd, 0.09f * B); });
+                    const V3 dn = norm(contact - cc);
+                    sc.put(mLobe, cf * translate(cc) * rotZ(std::atan2(dn.y, dn.x) - (float)rot), lobeM);
+                    cylTop = std::max(cylTop, P.y + 0.08f * B);
+                    bool have = false;
+                    for (const CamLine& c : camLines) if (c.bank == cg.bank && c.sgn == 0) have = true;
+                    if (!have) camLines.push_back({0, cc.y, cg.axDeg, 0, cg.bank, false});
+                    have = false;
+                    for (const CamLine& c : camLines) if (c.bank == cg.bank && c.sgn == s.sgn && c.shaft) have = true;
+                    if (!have) camLines.push_back({P.x, P.y, cg.axDeg, s.sgn, cg.bank, true});
+                } else {
+                    // OHV: rocker on a stud; the pushrod end (intake side) goes up as the lifter rides the block cam's lobe
+                    const V3 T0 = v3(tip0.x, tip0.y, zoff);
+                    const V3 P = T0 + v3(sIn * 0.15f * B, 0.06f * B, 0);
+                    const V3 vT = T0 - P, vC = v3(sIn * 0.15f * B, -0.06f * B, 0);
+                    const Cached& mRock = meshOf(key("rockerO", {B, sIn}), [&] { return rockerMesh(vC, vT, B); });
+                    sc.put(mRock, cf * translate(P) * rotZ(-lift / vT.x), kSilver);
+                    const V3 topW = xform(cf, P + vC - v3(0, 0.02f * B, 0));
+                    V3 camW = ohvCam;
+                    if (!vee && !boxer) camW = xform(cf, v3(sIn * 0.72f * B, 1.30f * r + 0.30f * B, 0));
+                    camW.z = topW.z;
+                    const V3 dir = norm(topW - camW);
+                    const float Lp = std::max(0.2f * B, len(topW - camW) - Rb - lifterH);
+                    const Cached& mLifter = meshOf(key("lifter", {B}), [&] { return mesh::lathe({{0, 0}, {0.065f * B, 0}, {0.065f * B, lifterH}, {0, lifterH}}, 20); });
+                    sc.put(mLifter, alongY(camW + dir * (Rb + lift), dir), kSteelDark);
+                    const Cached& mPush = meshOf(key("pushrod", {B, Lp}), [&] { return mesh::tube({v3(0, 0, 0), v3(0, Lp, 0)}, {0.022f * B, 0.022f * B}, 10); });
+                    sc.put(mPush, alongY(camW + dir * (Rb + lifterH + lift), dir), kSteel);
+                    const float nd = Rb + (float)s.maxLift - rn;
+                    const Cached& mLobe = meshOf(key("lobe", {Rb, rn, nd, B}), [&] { return lobeMesh(Rb, rn, nd, 0.09f * B); });
+                    sc.put(mLobe, translate(camW) * rotZ(std::atan2(dir.y, dir.x) - (float)rot), lobeM);
+                    cylTop = std::max(cylTop, P.y + 0.08f * B);
+                    if (!ohvCamSet) { ohvCamSet = true; ohvCamXY = camW; }
+                }
+            }
+            if (dohc) {   // camshaft line for this side (one per bank, from the first cylinder of the bank)
+                const V3 cc = v3(seatX, deck, 0) + ax * (stemL + bucketH + Rb);
+                bool have = false;
+                for (const CamLine& c : camLines) if (c.bank == cg.bank && c.sgn == s.sgn) have = true;
+                if (!have) camLines.push_back({cc.x, cc.y, cg.axDeg, s.sgn, cg.bank, false});
+            }
+        }
+        valveTop = std::max(valveTop, cylTop);
+        if (air) {   // finned head round each cylinder's valvetrain, a glass rocker box on top
+            const float ht = cylTop + 0.06f * B;
+            const Cached& mHf = meshOf(key("headfins", {B, deck, ht}), [&] { return finsMesh(0.56f * B, 0.86f * B, deck + 0.04f * B, ht - 0.10f * B, 0.075f * B, 0.022f * B); });
+            sc.put(mHf, cf, finM);
+            const Cached& mBox = meshOf(key("rockerbox", {B, deck, ht}), [&] { return mesh::lathe({{0, deck}, {0.55f * B, deck}, {0.55f * B, ht}, {0.45f * B, ht + 0.06f * B}, {0, ht + 0.06f * B}}, 36); });
+            sc.put(mBox, cf, glassMat(glassA * 0.8f, 0.62f, 0.64f, 0.68f));
+        }
+        // where the manifolds meet the head (exhaust on the exhaust valves' side)
+        {
+            const V3 pe = xform(cf, v3(flip * 0.70f * B, deck + 0.22f * B, 0)), de = norm(xdir(cf, v3(flip, 0.15f, 0)));
+            const V3 pi = xform(cf, v3(-flip * 0.70f * B, deck + 0.26f * B, 0)), di = norm(xdir(cf, v3(-flip, 0.35f, 0)));
+            eb.ex.push_back({pe, de, i, cg.bank});
+            eb.in.push_back({pi, di, i, cg.bank});
+            // port stubs through the head wall
+            const Cached& mStubE = meshOf(key("stubE", {B}), [&] { return mesh::tube({v3(0, 0, 0), v3(0, 0.30f * B, 0)}, {0.13f * B, 0.15f * B}, 16); });
+            sc.put(mStubE, cf * translate(v3(flip * 0.42f * B, deck + 0.19f * B, 0)) * rotZ(-flip * 1.42f), kHotPipe);
+            const Cached& mStubI = meshOf(key("stubI", {B}), [&] { return mesh::tube({v3(0, 0, 0), v3(0, 0.30f * B, 0)}, {0.14f * B, 0.15f * B}, 16); });
+            sc.put(mStubI, cf * translate(v3(-flip * 0.42f * B, deck + 0.22f * B, 0)) * rotZ(flip * 1.25f), kAlu);
+        }
+        // spark plug (or injector + glow plug)
+        if (diesel) {
+            const Cached& mInj = meshOf(key("injector", {B}), [&] { return injectorMesh(B); });
+            sc.put(mInj, cf * translate(v3(0, deck - 0.02f * B, 0)), kSteelDark);
+            eb.injTop.push_back(xform(cf, v3(0, deck + 0.77f * B, 0)));
+            const Cached& mGlowPlug = meshOf(key("glowplug", {B}), [&] { return mesh::lathe({{0, 0}, {0.02f * B, 0}, {0.03f * B, 0.12f * B}, {0.06f * B, 0.14f * B}, {0.06f * B, 0.55f * B}, {0, 0.55f * B}}, 20); });
+            const float gt = live.glowPlugOn ? 1.0f : 0.0f;
+            sc.put(mGlowPlug, cf * translate(v3(0.12f * B, deck - 0.05f * B, 0.12f * B)) * rotZ(-0.35f), gt > 0 ? emissive(kSteelDark, 0.9f, 0.35f, 0.08f) : kSteelDark);
+            eb.glowTop.push_back(xform(cf * translate(v3(0.12f * B, deck - 0.05f * B, 0.12f * B)) * rotZ(-0.35f), v3(0, 0.55f * B, 0)));
+            if (gt > 0) sc.glow(xform(cf, v3(0.12f * B, deck - 0.05f * B, 0.12f * B)), 0.06f * B, kAccent[0], 0.5f, 0.15f, 0.9f);
+            // injection spray: a cone of droplets from the nozzle while the fuel goes in (start of injection
+            // ~ the advance, ~20 deg long)
+            const double sinceInj = wrapPos(phi + live.advance, 720.0);
+            if (sinceInj < 22.0) {
+                for (int j = 0; j < 6; ++j) {   // six nozzle holes
+                    const float a = j * kPiF / 3.0f;
+                    const V3 dir = norm(v3(std::cos(a) * 0.85f, -0.45f, std::sin(a) * 0.85f));
+                    for (int d = 1; d <= 6; ++d) {
+                        const float t = d / 6.0f * 0.33f * B * (float)(0.4 + sinceInj / 22.0);
+                        sc.glow(xform(cf, v3(0, deck - 0.03f * B, 0) + dir * t), 0.025f * B, 0.85f, 0.80f, 0.55f, 0.55f);
+                    }
+                }
+            }
+        } else {
+            const Cached& mPlug = meshOf(key("plug", {B}), [&] { return sparkPlugMesh(B); });
+            const M4 pf = cf * translate(v3(0, deck - 0.01f * B, 0));
+            sc.put(mPlug, pf, kCeramic);
+            const double sinceSpark = wrapPos(phi + live.advance, 720.0);
+            if (sinceSpark < 12.0) sc.glow(xform(cf, v3(0, deck - 0.04f * B, 0)), 0.16f * B, 1.0f, 0.92f, 0.60f, 1.0f - (float)(sinceSpark / 12.0));
+        }
+        // cylinder number over the head
+        sc.label(xform(cf, v3(0, valveTop + 0.35f * B, 0)), std::to_string(i + 1));
+    }
+
+    // ---- per bank: glass head (a liquid-cooled engine's: one box over the bank), camshafts / rocker shafts with gold
+    //      bearing caps, cam sprockets; the timing drive (belt, chain or gears) at the front
+    std::vector<std::tuple<float, float, float>> pulleys;   // (x, y, r) in the front plane
+    if (two) camLines.clear();
+    std::vector<std::pair<V3, float>> sprocketsAt;            // world centre, radius (drawn below)
+    const float crankSprR = 0.24f * B, camSprR = 2.0f * crankSprR;   // (2:1 - the cams turn at half crank speed)
+    pulleys.push_back({0, 0, crankSprR});
+    for (int b = 0; b < ((vee || boxer) ? 2 : 1) && !two; ++b) {
+        float ax = 0;
+        bool any = false;
+        for (int i = 0; i < n; ++i) if (cyl[i].bank == b) { ax = cyl[i].axDeg; any = true; break; }
+        if (!any) continue;
+        const M4 bf = rotZ(-ax * kDegF);   // bank plane rotation (about the crank axis)
+        float zb0 = 1e9f, zb1 = -1e9f;
+        for (int i = 0; i < n; ++i) if (cyl[i].bank == b) { zb0 = std::min(zb0, cyl[i].z); zb1 = std::max(zb1, cyl[i].z); }
+        if (!air) {   // head: a glass box over the valvetrain
+            const float hy0 = deck, hy1 = valveTop + 0.08f * B, hw = 0.68f * B;
+            const Cached& mHead = meshOf(key("head", {hw, hy1 - hy0, zb1 - zb0, B}), [&] {
+                Data d = mesh::extrude(mesh::roundedRect(hw, 0.5f * (hy1 - hy0), 0.06f * B), -(0.5f * (zb1 - zb0) + 0.62f * B), 0.5f * (zb1 - zb0) + 0.62f * B);
+                return d; });
+            sc.put(mHead, bf * translate(v3(0, 0.5f * (hy0 + hy1), 0.5f * (zb0 + zb1))), glassMat(glassA * 0.75f, 0.62f, 0.64f, 0.68f));
+        }
+        for (const CamLine& c : camLines) {
+            if (c.bank != b) continue;
+            const float z0 = zb0 - 0.75f * B, z1 = zb1 + 0.55f * B;
+            const M4 at = bf * translate(v3(c.x, c.y, 0));
+            if (c.shaft) {   // SOHC rocker shaft: stationary
+                const Cached& mRs = meshOf(key("rockershaft", {B, z0 + 0.3f * B, z1}), [&] { return rodZ(0.03f * B, z0 + 0.3f * B, z1, 12); });
+                sc.put(mRs, at, kSteelDark);
+                continue;
+            }
+            const Cached& mShaft = meshOf(key("camshaft", {B, z0, z1}), [&] { return rodZ(0.045f * B, z0, z1, 16); });
+            sc.put(mShaft, at * rotZ(crankRad * 0.5f), kSteel);
+            const Cached& mCap = meshOf(key("camcap", {B}), [&] { return mesh::box(0.07f * B, 0.06f * B, 0.05f * B); });
+            for (int i = 0; i < n; ++i) if (cyl[i].bank == b) sc.put(mCap, at * translate(v3(0, 0.02f * B, cyl[i].z + 0.5f * pitch * 0.85f)), kGold);
+            const V3 w = xform(bf, v3(c.x, c.y, 0));
+            pulleys.push_back({w.x, w.y, camSprR});
+            sprocketsAt.push_back({v3(w.x, w.y, zFront), camSprR});
+        }
+    }
+    if (ohv && ohvCamSet) {   // the block cam: one shaft along the engine
+        const Cached& mShaft = meshOf(key("blockcam", {B, zFront, zRear}), [&] { return rodZ(0.05f * B, zFront, zRear - 0.2f * B, 16); });
+        sc.put(mShaft, translate(v3(ohvCamXY.x, ohvCamXY.y, 0)) * rotZ(crankRad * 0.5f), kSteel);
+        pulleys.push_back({ohvCamXY.x, ohvCamXY.y, camSprR});
+        sprocketsAt.push_back({v3(ohvCamXY.x, ohvCamXY.y, zFront), camSprR});
+    }
+    // diesel: the distributor injection pump on the intake side, driven at cam speed by the same belt / chain
+    if (diesel && !two) {
+        const float sideX = (vee || boxer) ? 0.0f : -1.0f;   // inline: the intake side (-x)
+        const V3 pc = v3(sideX * 1.05f * B, (vee || boxer) ? valveTop + 0.4f * B : 0.52f * deck, zFront);
+        pulleys.push_back({pc.x, pc.y, camSprR * 0.85f});
+        sprocketsAt.push_back({pc, camSprR * 0.85f});
+        eb.pump = pc; eb.hasPump = true;
+    }
+    {
+        const CamDrive drive = two ? CamDrive::Belt : p.camDrive;
+        const bool gears = drive == CamDrive::Gears;
+        const Cached& mCrankSpr = meshOf(key("crankspr", {crankSprR, B}), [&] { return gearMesh(crankSprR, 0.04f * B, 20, 0.12f * B, 0.12f * B); });
+        if (!two) sc.put(mCrankSpr, translate(v3(0, 0, zFront)) * rotZ(crankRad), kSteel);
+        for (const auto& sp : sprocketsAt) {
+            const Cached& mCamSpr = meshOf(key("camspr", {sp.second, B}), [&] { return gearMesh(sp.second, 0.04f * B, (int)(sp.second / (0.012f * B)), 0.12f * B, 0.10f * B); });
+            sc.put(mCamSpr, translate(sp.first) * rotZ(crankRad * 0.5f * (gears ? -1.0f : 1.0f)), kSteel);
+        }
+        if (gears && !two) {
+            // gear train: idlers on the line from the crank gear to each cam gear, each turning the other way
+            for (const auto& sp : sprocketsAt) {
+                const V3 c1 = v3(sp.first.x, sp.first.y, 0);
+                const float d = len(c1), gap = d - crankSprR - sp.second;
+                if (gap < 0.03f * B) continue;
+                const int k = std::max(1, (int)std::lround(gap / (0.7f * B)));
+                const float ri = 0.5f * gap / k;
+                const V3 u = c1 * (1.0f / std::max(1e-3f, d));
+                const Cached& mIdl = meshOf(key("idler", {ri, B}), [&] { return gearMesh(ri, 0.04f * B, std::max(10, (int)(ri / (0.012f * B))), 0.12f * B, 0.06f * B); });
+                for (int j = 0; j < k; ++j) {
+                    const V3 c = u * (crankSprR + ri + 2.0f * ri * j);
+                    sc.put(mIdl, translate(v3(c.x, c.y, zFront)) * rotZ(crankRad * (crankSprR / ri) * (j % 2 == 0 ? -1.0f : 1.0f)), kSteel);
+                }
+            }
+        }
+        const std::vector<V3> path = beltPath(pulleys, zFront);
+        if (path.size() > 3 && !two && !gears) {
+            const bool chain = drive == CamDrive::Chain;
+            std::vector<float> rad(path.size(), chain ? 0.012f * B : 0.022f * B);
+            const Cached& mBelt = meshOf(key(chain ? "chain" : "belt", {B, (float)path.size(), path[0].x, path[0].y, path[1].x, (float)pulleys.size()}), [&] {
+                if (!chain) return mesh::tube(path, rad, 10, true, false);
+                Data d;   // a chain: two side plates' lines
+                for (int sd = -1; sd <= 1; sd += 2) {
+                    std::vector<V3> q = path;
+                    for (V3& v : q) v.z += sd * 0.03f * B;
+                    mesh::append(d, mesh::tube(q, rad, 6, true, false), M4{});
+                }
+                return d; });
+            sc.put(mBelt, M4{}, chain ? kSteelDark : kRubber);
+            // teeth (belt) or rollers (chain) along it, moving with the crank sprocket's surface speed
+            std::vector<float> acc(path.size() + 1, 0.0f);
+            for (size_t k = 0; k < path.size(); ++k) acc[k + 1] = acc[k] + len(path[(k + 1) % path.size()] - path[k]);
+            const float total = acc.back(), step = chain ? 0.07f * B : 0.10f * B;
+            const float shift = std::fmod(crankDeg * kDegF * crankSprR, step);
+            const Cached& mTooth = meshOf(key(chain ? "roller" : "tooth", {B}), [&] {
+                return chain ? rodZ(0.016f * B, -0.035f * B, 0.035f * B, 8) : mesh::box(0.018f * B, 0.018f * B, 0.05f * B); });
+            for (float sd = shift; sd < total; sd += step) {
+                size_t k = 0;
+                while (k + 1 < acc.size() && acc[k + 1] < sd) ++k;
+                const V3 a = path[k % path.size()], bpt = path[(k + 1) % path.size()];
+                const float t = (sd - acc[k]) / std::max(1e-6f, acc[k + 1] - acc[k]);
+                sc.put(mTooth, translate(lerp(a, bpt, t)), chain ? kSteel : kRubber);
+            }
+        }
+        // flywheel with its ring gear at the rear
+        const float fwR = std::max(1.45f * B, 2.2f * r);
+        const Cached& mFly = meshOf(key("flywheel", {fwR, B}), [&] {
+            Data d = mesh::extrude(mesh::gearOutline(fwR - 0.045f * B, fwR, 96), -0.07f * B, 0.07f * B);
+            mesh::append(d, mesh::extrude(mesh::circleOutline(0.30f * B, 24), -0.20f * B, 0.20f * B), M4{});
+            return d; });
+        sc.put(mFly, translate(v3(0, 0, zRear + 0.25f * B)) * rotZ(crankRad), kSteelDark);
+    }
+}
+
+} // namespace
+
+void buildEngineModel(const EngineParams& p, const float phases[kMaxCyl], float crankDeg, const EngineViewLive& live, float glassAlpha,
+                      EngineModel& out) {
+    using namespace model;
+    out.clear();
+    // shapes are cached per dimension: dragging a slider makes new ones - start over now and then (between frames,
+    // never while a frame holds references into the cache)
+    model::cacheTrim();
+    Scene sc{&out};
+    if (isRotary(p)) {
+        EngineBits eb;
+        V3 turbineIn = v3(0, 0, 0), throttleIn = v3(0, 0, 0), throttleDir = v3(0, 0, -1);
+        buildRotaryEngine(sc, p, phases, crankDeg, live, glassAlpha, p.induction == Induction::Turbo, eb, turbineIn, throttleIn, throttleDir);
+        if (isBoosted(p)) buildBoost(sc, p, eb, live, crankDeg, turbineIn, throttleIn, throttleDir);
+        return;
+    }
+    EngineBits eb;
+    buildPistonEngine(sc, p, phases, crankDeg, live, glassAlpha, eb);
+    if (isTwoStroke(p)) return;   // (its expansion chamber / intake are part of each cylinder)
+    V3 inletDir = v3(0, 0, -1);
+    const V3 throttleIn = buildIntake(sc, p, eb, inletDir);
+    V3 turbineIn = v3(0, 0, 0);
+    const bool turbo = p.induction == Induction::Turbo;
+    buildExhaust(sc, p, eb, live, turbo, turbineIn);
+    if (isDiesel(p)) buildDiesel(sc, p, eb, live);
+    if (isBoosted(p)) buildBoost(sc, p, eb, live, crankDeg, turbineIn, throttleIn, inletDir);
+}
+
+} // namespace es::ui

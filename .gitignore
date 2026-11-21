@@ -7,3 +7,4 @@ calibrations/
 .vs/
 build_p4/
 dashboard.cfg
+enginesim_layout.ini

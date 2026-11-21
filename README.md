@@ -124,8 +124,14 @@ A fixed header (ignition, START ENGINE, throttle, preset, RPM / MAP / AFR / timi
 warning lamps) and a 12-section navigation in the style of ECU software:
 
 1. **Engine Setup** — geometry, valvetrain / rotary ports, exhaust, vehicle, sound, components, and the
-   **engine view**: flat cutaways of every cylinder / rotor laid out along the crankshaft in a rotatable 3D
-   scene (drag to orbit, wheel to zoom; live valve lift, VTEC cam, spark and gas by stroke)
+   **engine view**: a GPU-rendered (Direct3D 11) 3D model built from the engine's own dimensions - pistons, rods,
+   crank, valvetrain (DOHC buckets, SOHC rockers or OHV pushrods from a block cam) and the timing belt, chain or
+   gear train inside glass liners and heads, cooling fins on air-cooled engines, intake and exhaust manifolds, turbo
+   (VGT) / centrifugal / Roots / twin-screw superchargers and intercooler, the diesel's injection pump, high-pressure
+   lines, glow plugs and EGR, the two-stroke's ports, transfers, reed and folded expansion chamber, and the rotary's
+   housings and rotors. Camshaft layout, cam drive and cooling are engine settings (drawn only, not simulated yet). Live: valve lift, VTEC cam, spark / injection, gas by
+   stroke, headers glowing with the exhaust temperature, the turbo spinning with its shaft speed, afterfire flames
+   at the tail pipe. Drag to orbit, right-drag to pan, wheel to zoom; "Flat view" keeps the older 2.5D cutaways
 2. **ECU Setup** — loop rate, trigger wheel and cam sensor, injection timing, coil type and dwell, cold start, simulation pause / reset
 3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, flex fuel, fuel system (fuel type, tank, refuel), base map
 4. **Ignition Tuning** — ignition map, corrections, knock control, per-cylinder trims
@@ -300,6 +306,7 @@ build/Release/flow_test.exe          # flow map: the gas-path flows add up, reve
 build/Release/sound_test.exe         # exhaust acoustics vs theory: open-end reflection (Levine & Schwinger), chamber / side-branch / Helmholtz transmission loss
 build/Release/diesel_test.exe        # diesel: ignition delay vs hand calculation, governors, smoke limit, cetane, clatter, pilot injection, glow plugs / cold start, VGT, EGR
 build/Release/twostroke_test.exe     # two-stroke: ports, crankcase / reed, scavenging, Blair 125 validation, ignition delay / burn, expansion chamber tuning, four-stroking, start / idle
+build/Release/model_test.exe         # 3D engine view model (GPU stubbed): every preset builds with sane bounds, no new meshes while turning
 ```
 
 ```bash

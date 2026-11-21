@@ -117,9 +117,17 @@ add_executable(enginesim WIN32
   src/ui/FlowMap.cpp
   src/ui/Widgets.cpp
   src/ui/EngineView3D.cpp
+  src/ui/Gpu3D.cpp
+  src/ui/Mesh3D.cpp
+  src/ui/EngineModel.cpp
+  src/ui/EngineModelParts.cpp
 )
 target_include_directories(enginesim PRIVATE src ${miniaudio_SOURCE_DIR})
 target_link_libraries(enginesim PRIVATE enginesim_core imgui_lib d3d11 dxgi d3dcompiler winmm comdlg32)
+# the 3D engine model without a GPU: bounds of every preset's model
+add_executable(model_test tests/model_test.cpp src/ui/Mesh3D.cpp src/ui/EngineModel.cpp src/ui/EngineModelParts.cpp)
+target_include_directories(model_test PRIVATE src)
+target_link_libraries(model_test PRIVATE enginesim_core imgui_lib)
 endif()
 
 # ---------------------------------------------------------------- headless tools

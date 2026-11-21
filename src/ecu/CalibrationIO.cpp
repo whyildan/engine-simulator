@@ -637,7 +637,7 @@ struct EngineField { const char* key; size_t off; EfType t; int n; };
 // the engine and the car, not the test bench (throttle, key, dyno, ambient air, listener, sensor faults ...)
 const EngineField kEngineFields[] = {
     // geometry / crank
-    EI("engine_type", engineType), EI("cylinders", cylinders), EI("layout", layout), EF("bank_angle", bankAngle),
+    EI("engine_type", engineType), EI("cylinders", cylinders), EI("layout", layout), EF("bank_angle", bankAngle), EI("cam_layout", camLayout), EI("cam_drive", camDrive), EI("cooling", cooling),
     EF("bore_mm", bore_mm), EF("stroke_mm", stroke_mm), EF("rod_mm", rod_mm), EF("compression", compression),
     EF("flywheel", flywheel), EIA("firing_order", firingOrder, kMaxCyl), EI("even_fire", evenFire),
     EFA("phase", phase, kMaxCyl), EIA("bank", bank, kMaxCyl), EF("imperfection", imperfection),
@@ -714,7 +714,7 @@ const EngineField kEngineFields[] = {
 #undef EIA
 #undef CF
 #undef CI
-static_assert(sizeof(Layout) == 4 && sizeof(EngineType) == 4 && sizeof(Induction) == 4 && sizeof(PistonType) == 4 &&
+static_assert(sizeof(Layout) == 4 && sizeof(CamLayout) == 4 && sizeof(CamDrive) == 4 && sizeof(Cooling) == 4 && sizeof(EngineType) == 4 && sizeof(Induction) == 4 && sizeof(PistonType) == 4 &&
               sizeof(int) == 4, "engine file fields assume 32-bit enums");
 
 std::string g_engineDir = "engines";
@@ -867,6 +867,7 @@ bool engineFromJson(const std::string& text, EngineParams& p, EngineMeta& m, std
     n.tsCrankcaseCR = clampv(n.tsCrankcaseCR, 1.1f, 3.0f); n.tsReedArea_cm2 = clampv(n.tsReedArea_cm2, 0.0f, 200.0f);
     n.tsPipeClass = clampv(n.tsPipeClass, 0.0f, 1.0f); n.tsBurnDeg = clampv(n.tsBurnDeg, 25.0f, 90.0f); n.tsTransferLen = clampv(n.tsTransferLen, 0.05f, 4.0f); n.tsScavenge = clampv(n.tsScavenge, 0, 9);
     n.gears = clampv((int)n.gears, 1, kMaxGears);
+    n.camLayout = (CamLayout)clampv((int)n.camLayout, 0, 2); n.camDrive = (CamDrive)clampv((int)n.camDrive, 0, 2); n.cooling = (Cooling)clampv((int)n.cooling, 0, 1);
     n.bore_mm = clampv(n.bore_mm, 20.0f, 200.0f); n.stroke_mm = clampv(n.stroke_mm, 20.0f, 200.0f);
     n.compression = clampv(n.compression, 4.0f, 25.0f); n.revLimit = clampv(n.revLimit, 1000.0f, 25000.0f);
     if (validateFiring(n)) applyLayoutDefaults(n);   // broken firing order: the layout's default one

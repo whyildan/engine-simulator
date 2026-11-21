@@ -62,6 +62,7 @@ static EngineParams base() {
     p.intakeLift_mm = 10; p.exhaustLift_mm = 9.5f;
     p.intakeCenterline = 108; p.exhaustCenterline = 112;
     p.valveLash_mm = 0.15f;
+    p.camLayout = CamLayout::DOHC; p.camDrive = CamDrive::Chain; p.cooling = Cooling::Liquid;
     p.vtec = 0; p.vtecInDuration = 248; p.vtecInLift_mm = 10; p.vtecExDuration = 248; p.vtecExLift_mm = 9.5f;
     p.vtc = 0; p.vtcRange = 0;
 
@@ -589,6 +590,26 @@ EngineParams makePreset(int idx) {
         p.compFlow_gs = 380; p.scRatio = 12.5f; p.compression = 9.5f; p.injector_ccmin = 550; p.mechAdvance = 11;
         p.revLimit = 7000; p.muffler = Muffler::StraightThrough; p.sweepEndRpm = 6900;
         break;
+    }
+    // valvetrain / timing drive / cooling as the engines each preset is modelled on are built (the base is DOHC, chain,
+    // liquid): pushrod V8s, a belt-driven Japanese / German DOHC or SOHC, the air-cooled big V-twin and single
+    {
+        struct Build { int preset; CamLayout cam; CamDrive drive; Cooling cool; };
+        static const Build kBuild[] = {
+            {1, CamLayout::DOHC, CamDrive::Belt, Cooling::Liquid},    // I3 1.0 (wet belt)
+            {3, CamLayout::SOHC, CamDrive::Belt, Cooling::Liquid},    // 60 deg V6 3.5
+            {4, CamLayout::OHV, CamDrive::Chain, Cooling::Liquid},    // crossplane carb V8
+            {8, CamLayout::DOHC, CamDrive::Belt, Cooling::Liquid},    // flat-4
+            {9, CamLayout::OHV, CamDrive::Gears, Cooling::Air},       // 45 deg V-twin
+            {10, CamLayout::SOHC, CamDrive::Chain, Cooling::Air},     // single thumper
+            {16, CamLayout::DOHC, CamDrive::Belt, Cooling::Liquid},   // turbo I4
+            {17, CamLayout::OHV, CamDrive::Chain, Cooling::Liquid},   // Roots V8
+            {20, CamLayout::SOHC, CamDrive::Belt, Cooling::Liquid},   // on the V6 3.5
+            {21, CamLayout::DOHC, CamDrive::Belt, Cooling::Liquid},   // I5 2.5
+            {24, CamLayout::SOHC, CamDrive::Belt, Cooling::Liquid},   // 1.9 turbo diesel, two valves per cylinder
+        };
+        for (const Build& b : kBuild)
+            if (b.preset == idx) { p.camLayout = b.cam; p.camDrive = b.drive; p.cooling = b.cool; }
     }
     finish(p);
     applyVehicleDefaults(p);
