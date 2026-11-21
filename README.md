@@ -30,7 +30,7 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | ⚙️ **Any layout** | Inline, V, boxer, 1–16 cylinders, odd-fire / big-bang, custom firing orders — and **Wankel rotaries** with 1–4 rotors and four porting styles. |
 | 🌀 **The rotary "brap"** | A bridge-ported 13B idles lumpy because exhaust floods back through the port overlap and the diluted charges misfire — modelled, not faked. |
 | 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control; trigger wheels (60-2, 36-1, 36-2-2-2 …) with crank / cam sync, sequential / semi-sequential / batch injection, coil dwell table. |
-| 🛢️ **Diesel** | Compression ignition with direct injection: Assanis ignition delay, pilot + main injection, premixed / diffusion burn, no throttle (the load is the fuel quantity), smoke limiter, idle and max-speed governors, glow plugs with pre- and post-heat, variable geometry turbo and EGR — and the diesel clatter from the chamber ringing through the engine structure. |
+| 🛢️ **Diesel** | Compression ignition with direct injection: Assanis ignition delay, pump or common rail injection (rail pressure, nozzle orifice flow, pilots / main / post), premixed / diffusion burn, no throttle (the load is the fuel quantity), smoke limiter, idle and max-speed governors, glow plugs with pre- and post-heat, variable geometry turbo, cooled EGR, engine-out NOx and soot (smoke number) — and the diesel clatter from the chamber ringing through the engine structure. |
 | 🏍️ **Two-stroke** | One power stroke per revolution: piston-controlled exhaust and transfer ports, the crankcase pumping the charge in through a spring-mass reed valve, scavenging from cylinders measured on Blair's QUB rig, and an expansion chamber (Blair's empirical design) simulated as 1D unsteady gas dynamics, whose suction and plugging waves push the escaped charge back and move the power band with its tuning; Blair-style ignition delay and Vibe burn — checked against Blair's measured 125 cc racing engine. Light load four-strokes on its own residual. |
 | ⛽ **Fuels and flex fuel** | Regular / premium / race gasoline, E10, E20, E85, E100 and methanol, each with its own stoichiometric AFR, heating value, octane (knock), charge cooling, flame speed and cold start; a tank you can refuel with a blend, and a flex fuel sensor the ECU uses to adapt its fuelling, spark and cold enrichment. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
@@ -101,6 +101,10 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 | 11 | I4 1.6 ITB race | 23 | **Rotary 13B bridge port (brap idle)** |
 |  |  | 24 | **I4 1.9 turbo diesel (VGT, EGR, glow plugs)** |
 |  |  | 25 | **250 two-stroke single (reed valve, expansion chamber)** |
+|  |  | 26 | **I4 2.0 common rail diesel (EA189-style: 1800 bar, multi-pulse, cooled EGR)** |
+|  |  | 27 | **I6 5.9 inline-pump truck diesel (6BT-style)** |
+|  |  | 28 | **V8 6.6 common rail diesel (Duramax L5P-style)** |
+|  |  | 29 | **1-cyl 0.46 air-cooled diesel (Hatz 1B40-style)** |
 
 ## Building from source
 
@@ -304,7 +308,8 @@ build/Release/flow_test.exe          # flow map: the gas-path flows add up, reve
 
 ```bash
 build/Release/sound_test.exe         # exhaust acoustics vs theory: open-end reflection (Levine & Schwinger), chamber / side-branch / Helmholtz transmission loss
-build/Release/diesel_test.exe        # diesel: ignition delay vs hand calculation, governors, smoke limit, cetane, clatter, pilot injection, glow plugs / cold start, VGT, EGR
+build/Release/diesel_test.exe        # diesel: ignition delay vs hand calculation, governors, smoke limit, cetane, clatter, pilot injection, glow plugs / cold start, VGT, EGR,
+                                     #   common rail / multi-pulse, NOx / soot, EGR cooler, VGT efficiency, glow post-heat, the diesel presets
 build/Release/twostroke_test.exe     # two-stroke: ports, crankcase / reed, scavenging, Blair 125 validation, ignition delay / burn, expansion chamber tuning, four-stroking, start / idle
 build/Release/model_test.exe         # 3D engine view model (GPU stubbed): every preset builds with sane bounds, no new meshes while turning
 ```

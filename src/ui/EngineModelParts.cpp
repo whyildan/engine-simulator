@@ -245,13 +245,36 @@ void buildDiesel(Scene& sc, const EngineParams& p, const EngineBits& eb, const E
         sc.put(body, alongY(eb.pump + v3(0, 0, 0.10f * B), v3(0, 0, 1)), kAlu);
         const V3 head = eb.pump + v3(0, 0, 0.10f * B + L + 0.04f * B);
         const int n = (int)eb.injTop.size();
-        for (int i = 0; i < n; ++i) {
-            const float a = 2.0f * kPiF * i / std::max(1, n);
-            const V3 out = head + v3(0.09f * B * std::cos(a), 0.09f * B * std::sin(a), 0);
-            const V3 t = eb.injTop[i];
-            const V3 up = v3(out.x * 0.5f + t.x * 0.5f, std::max(out.y, t.y) + 0.30f * B + 0.03f * B * i, out.z + 0.25f * B);
-            sc.put(tubeOf("hpline", spline({out, out + v3(0, 0.05f * B, 0.12f * B), up, v3(t.x, t.y + 0.30f * B, t.z), t + v3(0, 0.04f * B, 0)}, 10), 0.024f * B, 8),
-                   M4{}, kSteel);
+        if (p.dieselInjSystem == 1 && n > 0) {
+            // common rail: the high-pressure pump feeds one forged rail along each bank's injectors, short lines down
+            std::vector<V3> tops = eb.injTop;
+            V3 lo = tops[0], hi = tops[0];
+            for (const V3& t : tops) { if (t.z < lo.z) lo = t; if (t.z > hi.z) hi = t; }
+            // one rail per side of the engine (a V's two banks), offset above and inboard of the injectors
+            for (int side = -1; side <= 1; side += 2) {
+                std::vector<V3> bank;
+                for (const V3& t : tops) if ((t.x < 0) == (side < 0) || std::fabs(lo.x - hi.x) < 1e-3f) bank.push_back(t);
+                if (bank.empty()) continue;
+                V3 a = bank[0], b = bank[0], mid = v3(0, 0, 0);
+                for (const V3& t : bank) { if (t.z < a.z) a = t; if (t.z > b.z) b = t; mid = mid + t; }
+                mid = mid * (1.0f / bank.size());
+                const V3 off = v3(-0.20f * B * (mid.x >= 0 ? 1.0f : -1.0f), 0.22f * B, 0);
+                const V3 r0 = v3(mid.x, mid.y, a.z - 0.35f * B) + off, r1 = v3(mid.x, mid.y, b.z + 0.35f * B) + off;
+                sc.put(tubeOf("rail", {r0, r1}, 0.07f * B, 16), M4{}, kSteel);
+                for (const V3& t : bank)
+                    sc.put(tubeOf("railline", spline({v3(t.x, mid.y, t.z) + off, v3(t.x, t.y + 0.18f * B, t.z) + off * 0.4f, t + v3(0, 0.04f * B, 0)}, 6), 0.018f * B, 8), M4{}, kSteel);
+                sc.put(tubeOf("pumpline", spline({head, head + v3(0, 0.1f * B, 0.25f * B), v3(r0.x, r0.y + 0.1f * B, r0.z - 0.3f * B), r0}, 10), 0.022f * B, 8), M4{}, kSteel);
+                if (std::fabs(lo.x - hi.x) < 1e-3f) break;
+            }
+        } else {
+            for (int i = 0; i < n; ++i) {
+                const float a = 2.0f * kPiF * i / std::max(1, n);
+                const V3 out = head + v3(0.09f * B * std::cos(a), 0.09f * B * std::sin(a), 0);
+                const V3 t = eb.injTop[i];
+                const V3 up = v3(out.x * 0.5f + t.x * 0.5f, std::max(out.y, t.y) + 0.30f * B + 0.03f * B * i, out.z + 0.25f * B);
+                sc.put(tubeOf("hpline", spline({out, out + v3(0, 0.05f * B, 0.12f * B), up, v3(t.x, t.y + 0.30f * B, t.z), t + v3(0, 0.04f * B, 0)}, 10), 0.024f * B, 8),
+                       M4{}, kSteel);
+            }
         }
     }
     // glow plugs: a bus wire over their tops, glowing the app's orange while they heat

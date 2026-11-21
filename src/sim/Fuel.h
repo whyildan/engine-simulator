@@ -131,6 +131,38 @@ constexpr double kPilotMainDelayDiv = 2.2;
 constexpr double kDieselColdIgnK = 815.0;
 constexpr double kGlowIgnC = 850.0;
 
+// D8: the spray that reaches a hot glow plug lights there, in parallel with the bulk charge. Pastor, Bermudez,
+// Garcia-Oliver & Ramirez-Hernandez (CMT-UPV, "Influence of spray-glow plug configuration on cold start combustion for
+// HSDI diesel engines"): the pilot's ignition at cold start is controlled by the glow plug temperature; a hotter plug
+// shortens the delay until it levels off at ~1500 us (the fuel's way to the plug), and above ~1200 K the chemical delay
+// cannot be reduced further. So: the delay correlation at the tip temperature capped at 1200 K, never under 1.5 ms.
+// (BERU, "All about glow plugs" p. 8: post-heating burns the fuel more completely and quietly - smoke opacity down by
+// up to 40 % in the warm-up; cold-start knock comes from the longer ignition delay of the cold engine.)
+inline double glowPlugDelayS(double phi, double pBar, double tipK, double cetane) {
+    return std::max(1.5e-3, dieselDelayMs(phi, pBar, std::min(tipK, 1200.0), cetane) * 1e-3);
+}
+
+// D3 emissions (readouts only). The burned zone: the mixing-controlled flame's products at a near-stoichiometric local
+// lambda (chosen - NO needs some oxygen beside the flame; it sets the absolute NO level, which is a plausibility
+// calibration, not validated), an effective cp of the hot products (chosen: above the 1.3-1.5 kJ/kg K of combustion
+// gases, standing in for the dissociation this flame temperature leaves out), the unburned zone compressed / expanded isentropically from intake closing.
+constexpr double kNoZoneLambda = 1.1;
+constexpr double kZoneCp = 1600.0;
+constexpr double kZoneGamma = 1.35;
+// Hiroyasu soot pre-factors (Tao et al. 2005: "adjustable ... determined by matching soot in the engine exhaust"):
+// calibrated - see docs/ECU_PLAN.md D3 (formation 1/s bar^-0.5, oxidation 1/s bar^-1.8)
+constexpr double kSootAf = 150.0;
+constexpr double kSootAo = 1.0e4;
+// AVL filter smoke number from the soot concentration (unheated sampling; AVL 415, 25 C / 1000 mbar - Lauer, MAN
+// Diesel & Turbo, ICCT 2017): soot mg/m3 = 1 / 0.405 x 4.95 FSN exp(0.38 FSN)
+inline double sootMgM3FromFsn(double fsn) { return 4.95 / 0.405 * fsn * std::exp(0.38 * fsn); }
+inline double fsnFromSootMgM3(double c) {
+    double lo = 0, hi = 10;
+    if (c <= 0) return 0;
+    for (int i = 0; i < 50; ++i) { const double m = 0.5 * (lo + hi); (sootMgM3FromFsn(m) < c ? lo : hi) = m; }
+    return 0.5 * (lo + hi);
+}
+
 // diesel burn shape: the Watson-type double / triple Wiebe of Ricardo WAVE as given in Clean Energy 8(5):73 (2024),
 // eqs. 1-7 - premixed  1 - [1 - (0.75 t)^2]^5000, diffusion 1 - [1 - (cd3 t)^1.75]^5000, tail 1 - [1 - (ct3 t)^2.5]^5000,
 // t = (theta - theta_soc) / 125 deg, cd3 = 0.055 / (1 + 0.5 phi), ct3 = 3.7 cd3 / (1 + 1.12 phi), tail share of the

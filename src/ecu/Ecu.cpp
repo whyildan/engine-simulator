@@ -1,6 +1,8 @@
 #include "ecu/Ecu.h"
+#include "sim/Injector.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 namespace es {
@@ -539,6 +541,17 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
         }
     }
 
+    // ---- diesel: air per stroke as the air mass meter's flow integrated over each crank segment (one firing interval
+    //      of crank angle). Dividing the instantaneous flow by the instantaneous speed instead overstated it: at low
+    //      speed and full load the crank speed swings +-5 % over a cycle and the fuel is decided near its low point -
+    //      the smoke limiter landed at lambda ~1.29-1.33 instead of its 1.38.
+    if (diesel) {
+        mafAcc_ += s.value[kSnsMAF] * 1e-3 * dt;                           // kg
+        mafT_ += std::max(0.0, rpm) * 6.0 * dt;                            // crank degrees
+        const double seg = 360.0 * revsPerEvent_ / std::max(1, ports_);
+        if (mafT_ >= seg) { mafSeg_ = mafAcc_ * seg / mafT_; mafAcc_ = 0; mafT_ = 0; }
+        if (rpm < 50.0) { mafAcc_ = 0; mafT_ = 0; mafSeg_ = 0; }
+    }
     // ---- diesel (Package 4): the load is the fuel quantity. Driver demand from the pedal map; an idle governor
     //      (PI on the idle speed) that holds at least the idle fuel; the max-speed governor that takes the fuel
     //      away over the last band before the rev limit; the smoke limiter: never more fuel than the measured air
@@ -546,21 +559,38 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
     if (diesel) {
         double q;
         smokeLimited = false;
-        if (starter || (!running && rpm < 400)) { q = cal_.dieselStartFuel; dIdleI_ = 0.25 * cal_.dieselStartFuel; }   // start fuel until it runs
+        if (starter || (!running && rpm < 400)) { q = cal_.dieselStartFuel; qDemand_ = q; dIdleI_ = 0.25 * cal_.dieselStartFuel; }   // start fuel until it runs
         else {
             q = s.fallback[kSnsAPP] ? 0.0 : tableLookup(cal_.dieselFuel, rpm, pedal * 100.0);
             const double err = clampv(idleTarget - rpmIdle_, -400.0, 400.0);
             if (pedal < 0.02) dIdleI_ = clampv(dIdleI_ + cal_.dieselIdleKi * err * dt, 0.0, 0.5 * (double)p_.dieselMaxFuel);
             q = std::max(q, std::max(0.0, dIdleI_ + cal_.dieselIdleKp * err));
             if (cal_.dieselGovBand > 1.0) q *= clampv((revLim - rpm) / cal_.dieselGovBand, 0.0, 1.0);
+            qDemand_ = q;   // (the EGR map reads the demand: read after the smoke limiter, less fuel opened the valve, the EGR
+                            //  took the place of fresh air and the limiter cut more fuel - a loop that strangled the engine)
             const double qSmoke = airEstimate(s, rpm, tpsPct) * 1e6 / (std::max(1.0f, cal_.smokeLambda) * kDieselStoichEcu);
             if (q > qSmoke) { q = qSmoke; smokeLimited = true; }
             if (actFuel_ || limp) q = std::min(q, 0.5 * (double)p_.dieselMaxFuel);
         }
         cmd.dieselFuelMg = std::max(0.0, q);
         cmd.soi = tableLookup(cal_.soi, std::max(rpm, (double)p_.idleTargetRpm * 0.5), cmd.dieselFuelMg);
+        // common rail (D2): the rail pressure target from its map; every pulse's energizing time from its quantity,
+        // the measured rail pressure and an assumed chamber pressure (Injector.h) - a cam-driven pump delivers at its
+        // fixed rate instead
+        const bool cr = p_.dieselInjSystem == 1;
+        cmd.railBar = cr ? clampv((double)tableLookup(cal_.railMap, std::max(rpm, (double)p_.idleTargetRpm * 0.5), cmd.dieselFuelMg),
+                                  150.0, (double)p_.railMaxBar) : 0.0;
+        const double railNow = cr ? (s.fallback[kSnsRail] ? sensorDef(kSnsRail).fallback : std::max(0.0, s.value[kSnsRail])) : 0.0;
+        auto durMs = [&](double mg) {   // the injector's open time for a quantity, ms
+            if (!cr) return mg / std::max(1.0, (double)p_.dieselInjRate);
+            const double full = nozzleFlow(p_, kDieselDensityEcu, railNow * 1e5, kInjAssumedCylBar * 1e5);
+            return energizingFor(mg * 1e-6, full) * 1e3;
+        };
+        const double degPerMs = 6.0 * std::max(rpm, 300.0) * 1e-3;
         // pilot: taken out of the demanded quantity, ahead of the main injection by its own duration plus the dwell
         cmd.pilotMg = 0; cmd.pilotSoi = cmd.soi;
+        cmd.pilot2Mg = 0; cmd.pilot2Soi = cmd.soi;
+        cmd.postMg = 0; cmd.postSoi = cmd.soi;
         // (rpm limit with 200 rpm of hysteresis: no switching on and off with every wobble of the revs)
         if (rpm > cal_.pilotMaxRpm) pilotRpmOk_ = false;
         else if (rpm < cal_.pilotMaxRpm - 200.0) pilotRpmOk_ = true;
@@ -569,14 +599,37 @@ void Ecu::update(double dt, const SensorReadings& s, bool starter) {
             cmd.dieselFuelMg -= cmd.pilotMg;
             const double dwellUs = lerp((double)cal_.pilotDwellIdleUs, (double)cal_.pilotDwellUs,
                                         smoothstep((double)p_.idleTargetRpm, std::max(p_.idleTargetRpm + 100.0, 1500.0), rpm));
-            const double ms = cmd.pilotMg / std::max(1.0, (double)p_.dieselInjRate) + std::max(0.0, dwellUs) * 1e-3;
-            cmd.pilotSoi = cmd.soi + ms * 1e-3 * 6.0 * std::max(rpm, 300.0);
+            cmd.pilotSoi = cmd.soi + (durMs(cmd.pilotMg) + std::max(0.0, dwellUs) * 1e-3) * degPerMs;
+            // (D1, common rail) a second pilot ahead of the first, by its own duration plus its dwell
+            if (cr && cal_.pilot2Mg > 0 && cmd.dieselFuelMg > 2.0 * cal_.pilot2Mg) {
+                cmd.pilot2Mg = cal_.pilot2Mg;
+                cmd.dieselFuelMg -= cmd.pilot2Mg;
+                cmd.pilot2Soi = cmd.pilotSoi + (durMs(cmd.pilot2Mg) + std::max(0.0f, cal_.pilot2DwellUs) * 1e-3) * degPerMs;
+            }
+        }
+        // (D1, common rail) a close-coupled post injection after the main: its fuel burns in the main's hot,
+        // still-burning gas and oxidises soot (O'Connor & Musculus, Sandia - ICEF2013-19037). Taken out of the demand
+        // like the pilots; part load above the idle and below postMaxRpm
+        if (cr && running && cal_.postMg > 0 && rpm > p_.idleTargetRpm + 300.0 && rpm < cal_.postMaxRpm && cmd.dieselFuelMg > 4.0 * cal_.postMg) {
+            cmd.postMg = cal_.postMg;
+            cmd.dieselFuelMg -= cmd.postMg;
+            cmd.postSoi = cmd.soi - (durMs(cmd.dieselFuelMg) + std::max(0.0f, cal_.postDwellUs) * 1e-3) * degPerMs;
         }
         fuelling_ = cmd.dieselFuelMg > 0 && !cmd.fuelCut;
         targetAfr = 0;
         // EGR: valve from its map over speed and fuel quantity, only on a warm running engine (none in limp mode)
+        // ... held back by the fresh air the MAF measures: below egrMinLambda (air per stroke over the fuel) a trim
+        // closes the valve, recovering slowly above it - as diesel ECUs run their EGR on an air-mass target. (Open
+        // loop, hot EGR could take the place of nearly all the fresh air: the hot charge breathes less, the EGR share
+        // rises, the charge gets hotter.)
+        {
+            const double airNow = airEstimate(s, rpm, tpsPct);
+            const double lamEst = airNow / std::max(1e-9, std::max(0.5, cmd.dieselFuelMg + cmd.pilotMg + cmd.pilot2Mg + cmd.postMg) * 1e-6 * kDieselStoichEcu);
+            if (lamEst < cal_.egrMinLambda) egrTrim_ = std::max(0.0, egrTrim_ - dt / 0.3);
+            else egrTrim_ = std::min(1.0, egrTrim_ + dt / 2.0);
+        }
         cmd.egr = (p_.egrValveDia_mm > 0 && running && !limp && s.value[kSnsECT] >= cal_.egrMinEct)
-                      ? clampv(tableLookup(cal_.egrMap, rpm, cmd.dieselFuelMg) * 0.01, 0.0, 1.0) : 0.0;
+                      ? clampv(tableLookup(cal_.egrMap, rpm, qDemand_) * 0.01 * egrTrim_, 0.0, 1.0) : 0.0;
         // glow plugs (BorgWarner / BERU technical information): pre-heat from key-on for the time the coolant
         // temperature calls for (the glow lamp is on - wait for it before cranking), heating while cranking a cold
         // engine, post-heat after the start until the coolant reaches afterglowEct or for afterglowTime at most
@@ -677,7 +730,9 @@ double Ecu::airEstimate(const SensorReadings& s, double rpm, double tpsPct) {
     case LoadMode::Hybrid: { double w = smoothstep(cal_.hybridTpsLo, cal_.hybridTpsHi, tpsPct); return (1 - w) * airSD + w * airAN; }
     case LoadMode::Maf: {
         double events = std::max(1.0, ports_ * std::max(rpm, 100.0) / (60.0 * revsPerEvent_));
-        return s.fallback[kSnsMAF] ? airSD : s.value[kSnsMAF] * 1e-3 / events;
+        if (s.fallback[kSnsMAF]) return airSD;
+        if (isDiesel(p_) && mafSeg_ > 0) return mafSeg_;   // (diesel: integrated over the last crank segment)
+        return s.value[kSnsMAF] * 1e-3 / events;
     }
     default: return airSD;
     }

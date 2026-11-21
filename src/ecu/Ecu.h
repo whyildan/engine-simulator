@@ -13,6 +13,7 @@ namespace es {
 
 // diesel: the stoichiometric AFR the ECU calculates the smoke limit with (Fuel.h: 14.5)
 constexpr double kDieselStoichEcu = 14.5;
+constexpr double kDieselDensityEcu = 837.0;   // kg/m3 (EN 590 diesel; the ECU's figure for its injector maths)
 
 struct ActuatorCommands {
     double iac = 0.35;            // idle air control valve opening 0..1
@@ -43,6 +44,9 @@ struct ActuatorCommands {
     double soi = 0;               // start of injection, deg BTDC (main injection)
     double pilotMg = 0;           // pilot injection, mg (0 = none)
     double pilotSoi = 0;          // its start, deg BTDC
+    double pilot2Mg = 0, pilot2Soi = 0;   // a second pilot ahead of the first (common rail)
+    double postMg = 0, postSoi = 0;       // a post injection after the main (common rail), start deg BTDC (< 0: after TDC)
+    double railBar = 0;           // common rail: rail pressure target, bar
     bool glow = false;            // glow plugs powered
     double egr = 0;               // EGR valve opening 0..1
 };
@@ -128,6 +132,9 @@ private:
     // idle control
     double iacI_ = 0.35, dash_ = 0, sinceRelease_ = 10, prevRpm_ = 0, rpmRate_ = 0, afterStart_ = 0;
     double dIdleI_ = 0;           // diesel idle governor integral (mg/stroke)
+    double egrTrim_ = 1;          // diesel: EGR valve trim from the air-mass floor (0..1)
+    double qDemand_ = 0;          // diesel: fuel demand before the smoke limiter (mg/stroke) - the EGR map's axis
+    double mafAcc_ = 0, mafT_ = 0, mafSeg_ = 0;   // diesel: air mass over the current crank segment (kg, deg), last one (kg)
     bool pilotRpmOk_ = true;      // pilot injection below its rpm limit (hysteresis)
     int glowPhase_ = 0;           // 0 key off, 1 pre-heat / cranking, 3 running (post-heat)
     double keyT_ = 0, preheatS_ = 0, afterT_ = 0; bool afterOk_ = false;

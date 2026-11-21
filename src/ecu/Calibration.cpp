@@ -22,6 +22,7 @@ const TableInfo kTables[kCalTableCount] = {
     {"diesel_fuel", "Diesel fuel demand", "rpm", "pedal %", "mg/str", 0, 250, 0.5f},
     {"soi",      "Start of injection", "rpm", "fuel mg", "deg BTDC", -10, 40, 0.25f},
     {"egr",      "EGR valve", "rpm", "fuel mg", "%", 0, 100, 1},
+    {"rail",     "Rail pressure (common rail)", "rpm", "fuel mg", "bar", 100, 3000, 10},
 };
 const TableInfo kCurves[kCalCurveCount] = {
     {"crank_afr", "Cranking AFR",           "coolant C",  "", "AFR", 6, 16, 0.1f},
@@ -83,6 +84,7 @@ Table2D& calTable(Calibration& c, int id) {
     case kCalVeTps: return c.veTps; case kCalLambda: return c.lambda; case kCalIgnition: return c.ignition;
     case kCalLtft: return c.ltft; case kCalBoostTarget: return c.boostTarget; case kCalVtc: return c.vtcMap;
     case kCalDieselFuel: return c.dieselFuel; case kCalSoi: return c.soi; case kCalEgr: return c.egrMap;
+    case kCalRail: return c.railMap;
     default: return c.veMap;
     }
 }
@@ -166,7 +168,7 @@ void generateCalibration(EngineParams& p) {
             tb.x[i] = i < 5 ? (float)(500 + 250 * i)
                             : (float)(std::round((1500.0 + (top - 1500.0) * (i - 4) / (kTabMax - 5)) / 50.0) * 50.0);
             tb.y[i] = (t == kCalVeTps || t == kCalDieselFuel) ? tpsAxis[i] : (float)std::round(20.0 + (mapTop - 20.0) * i / (kTabMax - 1));
-            if (t == kCalSoi || t == kCalEgr) tb.y[i] = (float)std::round(std::max(10.0f, p.dieselMaxFuel) * 1.2 * i / (kTabMax - 1) * 2.0) / 2.0f;
+            if (t == kCalSoi || t == kCalEgr || t == kCalRail) tb.y[i] = (float)std::round(std::max(10.0f, p.dieselMaxFuel) * 1.2 * i / (kTabMax - 1) * 2.0) / 2.0f;
         }
         // VTEC: breakpoints just either side of the cam crossover, so the step in breathing is a step in the map
         // (and the base map rig measures both sides) instead of being smeared over a whole column
@@ -229,8 +231,15 @@ void generateCalibration(EngineParams& p) {
             // high speed, where the engine needs all its air (the smoke limiter would take the fuel away)
             const double q = c.egrMap.y[r] / std::max(1.0f, p.dieselMaxFuel);
             c.egrMap.v[r][k] = (float)std::round(p.egrValveDia_mm > 0 ? 60.0 * (1.0 - smoothstep(0.25, 0.55, q)) * (1.0 - smoothstep(2500.0, 3500.0, rpm)) : 0.0);
+            // common rail pressure target (D2): from ~300 bar at idle to the rail's maximum at full load towards rated
+            // speed - a starting point, not from a source (published rail maps were not found; the VW EA189's rail
+            // runs 230-1800 bar - SSP 826803)
+            const double qr = c.railMap.y[r] / std::max(1.0f, p.dieselMaxFuel);
+            const double lift = smoothstep(0.05, 0.9, qr) * (0.45 + 0.55 * smoothstep((double)p.idleTargetRpm, 0.75 * p.revLimit, rpm));
+            c.railMap.v[r][k] = (float)(std::round((300.0 + (p.railMaxBar - 300.0) * lift) / 10.0) * 10.0);
         }
     c.egrMinEct = 60;
+    c.egrMinLambda = 1.6f;   // (chosen: well above the smoke limit, so EGR never pushes the engine into smoke)
     // smoke limit: MIT 2.61 (lecture 16) "smoke-limit A/F ~ 20" -> lambda 20 / 14.5 = 1.38
     c.smokeLambda = 1.38f;
     c.dieselIdleKp = 0.02f; c.dieselIdleKi = 0.04f; c.dieselGovBand = 400; c.dieselStartFuel = 0.6f * p.dieselMaxFuel;
@@ -245,6 +254,14 @@ void generateCalibration(EngineParams& p) {
     // (~0.5 ms) is longer than that: with 300 us it has not lit when the main starts and does nothing -> 1000 us at
     // idle (chosen: ~6 dB less clatter at idle in the model)
     c.pilotMg = 1.5f; c.pilotDwellUs = 300; c.pilotDwellIdleUs = 1000; c.pilotMaxRpm = 3000;
+    // more injections (D1, common rail only). A second pilot 1 mg, 400 us ahead (chosen: modern injectors make up to
+    // seven events a cycle - Duramax L5P - the split is a calibration choice). A close-coupled post injection: 2 mg,
+    // 200 us after the main (O'Connor & Musculus, Sandia ICEF2013-19037: posts of up to ~20 % of the fuel, "within a few
+    // crank angle degrees" of the main, fully burn and cut soot - by 16-55 % in their and cited tests, less at higher
+    // load - with little efficiency penalty); up to 3000 rpm (chosen)
+    const bool cr = p.dieselInjSystem == 1;
+    c.pilot2Mg = cr ? 1.0f : 0.0f; c.pilot2DwellUs = 400;
+    c.postMg = cr ? 2.0f : 0.0f; c.postDwellUs = 200; c.postMaxRpm = 3000;
     c.powerTpsLo = 60; c.powerTpsHi = 90; c.powerLambda = p.afrWot / 14.7f;
     c.crankAdvance = std::min(p.baseAdvance, 8.0f);
     auto cold = [](double ect) { return 1.0 - smoothstep(15.0, 75.0, ect); };

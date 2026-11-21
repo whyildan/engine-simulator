@@ -21,6 +21,10 @@ struct Telemetry {
     // diesel (Package 4)
     float dieselFuelMg = 0, soi = 0, ignDelayDeg = 0; bool smokeLimited = false;
     float pilotMg = 0, pilotSoi = 0, mainDelayDeg = 0;   // pilot injection; the main injection's own delay after it
+    float pilot2Mg = 0, postMg = 0, postSoi = 0;            // second pilot, post injection (common rail)
+    float railBar = 0, railTargetBar = 0, pumpKw = 0;      // common rail pressure / target, its pump's drive power
+    float noxPpm = 0, noxGs = 0, sootMgM3 = 0, smokeFsn = 0;   // diesel emissions (engine-out)
+    float egrGasC = 0;                                     // EGR gas into the intake (after the cooler)
     float glowTipC = 0; bool glowOn = false, glowLight = false;
     float tsDelivery = 0, tsTrapping = 0, tsScavenging = 0;   // two-stroke, cylinder 1, last cycle: delivery ratio, TE, SE
     float tsCrankcaseKPa = 0, tsReed = 0;                     // ... crankcase pressure, reed petal opening 0..1

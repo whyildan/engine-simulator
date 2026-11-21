@@ -94,6 +94,15 @@ public:
     double egrFlow() const { return egrFlow_; }
     double egrRate() const { return egrFlow_ / std::max(1e-6, egrFlow_ + egrAir_); }   // share of the charge (averaged)
     double combNoise() const { return combNoise_; }   // diesel combustion noise, Pa (structure-attenuated)
+    double railBar() const { return railBar_; }       // common rail pressure, bar
+    double pumpKw() const { return pumpKw_; }         // common rail high-pressure pump drive power, kW
+    // diesel emissions (D3), averaged over ~0.5 s: NO in the exhaust (ppm), NOx as NO2 (g/s), soot (mg/m3 at 25 C,
+    // 1000 mbar) and the AVL filter smoke number
+    double noxPpm() const { return noxPpm_; }
+    double noxGs() const { return noxGs_; }
+    double sootMgM3() const { return sootMgM3_; }
+    double smokeFsn() const { return fsn_; }
+    double egrGasT() const { return egrGasT_; }     // EGR gas temperature into the intake, K (after the cooler)
     // its rms over every step since the last call (tests / diagnostics: sampling the signal now and then aliases
     // with the firing - the short bursts are hit or missed depending on the phase)
     double combNoiseRms() { const double r = cnN_ > 0 ? std::sqrt(cnE2_ / cnN_) : 0.0; cnE2_ = 0; cnN_ = 0; return r; }
@@ -177,6 +186,7 @@ private:
     void crankcaseStep(Crankcase& k, GasNode& ip, double vCyl, double dt);
     static void ccSync(Crankcase& k) { k.g.T = clampv(k.U / (std::max(1e-12, k.g.m) * kCv), 150.0, 2500.0); }
     // diesel (Package 4): injection, ignition delay and the burn of one cylinder for this step
+    void emissionsStep(Cylinder& c, double dt, double dm, double dmf, double dmb);
     void dieselStep(Cylinder& c, double dt, double phiPrev, double phi, double rpm, bool exOpen, bool fuelCut,
                     double& dm, double& dmf, double& dmb, double& dmbNew, double& dU);
     double valveLift(const ValveSpec& v, double phi, const ValveDynamics& dyn) const;
@@ -233,6 +243,11 @@ private:
     double glowC_ = 20;            // glow plug tip temperature, C
     double egrPos_ = 0, egrFlow_ = 0; // EGR valve opening 0..1, flow kg/s (averaged)
     double egrAir_ = 0;               // fresh air flow kg/s averaged the same way (the EGR share)
+    double egrGasT_ = 300;            // EGR gas temperature into the intake (after the cooler), K
+    double railBar_ = 0, pumpKw_ = 0; // common rail pressure, bar; pump drive power, kW
+    double injStepKg_ = 0;            // fuel injected this step (all cylinders), kg
+    double emisNoMol_ = 0, emisSoot_ = 0, emisGasKg_ = 0, emisT_ = 0;   // emissions collected over the window
+    double noxPpm_ = 0, noxGs_ = 0, sootMgM3_ = 0, fsn_ = 0;
     double fireTimer_ = 10;    // time since last combustion
     double ambT_ = 298;
     Rng rng_{12345};

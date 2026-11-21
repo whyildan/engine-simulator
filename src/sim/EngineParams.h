@@ -113,6 +113,15 @@ struct EngineParams {
     float soiAdvance;         // deg added by rated speed (speed advance, like a mechanical pump's timing device)
     int32_t glowPlugs;        // 0 none, 1 metal sheathed-element, 2 ceramic (heat-up: CombustionNoise.h / Engine)
     float egrValveDia_mm;     // exhaust gas recirculation valve (exhaust manifold -> intake), 0 = none (Package 4b)
+    int32_t egrCooler;        // 0 = none (the gas arrives at the exhaust temperature), 1 = water-cooled EGR cooler (D4)
+    float egrCoolerEff;       // its thermal effectiveness: T_out = T_in - eff (T_in - T_coolant)
+    // injection hardware (D2): 0 = cam-driven pump / unit injector - the fuel goes in at the constant rate
+    // dieselInjRate; 1 = common rail - the rate follows the rail pressure through the nozzle holes (orifice flow),
+    // with the needle's opening / closing ramps; pilots, main and post injections (D1) need it
+    int32_t dieselInjSystem;
+    float railMaxBar;         // common rail: highest rail pressure
+    int32_t nozzleHoles;      // injector nozzle holes
+    float nozzleHoleDia_mm;
 
     // ---------------------------------------------------------- exhaust sensors (Package 2)
     int32_t emapSensor;       // exhaust manifold pressure sensor (turbo: before the turbine)

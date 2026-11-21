@@ -6,6 +6,7 @@
 #include "sim/Simulator.h"
 #include "sim/Fuel.h"
 #include "sim/CombustionNoise.h"
+#include "sim/Injector.h"
 #include "ecu/BaseMap.h"
 #include <algorithm>
 #include <cmath>
@@ -264,6 +265,139 @@ int main() {
         CHECK(on.maf < 0.9 * off.maf && on.lam < off.lam, "the recirculated gas takes the place of fresh air (less air, lower lambda)");
         CHECK(on.iat > off.iat + 10.0, "uncooled EGR warms the intake");
         CHECK(full.rate < 0.02, "full load: the valve stays shut");
+    }
+
+    // ---------------- D1-D11 (the open items of 2026-11-21)
+    auto measure = [&](EngineParams q, float rpm, float pedal, double settle, auto f) {
+        Simulator sim(q);
+        start(sim, q);
+        hold(sim, q, rpm, pedal);
+        run(sim, settle);
+        return f(sim);
+    };
+    // D6: the smoke limiter lands on its lambda (the air per stroke from the MAF integrated over each crank segment)
+    {
+        std::printf("[D6 smoke limiter] full pedal, lambda against %.2f\n", p.cal.smokeLambda);
+        for (float rpm : {1000.0f, 1500.0f, 3000.0f}) {
+            const double lam = measure(p, rpm, 1.0f, 5.0, [&](Simulator& sim) {
+                double l = 0; for (int k = 0; k < 10; ++k) { run(sim, 0.05); l += sim.engineForTests()->cyl(0).lambda; } return l / 10; });
+            std::printf("  %.0f rpm: lambda %.3f\n", rpm, lam);
+            CHECK(std::fabs(lam - p.cal.smokeLambda) < 0.04, "%.0f rpm: within 0.04 of the smoke lambda (%.3f)", rpm, lam);
+        }
+    }
+    // D7: a diesel needs its compression - too low a ratio does not light (the charge stays under the cold limit)
+    {
+        std::printf("[D7 compression] warm start at CR 12 and CR 16\n");
+        auto runs = [&](float cr) { EngineParams q = p; q.compression = cr; Simulator sim(q); start(sim, q); run(sim, 3.0); return tel(sim).rpm; };
+        const double lo = runs(12.0f), hi = runs(16.0f);
+        std::printf("  CR 12: %.0f rpm, CR 16: %.0f rpm\n", lo, hi);
+        CHECK(lo < 100.0, "CR 12 does not run");
+        CHECK(hi > 600.0, "CR 16 runs");
+    }
+    // D2: common rail injector maths and the EA189-style preset
+    EngineParams cr = makeCalibratedPreset(26);
+    {
+        std::printf("[D2 common rail] %s\n", cr.name);
+        const double f1 = nozzleFlow(cr, 837.0, 400e5, 60e5), f2 = nozzleFlow(cr, 837.0, 1660e5, 60e5);
+        std::printf("  full-lift flow %.1f mg/ms at 400 bar, %.1f at 1660 bar (ratio %.3f, sqrt of the pressure drops %.3f)\n", f1 * 1e3, f2 * 1e3, f2 / f1, 2.0);
+        CHECK(std::fabs(f2 / f1 - std::sqrt(1600.0 / 340.0)) < 1e-6, "orifice flow goes with the square root of the pressure drop");
+        bool inv = true;
+        for (double q : {0.5e-6, 2e-6, 40e-6}) {
+            const double dur = energizingFor(q, f2);
+            double got = 0; for (double t = 0; t < 0.01; t += 1e-7) got += f2 * needleOpen(t, dur) * 1e-7;
+            if (std::fabs(got / q - 1.0) > 0.01) inv = false;
+            std::printf("  %.1f mg -> %.3f ms energized -> %.2f mg delivered\n", q * 1e6, dur * 1e3, got * 1e6);
+        }
+        CHECK(inv, "the energizing time delivers the asked quantity, ballistic pulses included (1 %%)");
+        struct RailR { double rail, target, pump, tq; };
+        const RailR r = measure(cr, 3500, 1.0f, 5.0, [&](Simulator& sim) {
+            RailR x{}; for (int k = 0; k < 10; ++k) { run(sim, 0.05); Telemetry t = tel(sim); x.rail += t.railBar; x.target += t.railTargetBar; x.pump += t.pumpKw; x.tq += t.torque; }
+            x.rail /= 10; x.target /= 10; x.pump /= 10; x.tq /= 10; return x; });
+        std::printf("  3500 rpm full pedal: rail %.0f bar (target %.0f), pump %.1f kW, %.0f Nm\n", r.rail, r.target, r.pump, r.tq);
+        CHECK(std::fabs(r.rail - r.target) < 0.1 * r.target, "the rail holds its target");
+        CHECK(r.pump > 1.0 && r.pump < 5.0, "high-pressure pump: a few kW at full load (up to ~5 kW for such pumps)");
+    }
+    // D1: pilots, main and post - separate ignitions, all the fuel burns; the post's soot effect is reported
+    {
+        std::printf("[D1 multi-pulse] 2000 rpm, 60 %% pedal\n");
+        struct M { int groups; double inj, burned, pilot2, post, fsn; };
+        auto mp = [&](EngineParams q) { return measure(q, 2000, 0.6f, 5.0, [&](Simulator& sim) {
+            M m{}; double f = 0;
+            for (int k = 0; k < 8; ++k) { run(sim, 0.5); f += tel(sim).smokeFsn; }
+            const Engine& e = *sim.engineForTests();
+            m.groups = e.cyl(0).nGroup; m.inj = e.cyl(0).injDone * 1e6; m.burned = e.cyl(0).dBurned * 1e6;
+            m.pilot2 = e.ecu.cmd.pilot2Mg; m.post = e.ecu.cmd.postMg; m.fsn = f / 8; return m; }); };
+        const M a = mp(cr);
+        EngineParams np = cr; np.cal.postMg = 0;
+        const M b = mp(np);
+        std::printf("  pilot2 %.1f mg, post %.1f mg: %d ignition groups, injected %.1f mg, burned %.1f mg | FSN %.2f with the post, %.2f without\n",
+                    a.pilot2, a.post, a.groups, a.inj, a.burned, a.fsn, b.fsn);
+        CHECK(a.pilot2 > 0 && a.post > 0, "the ECU schedules a second pilot and a post injection");
+        CHECK(a.groups >= 2, "the post injection lights on its own (a group of its own)");
+        CHECK(a.burned > 0.97 * a.inj, "all the injected fuel burns (post included)");
+    }
+    // D3 + D4: NOx and soot; EGR and its cooler
+    {
+        std::printf("[D3/D4 emissions] %s, 2000 rpm\n", cr.name);
+        struct E { double nox, fsn, iat; };
+        auto em = [&](EngineParams q, float pedal) { return measure(q, 2000, pedal, 6.0, [&](Simulator& sim) {
+            E e{}; for (int k = 0; k < 8; ++k) { run(sim, 0.5); Telemetry t = tel(sim); e.nox += t.noxPpm; e.fsn += t.smokeFsn; e.iat += t.snsValue[kSnsIAT]; }
+            e.nox /= 8; e.fsn /= 8; e.iat /= 8; return e; }); };
+        EngineParams noEgr = cr; noEgr.egrValveDia_mm = 0;
+        EngineParams hot = cr; hot.egrCooler = 0;
+        const E base = em(cr, 0.3f), off = em(noEgr, 0.3f), hotE = em(hot, 0.3f), mid = em(cr, 0.6f), full = em(cr, 1.0f);
+        std::printf("  30 %%: NOx %.0f ppm (cooled EGR), %.0f (hot EGR), %.0f (no EGR); intake %.0f / %.0f / %.0f C\n", base.nox, hotE.nox, off.nox, base.iat, hotE.iat, off.iat);
+        std::printf("  FSN 30 %% %.2f (no EGR %.2f), 60 %% %.2f, full %.2f\n", base.fsn, off.fsn, mid.fsn, full.fsn);
+        CHECK(std::fabs(sootMgM3FromFsn(1.0) - 4.95 / 0.405 * std::exp(0.38)) < 1e-9 && std::fabs(fsnFromSootMgM3(sootMgM3FromFsn(2.3)) - 2.3) < 1e-3,
+              "FSN <-> soot concentration (AVL relation) and its inverse");
+        CHECK(off.nox > 300 && off.nox < 4000, "NOx without EGR in the range of a DI diesel (%.0f ppm)", off.nox);
+        CHECK(base.nox < 0.5 * off.nox, "EGR cuts NOx");
+        CHECK(hotE.iat > base.iat + 20 && hotE.nox > base.nox, "the cooler: a cooler intake and less NOx than hot EGR");
+        CHECK(base.fsn > off.fsn, "EGR raises soot (the NOx / soot trade-off)");
+        CHECK(full.fsn > mid.fsn && full.fsn > 1.0, "soot rises towards the smoke limit at full load");
+    }
+    // D5: VGT turbine efficiency over the blade speed ratio
+    {
+        std::printf("[D5 VGT efficiency] preset 24, full pedal\n");
+        for (float rpm : {1500.0f, 3500.0f}) {
+            Telemetry t = measure(p, rpm, 1.0f, 5.0, [&](Simulator& sim) { run(sim, 0.2); return tel(sim); });
+            const double want = std::clamp(0.68 - 2.5 * (t.turbUc - 0.58) * (t.turbUc - 0.58), 0.2, 0.68);
+            std::printf("  %.0f rpm: BSR %.2f, efficiency %.3f\n", rpm, t.turbUc, t.turbEff);
+            CHECK(std::fabs(t.turbEff - want) < 1e-3 && t.turbUc > 0.2 && t.turbUc < 1.2, "%.0f rpm: efficiency on the BSR parabola", rpm);
+        }
+    }
+    // D8: a hot glow plug shortens the cold engine's ignition delay (post-heat on against off)
+    {
+        std::printf("[D8 post-heat] -5 C start, ignition delay over the first seconds\n");
+        CHECK(glowPlugDelayS(0.3, 30.0, 1400.0, 51.0) >= 1.5e-3 && glowPlugDelayS(0.3, 30.0, 1100.0, 51.0) >= glowPlugDelayS(0.3, 30.0, 1400.0, 51.0),
+              "glow plug path: never under 1.5 ms, no faster above 1200 K");
+        auto cold = [&](bool post) {
+            EngineParams q = p; q.ambientTemp_C = -5; q.coldStart = 1; q.cal.afterglowTime = post ? 180.0f : 0.0f;
+            Simulator sim(q);
+            q.ignition = 1; sim.setParams(q); run(sim, 6.0);
+            start(sim, q, 6.0);
+            double id = 0; for (int k = 0; k < 20; ++k) { run(sim, 0.1); id += tel(sim).ignDelayDeg; }
+            return id / 20;
+        };
+        const double on = cold(true), off = cold(false);
+        std::printf("  delay with post-heat %.2f deg, without %.2f deg\n", on, off);
+        CHECK(on < off, "post-heat shortens the delay of the cold engine");
+    }
+    // D11: the new presets start, idle and make torque near their ratings
+    {
+        std::printf("[D11 presets]\n");
+        struct P { int idx; double ratedNm; float rpm; };
+        for (P x : {P{26, 320, 2250}, P{27, 597, 1750}, P{28, 1234, 2550}, P{29, 21.6f, 2800}}) {
+            EngineParams q = makeCalibratedPreset(x.idx);
+            Simulator sim(q);
+            const double ts = start(sim, q);
+            run(sim, 4.0);
+            const double idle = tel(sim).rpm;
+            const double tq = measure(q, x.rpm, 1.0f, 5.0, [&](Simulator& s2) { double t = 0; for (int k = 0; k < 10; ++k) { run(s2, 0.05); t += tel(s2).torque; } return t / 10; });
+            std::printf("  %-48s start %.2f s, idle %.0f (target %.0f), full pedal %.0f rpm %.0f Nm (rated peak %.0f)\n", q.name, ts, idle, q.idleTargetRpm, x.rpm, tq, x.ratedNm);
+            CHECK(ts >= 0 && std::fabs(idle - q.idleTargetRpm) < 150, "%s starts and idles", q.name);
+            CHECK(std::fabs(tq / x.ratedNm - 1.0) < 0.2, "%s: torque within 20 %% of its rated peak", q.name);
+        }
     }
 
     std::printf(failures ? "%d FAILED\n" : "ALL PASSED\n", failures);

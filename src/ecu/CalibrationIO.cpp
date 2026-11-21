@@ -234,9 +234,12 @@ const ScalarDef kScalars[] = {
     {"diesel_idle_ki", &Calibration::dieselIdleKi, nullptr}, {"diesel_gov_band", &Calibration::dieselGovBand, nullptr},
     {"diesel_start_fuel", &Calibration::dieselStartFuel, nullptr},
     {"afterglow_time", &Calibration::afterglowTime, nullptr}, {"afterglow_ect", &Calibration::afterglowEct, nullptr},
-    {"egr_min_ect", &Calibration::egrMinEct, nullptr},
+    {"egr_min_ect", &Calibration::egrMinEct, nullptr}, {"egr_min_lambda", &Calibration::egrMinLambda, nullptr},
     {"pilot_mg", &Calibration::pilotMg, nullptr}, {"pilot_dwell_us", &Calibration::pilotDwellUs, nullptr},
     {"pilot_dwell_idle_us", &Calibration::pilotDwellIdleUs, nullptr},
+    {"pilot2_mg", &Calibration::pilot2Mg, nullptr}, {"pilot2_dwell_us", &Calibration::pilot2DwellUs, nullptr},
+    {"post_mg", &Calibration::postMg, nullptr}, {"post_dwell_us", &Calibration::postDwellUs, nullptr},
+    {"post_max_rpm", &Calibration::postMaxRpm, nullptr},
     {"pilot_max_rpm", &Calibration::pilotMaxRpm, nullptr},
 };
 const char* kActKeys[kActCount] = {"warn", "retard", "boost_reduce", "throttle_limit", "fuel_limit", "limp", "shutdown"};
@@ -665,6 +668,8 @@ const EngineField kEngineFields[] = {
     EI("fuel_type", fuelType), EI("flex_sensor", flexSensor),
     EF("diesel_inj_rate", dieselInjRate), EF("diesel_max_fuel", dieselMaxFuel), EF("soi_base", soiBase), EF("soi_advance", soiAdvance),
     EI("glow_plugs", glowPlugs), EF("egr_valve_dia_mm", egrValveDia_mm), EI("vgt", vgt), EF("vgt_min_area", vgtMinArea),
+    EI("egr_cooler", egrCooler), EF("egr_cooler_eff", egrCoolerEff), EI("diesel_inj_system", dieselInjSystem), EF("rail_max_bar", railMaxBar),
+    EI("nozzle_holes", nozzleHoles), EF("nozzle_hole_dia_mm", nozzleHoleDia_mm),
     EI("emap_sensor", emapSensor), EI("wideband_pos", widebandPos), EI("egt_per_cyl", egtPerCyl), EI("egt_post_turbo", egtPostTurbo),
     // exhaust
     EI("header", header), EFA("primary_len_mm", primaryLen_mm, kMaxCyl), EF("primary_dia_mm", primaryDia_mm),
@@ -867,6 +872,8 @@ bool engineFromJson(const std::string& text, EngineParams& p, EngineMeta& m, std
     n.tsCrankcaseCR = clampv(n.tsCrankcaseCR, 1.1f, 3.0f); n.tsReedArea_cm2 = clampv(n.tsReedArea_cm2, 0.0f, 200.0f);
     n.tsPipeClass = clampv(n.tsPipeClass, 0.0f, 1.0f); n.tsBurnDeg = clampv(n.tsBurnDeg, 25.0f, 90.0f); n.tsTransferLen = clampv(n.tsTransferLen, 0.05f, 4.0f); n.tsScavenge = clampv(n.tsScavenge, 0, 9);
     n.gears = clampv((int)n.gears, 1, kMaxGears);
+    n.egrCooler = n.egrCooler ? 1 : 0; n.egrCoolerEff = clampv(n.egrCoolerEff, 0.0f, 0.98f); n.dieselInjSystem = n.dieselInjSystem ? 1 : 0;
+    n.railMaxBar = clampv(n.railMaxBar, 200.0f, 3000.0f); n.nozzleHoles = clampv((int)n.nozzleHoles, 1, 12); n.nozzleHoleDia_mm = clampv(n.nozzleHoleDia_mm, 0.05f, 0.40f);
     n.camLayout = (CamLayout)clampv((int)n.camLayout, 0, 2); n.camDrive = (CamDrive)clampv((int)n.camDrive, 0, 2); n.cooling = (Cooling)clampv((int)n.cooling, 0, 1);
     n.bore_mm = clampv(n.bore_mm, 20.0f, 200.0f); n.stroke_mm = clampv(n.stroke_mm, 20.0f, 200.0f);
     n.compression = clampv(n.compression, 4.0f, 25.0f); n.revLimit = clampv(n.revLimit, 1000.0f, 25000.0f);

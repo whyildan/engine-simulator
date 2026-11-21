@@ -268,6 +268,18 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
             const double Cs = std::sqrt(2.0 * std::max(0.0, dh));
             turbUc = Cs > 1.0 ? U / Cs : 0.0;
             etaT = Cs > 1.0 ? tm_.eff(turbUc) : 0.3;
+        } else if (p_.vgt) {
+            // generic VGT turbine (D5; the wastegated generic turbines keep the constant 0.68 their calibrations were made with): efficiency over the blade speed ratio, Wahlstrom & Eriksson (LiTH-ISY-R-2882 eqs.
+            // 48-49): eta = eta_max - c_m (BSR - BSR_opt)^2, BSR = R_t w_t / sqrt(2 cp T (1 - PR^(1-1/gamma))) - the
+            // blade tip speed over the isentropic expansion speed. (Their c_m also rises with the turbo speed, eq. 50,
+            // and their fitted constants belong to their engine; there is no vane-position term - a VGT changes the
+            // efficiency only through the expansion ratio its vanes make.) Peak 0.68 (the old constant efficiency),
+            // BSR_opt 0.58 (inside the 0.52-0.64 span of their fig. 9), c_m 2.5 (chosen: -0.1 at 0.2 off the optimum);
+            // tip radius from a 500 m/s tip speed at the top shaft speed (chosen)
+            const double rt = 500.0 / (nMaxC_ * 2.0 * kPi / 60.0);
+            const double Cs = std::sqrt(2.0 * std::max(0.0, dh));
+            turbUc = Cs > 1.0 ? omegaT_ * rt / Cs : 0.0;
+            etaT = Cs > 1.0 ? clampv(0.68 - 2.5 * (turbUc - 0.58) * (turbUc - 0.58), 0.2, 0.68) : 0.3;
         } else turbUc = 0;
         turbEff = etaT; turbEr = erNow;
         turbMfp = mt * std::sqrt(std::max(300.0, tin.T)) / std::max(1.0, tin.p() * 1e-3);

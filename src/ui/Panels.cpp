@@ -633,7 +633,17 @@ void App::panelFuelIntake() {
     }
     p_.fuelSystem = (FuelSystem)fs;
     if (p_.fuelSystem == FuelSystem::DieselDI) {
-        SliderF("Injection rate", &p_.dieselInjRate, 5, 150, "%.0f mg/ms", "What one injector delivers per millisecond at its rail pressure: sets\nhow long an injection lasts (more fuel or a weaker injector = a longer, later-burning injection).");
+        Combo("Injection system", &p_.dieselInjSystem, "Cam-driven pump / unit injector\0Common rail\0");
+        Help("Pump: the fuel goes in at a fixed rate (the pump's delivery). Common rail: a high-pressure pump keeps the\n"
+             "rail at the ECU's pressure; each injector's nozzle holes flow like orifices at that pressure, so higher\n"
+             "pressure = shorter injection. Common rail also allows a second pilot and a post injection (ECU tab > Diesel).");
+        if (p_.dieselInjSystem == 1) {
+            SliderF("Rail pressure, maximum", &p_.railMaxBar, 300, 2700, "%.0f bar", "The top of the ECU's rail pressure map (EA189: 1800 bar; Duramax L5P: 2000 bar).\nRegenerate the calibration after a big change.");
+            SliderI("Nozzle holes", &p_.nozzleHoles, 1, 12);
+            SliderF("Hole diameter", &p_.nozzleHoleDia_mm, 0.05f, 0.30f, "%.3f mm", "Flow ~ holes x diameter^2 x sqrt(rail - chamber pressure); Cd 0.86 (ECN Spray A).");
+            ImGui::Text("Rail %.0f bar (target %.0f)   high-pressure pump %.1f kW", tel_.railBar, tel_.railTargetBar, tel_.pumpKw);
+        } else
+            SliderF("Injection rate", &p_.dieselInjRate, 5, 150, "%.0f mg/ms", "What one injector delivers per millisecond at its rail pressure: sets\nhow long an injection lasts (more fuel or a weaker injector = a longer, later-burning injection).");
         SliderF("Full-pedal fuel", &p_.dieselMaxFuel, 5, 200, "%.0f mg/stroke", "The driver's demand map scales to this (the smoke limiter can hold it back).\nRegenerate the calibration (ECU tab) after a big change.");
         SliderF("Injection timing at idle", &p_.soiBase, -5, 20, "%.1f deg BTDC");
         SliderF("Speed advance", &p_.soiAdvance, 0, 25, "%.1f deg", "Added towards rated speed (like a mechanical pump's timing device):\nthe ignition delay takes more crank angle at speed.");
@@ -646,9 +656,19 @@ void App::panelFuelIntake() {
         ImGui::Text("Glow plug tip %.0f C  %s", tel_.glowTipC, tel_.glowLight ? "PRE-HEATING (wait)" : tel_.glowOn ? "heating" : "off");
         SliderF("EGR valve", &p_.egrValveDia_mm, 0, 50, "%.0f mm", "Exhaust gas recirculation: a valve from the exhaust manifold (before the turbine) into the\n"
                 "intake (0 = none). Burned gas in the charge takes the place of fresh air - less NOx in a real engine, a\n"
-                "little less oxygen. Uncooled here: it also warms the intake. Opening: ECU tab > Diesel > EGR map.");
-        if (p_.egrValveDia_mm > 0)
-            ImGui::Text("EGR valve %.0f %%   %.1f g/s   %.0f %% of the charge", tel_.egrPos * 100.0f, tel_.egrGs, tel_.egrRate * 100.0f);
+                "little less oxygen. Hot unless a cooler is fitted. Opening: ECU tab > Diesel > EGR map.");
+        if (p_.egrValveDia_mm > 0) {
+            Check("EGR cooler (water-cooled)", &p_.egrCooler);
+            Help("Cools the recirculated gas towards the coolant: T_out = T_in - effectiveness x (T_in - T_coolant). A cooler\n"
+                 "charge holds more oxygen and lowers the flame temperature further (less NOx). Clean coolers measure\n"
+                 "~0.87-0.97, fouling takes 20-30 %% off (patents US 7281529, SAE 2008-01-2475).");
+            if (p_.egrCooler) SliderF("Cooler effectiveness", &p_.egrCoolerEff, 0.3f, 0.98f, "%.2f");
+            ImGui::Text("EGR valve %.0f %%   %.1f g/s   %.0f %% of the charge   gas in %.0f C", tel_.egrPos * 100.0f, tel_.egrGs, tel_.egrRate * 100.0f, tel_.egrGasC);
+        }
+        ImGui::Text("Engine-out: NOx %.0f ppm (%.2f g/s)   soot %.1f mg/m3 = FSN %.2f", tel_.noxPpm, tel_.noxGs, tel_.sootMgM3, tel_.smokeFsn);
+        Help("NOx: Zeldovich formation (Heywood's rate) in the burned gas; soot: Hiroyasu's formation / oxidation; the smoke\n"
+             "number from the AVL relation. Readouts only - their absolute levels are plausibility calibrations (trends:\n"
+             "EGR and later timing cut NOx; EGR and a richer mixture raise soot). docs/ECU_PLAN.md D3.");
         ImGui::Text("Fuel %.1f mg/stroke   start of injection %.1f deg BTDC   ignition delay %.1f deg   %s", tel_.dieselFuelMg, tel_.soi,
                     tel_.ignDelayDeg, tel_.smokeLimited ? "SMOKE LIMITED" : "");
         if (p_.compression < 15.0f)

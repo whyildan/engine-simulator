@@ -228,7 +228,11 @@ void Simulator::render(float* out, int frames) {
     t.dieselFuelMg = (float)e.ecu.cmd.dieselFuelMg; t.soi = (float)e.ecu.cmd.soi; t.smokeLimited = e.ecu.smokeLimited;
     t.ignDelayDeg = e.cylinders() > 0 ? (float)e.cyl(0).idDeg : 0.0f;
     t.pilotMg = (float)e.ecu.cmd.pilotMg; t.pilotSoi = (float)e.ecu.cmd.pilotSoi;
-    t.mainDelayDeg = e.cylinders() > 0 && e.cyl(0).main2 ? (float)e.cyl(0).idDegMain : 0.0f;
+    t.mainDelayDeg = e.cylinders() > 0 && e.cyl(0).mainOwnDelay ? (float)e.cyl(0).idDegMain : 0.0f;
+    t.pilot2Mg = (float)e.ecu.cmd.pilot2Mg; t.postMg = (float)e.ecu.cmd.postMg; t.postSoi = (float)e.ecu.cmd.postSoi;
+    t.railBar = (float)e.railBar(); t.railTargetBar = (float)e.ecu.cmd.railBar; t.pumpKw = (float)e.pumpKw();
+    t.noxPpm = (float)e.noxPpm(); t.noxGs = (float)e.noxGs(); t.sootMgM3 = (float)e.sootMgM3(); t.smokeFsn = (float)e.smokeFsn();
+    t.egrGasC = (float)(e.egrGasT() - 273.15);
     t.glowTipC = (float)e.glowTipC(); t.glowOn = e.ecu.cmd.glow; t.glowLight = e.ecu.glowLight;
     t.egrPos = (float)e.egrPos(); t.egrGs = (float)(e.egrFlow() * 1000.0);
     t.egrRate = (float)e.egrRate();

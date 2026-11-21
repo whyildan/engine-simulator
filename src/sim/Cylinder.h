@@ -146,19 +146,37 @@ struct Cylinder {
     double afterfireFuel = 0;             // unburned fuel sitting in the primary
     double afterfireAir = 0;              // ... and the fresh air (oxygen) next to it
     double popPending = 0;                // afterfire pressure still to be released (Pa)
-    // diesel (Package 4): direct injection, ignition delay, premixed / diffusion / tail burn
-    double injLeft = 0, injRate = 0, injDone = 0;   // kg still to inject, kg/s, kg injected this cycle
-    double mainPending = 0, injPlanned = 0;         // pilot cycle: main quantity waiting for its start; total this cycle
+    // diesel (Package 4 + D1 / D2): up to four injections a cycle - pilots, main, post - each with its own start and
+    // quantity. Pulses that start before any of the cycle's fuel has lit share one ignition delay (a group); a pulse that
+    // starts into a burning chamber gets a group of its own with a shorter delay (Fuel.h kPilotMainDelayDiv). Each lit
+    // group burns premixed (what was injected during its delay), then diffusion + tail (the rest) on its own clock.
+    struct DieselPulse {
+        double soi = 0;            // deg BTDC (negative: after TDC), latched at the cycle's first start
+        double q = 0, done = 0;    // kg planned / injected
+        double t = 0, dur = 0;     // s since its start; common rail: the injector's energizing time
+        bool started = false, main = false;
+        int group = -1;
+    };
+    struct DieselGroup {
+        double idI = 0;            // ignition delay integral (dt / tau) since the group's first injection
+        double startPhi = 0, litPhi = 0;
+        double planned = 0, done = 0, pre = 0, diff = 0, tail = 0;   // kg
+        bool lit = false, open = true, afterBurn = false, hasMain = false;
+    };
+    static constexpr int kMaxPulses = 4;
+    DieselPulse dPulse[kMaxPulses]; int nPulse = 0;
+    DieselGroup dGroup[kMaxPulses]; int nGroup = 0;
+    double injDone = 0, injPlanned = 0;             // kg injected / planned this cycle
     bool injStarted = false;                        // this cycle's injection has begun (cleared at exhaust opening)
     double dPhiNow = 0.5;                           // overall equivalence ratio of this cycle's fuel (delay correlation)
-    // main injection after a pilot that is already burning: its own ignition delay (shortened by the pilot's heat)
-    bool idOpen2 = false, main2 = false;            // its delay running / it has lit (its own premixed + diffusion)
-    double idI2 = 0, soc2Phi = 0, preMain = 0, dPre2 = 0, idDegMain = 0;
-    double idI = 0;                       // ignition delay integral (dt / tau, Hardenberg-Hase) since the start of injection
-    bool idOpen = false;                  // injecting / injected but not lit yet
-    bool dBurning = false;                // diesel burn running
-    double socPhi = 0, soiPhi = 0;        // deg: start of combustion / of injection
-    double dPre = 0, dDiff = 0, dTail = 0, dBurned = 0, dPhi = 0.5;   // kg per phase, kg burned, overall phi
+    bool dBurning = false;                          // diesel burn running
+    double socPhi = 0, soiPhi = 0;                  // deg: first start of combustion / of injection
+    double dBurned = 0, dPhi = 0.5;                 // kg burned, overall phi (burn shapes)
+    double idDegMain = 0; bool mainOwnDelay = false;   // the main injection's own delay (after a burning pilot)
+    // diesel emissions this cycle (D3): NO formed (mol), soot (kg), the burned zone's temperature, the EGR / residual
+    // gas per kg of air at intake closing
+    bool emisOpen = false;
+    double noMol = 0, soot = 0, tZone = 0, dilIvc = 0;
     double idDeg = 0;                     // last ignition delay, deg CA (diagnostics)
     double sparkDelay = 0;                // two-stroke: deg from the spark to the start of heat release (Blair)
     double ringA = 0, ringPh = 0;         // combustion chamber pressure ringing: amplitude Pa, phase rad

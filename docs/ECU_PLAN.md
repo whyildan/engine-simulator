@@ -106,17 +106,17 @@ dari data. Bobot seperti tabel di atas.
 
 | # | Hal | Jenis | Keadaan sekarang | Bobot |
 |---|---|---|---|---|
-| D1 | Injeksi multi-pulsa: post-injection (dan lebih dari satu pilot) | belum ada | hanya satu pilot + main | M |
-| D2 | Bentuk laju injeksi dan tekanan rail common rail | belum ada | laju injeksi konstan, tanpa tekanan rail / pompa | M |
-| D3 | Emisi NOx dan jelaga (asap) | belum ada | EGR hanya mengencerkan; pembatas asap memakai λ, bukan jelaga | L |
-| D4 | Pendingin EGR | belum ada | EGR panas: suhu intake ±135 °C di 1500 rpm pedal 30 % | S–M |
-| D5 | Efisiensi turbin VGT tergantung posisi vane (W&E pers. 48) | belum ada | efisiensi turbin tetap model lama | M |
-| D6 | Pembatas asap mendarat di λ 1.30–1.34 (target 1.38) | akurasi | estimasi udara ECU sedikit optimis | S |
-| D7 | Korelasi tunda masih menyalakan pada CR rendah (mis. 9.5:1) | akurasi | batas korelasi HH / Assanis | S |
-| D8 | Post-heat busi pijar belum memendekkan tunda / mengurangi asap putih | belum ada | post-heat hanya menjamin penyalaan | S |
-| D9 | Konstanta pilihan: batas start dingin 815 K, peluruhan ringing 1 ms, pembagi tunda main 2.2, dwell pilot idle, f_vgt, peta EGR / boost | dipilih / kalibrasi | dikalibrasi ke perilaku bersumber, bukan diukur | — |
+| D1 | Injeksi multi-pulsa: post-injection (dan lebih dari satu pilot) | ✅ 2026-11-21 | pilot kedua + post (common rail); efek post ke jelaga belum terwakili | M |
+| D2 | Bentuk laju injeksi dan tekanan rail common rail | ✅ 2026-11-21 | orifis nosel, ramp jarum (dipilih), peta rail (dipilih), daya pompa | M |
+| D3 | Emisi NOx dan jelaga (asap) | ✅ 2026-11-21 (readout) | Zeldovich + Hiroyasu; level absolut dikalibrasi, efek EGR ke NOx terlalu kuat | L |
+| D4 | Pendingin EGR | ✅ 2026-11-21 | + port intake diesel kini mengikuti suhu plenum (sebelumnya tetap ambien) | S–M |
+| D5 | Efisiensi turbin VGT tergantung posisi vane (W&E pers. 48) | ✅ 2026-11-21 (dikoreksi) | pers. 48 tidak punya suku vane: efisiensi atas BSR | M |
+| D6 | Pembatas asap mendarat di λ 1.30–1.34 (target 1.38) | ✅ 2026-11-21 | udara per langkah diintegralkan per segmen engkol: λ 1.39 | S |
+| D7 | Korelasi tunda masih menyalakan pada CR rendah (mis. 9.5:1) | ✅ diuji | batas suhu dingin (4c) sudah mencegahnya: CR 12 tidak hidup, CR 16 hidup | S |
+| D8 | Post-heat busi pijar belum memendekkan tunda / mengurangi asap putih | ✅ 2026-11-21 | jalur penyalaan busi pijar (Pastor dkk.): efeknya kecil di model | S |
+| D9 | Konstanta pilihan: batas start dingin 815 K, peluruhan ringing 1 ms, pembagi tunda main 2.2, dwell pilot idle, f_vgt, peta EGR / boost | sebagian didukung | 2.2 didukung pengukuran Sandia (tunda post 2× lebih pendek); sisanya tetap kalibrasi | — |
 | D10 | Porsi premixed Watson (SAE 800029) dan faktor BRPM WAVE | tidak dipakai | sumber tidak bisa diverifikasi — dibiarkan | — |
-| D11 | Hanya satu preset diesel (24, I4 1.9 TDI-style) | belum ada | — | S |
+| D11 | Hanya satu preset diesel (24, I4 1.9 TDI-style) | ✅ 2026-11-21 | + EA189 CR, 6BT pompa inline, Duramax L5P, Hatz 1B40 | S |
 
 **2-tak (paket 5)**
 
@@ -890,6 +890,23 @@ Implementasi:
     daripada yang keluar katup buang (224 vs 198 g/s). Peta aliran menampilkan apa adanya;
   - K20A sempat knock di beban ringan (sudah ada sebelum paket 1–3, dicek pada commit 7355803) — diperbaiki, lihat di bawah.
 
+### Pembaruan peta aliran – diesel dan 2-tak (2026-11-21)
+- **Diesel**: tanpa throttle dan blow-off valve; turbin VGT dengan cincin vane (sudut mengikuti bukaan, tanpa wastegate);
+  jalur EGR dari manifold buang (sebelum turbin) naik di kiri mesin lewat pendingin (bila ada) dan katup ke plenum —
+  partikel dari aliran EGR terukur, warna dari suhu gas sebelum / sesudah pendingin; common rail di atas silinder dengan
+  pompa tekanan tinggi (tebal garis mengikuti tekanan rail) atau pompa injeksi dengan satu pipa per silinder; injektor
+  dan busi pijar (oranye saat panas) di tiap silinder; asap hitam di ujung knalpot mengikuti FSN, NOx / FSN di sebelahnya;
+  katalis disebut oxidation catalyst. Tooltip: EGR (bukaan, g/s, porsi, suhu), pompa (rail, kuantitas, pilot / post),
+  knalpot (NOx, jelaga).
+- **2-tak**: air box → reed valve (kelopak membuka sesuai sensor reed) → karter (tekanan) → saluran transfer (kiri-kanan)
+  → silinder dengan port (transfer biru, buang oranye, tanpa katup) → expansion chamber berbentuk diffuser / belly /
+  baffle; DR / TE / SE siklus terakhir di bawah silinder. Kotak header tidak digambar.
+- **Kesehatan**: diesel — kartu "Glow plugs" (suhu ujung, pre-heat / post-heat) menggantikan "Spark plugs"; 2-tak dan
+  rotari — kartu "Ports".
+- **Sensor wideband** (temuan): rentang linear 0.6–1.6 λ membuat setiap diesel (λ 1.5–8) terbaca sensor rusak (ECU memakai
+  fallback 1.0, kartu Sensors "1 fault"). Kini fungsi transfer seperti sensor LSU: tegangan linear terhadap (1 − 1/λ),
+  dari λ 0.6 sampai udara bebas; resolusi di λ 1 ±0.002 dengan ADC 10-bit.
+
 ### Setelah Paket 3 – Knock di beban ringan
 - Gejala: K20A dengan kalibrasi bawaan knock di beban ringan — 3000 rpm MAP 34 kPa indeks 1.0–1.4 dan retard 2–6°;
   4500 / 6000 rpm gas 15 % sampai retard penuh 10°. Lampu Knock di header dan panel kesehatan ikut menyala saat cruise.
@@ -1262,6 +1279,63 @@ persamaan dicek oleh agen riset); konstanta hasil fit mereka milik mesin mereka 
   pembakaran.
 - **Batas**: pembagi tunda main 2.2 dan dwell idle adalah kalibrasi; satu pilot (tanpa post-injection); laju injeksi
   konstan (tanpa bentuk laju / tekanan rail).
+
+### Paket 4 lanjutan 2 – item diesel D1–D11 ✅ (2026-11-21)
+Sumber dibaca agen riset (teks, bukan ingatan); yang tidak terverifikasi disebut "dipilih".
+- **D6 pembatas asap** — penyebabnya bukan MAF yang salah, tetapi cara membaginya: ECU membagi aliran MAF sesaat dengan
+  rpm sesaat, dan di putaran rendah beban penuh kecepatan engkol berayun ±5 % dalam satu siklus — bahan bakar diputuskan
+  di dekat titik terendahnya, udara terbaca ±8 % terlalu tinggi. Kini udara per langkah = aliran MAF diintegralkan per
+  segmen engkol (satu interval penyalaan sudut engkol), seperti ECU sungguhan. Hasil λ 1.388–1.397 (target 1.38),
+  sebelumnya 1.29–1.34. Sensor MAF kini dua arah (hot-film modern membaca aliran balik; rentang −100…800 g/s).
+- **D7** — sudah ditangani batas suhu dingin 815 K dari 4c; dikunci dengan tes (CR 12 tidak hidup, CR 16 hidup).
+  Konteks: Broatch dkk. (Energy 35, 2010) mengukur ambang suhu silinder ±415 °C (±688 K) untuk start dingin — model ini
+  tanpa blow-by sehingga kompresinya lebih panas; 815 K tetap kalibrasi.
+- **D2 common rail** (`Injector.h`, `dieselInjSystem`, `railMaxBar`, `nozzleHoles`, `nozzleHoleDia_mm`): laju injeksi
+  ṁ = Cd A √(2ρΔp) (Payri dkk., IJER 17(10) 2016, pers. 4–5), Cd 0.86 (ECN Spray A, Sandia); jarum naik selama
+  dienergisasi dan turun dengan laju yang sama, angkat penuh setelah 0.15 ms (**dipilih** — tidak ada angka bersumber);
+  pulsa kecil balistik (tidak sampai angkat penuh). ECU menghitung waktu energisasi dari kuantitas, tekanan rail
+  terukur (sensor baru "Rail pressure") dan tekanan ruang bakar asumsi 60 bar (dipilih); mesin mengalirkan sesuai tekanan
+  sebenarnya. Tekanan rail mengikuti peta ECU (rpm × bahan bakar; ±300 bar idle → maksimum di beban penuh — **dipilih**,
+  peta tidak ditemukan; EA189 230–1800 bar menurut SSP 826803), orde satu 0.05 s (dipilih), pompa hanya membangun
+  tekanan sambil berputar. Daya pompa = daya hidrolik (bahan bakar × 1.3 untuk bocor/spill, dipilih) / efisiensi 0.6
+  (dipilih) — ±3 kW beban penuh (kfz-tech: pompa tiga piston ±1600 bar "sampai 5 kW").
+- **D1 multi-pulsa** (common rail): pilot kedua (1 mg, dwell 400 µs — dipilih) dan post-injection close-coupled
+  (2 mg, 200 µs setelah main, sampai 3000 rpm; O'Connor & Musculus, Sandia ICEF2013-19037: post sampai ±20 % bahan bakar,
+  dalam beberapa derajat setelah main, terbakar penuh, jelaga turun 16–55 %). Mesin: tiap pulsa punya awal dan
+  kuantitas; pulsa yang mulai sebelum ada bahan bakar menyala berbagi satu tunda (grup), pulsa yang masuk ke ruang yang
+  sedang terbakar mendapat tunda sendiri yang lebih pendek. Refaktor ini mempertahankan hasil lama persis (pilot −5.5 /
+  −6.1 dB). **Batas**: post terbakar penuh, tetapi efeknya ke jelaga hampir nol (model 0-D tidak menyelesaikan
+  pencampuran yang mengoksidasi jelaga).
+- **D3 emisi** (readout, termodinamika tidak berubah): NO — laju awal Zeldovich Heywood 6·10¹⁶/T^½ exp(−69090/T)
+  [O₂]^½[N₂] (dicek via US 9243576 + konsistensi dengan tetapan laju NPTEL) dalam gas terbakar siklus itu sebagai satu
+  zona: λ lokal 1.1 (dipilih), suhu nyala adiabatik di atas muatan tak terbakar (isentropik dari IVC), cp efektif 1600
+  (dipilih, menggantikan disosiasi). Jelaga — Hiroyasu seperti Tao dkk. (JSME 48(4) 2005, pers. 2–3), E_f 80 kJ/mol,
+  E_o 120 kJ/mol, keduanya pada suhu rata-rata silinder (praktik 0-D); A_f 150, A_o 1e4 **dikalibrasi** agar FSN ±2.8 di
+  batas asap beban penuh (jangkar dipilih). FSN dari relasi AVL (Lauer, MAN/ICCT 2017: mg/m³ = 1/0.405 · 4.95 FSN e^0.38FSN).
+  Hasil EA189 2000 rpm: NOx tanpa EGR ±885 ppm; FSN 1.4 / 1.95 / 2.8 di pedal 30 / 60 / 100 %. **Batas**: EGR memotong NOx
+  jauh lebih kuat dari mesin nyata (suhu satu zona); korelasi Plee dkk. tidak bisa diverifikasi.
+- **D4 pendingin EGR** (`egrCooler`, `egrCoolerEff` 0.85): T_out = T_in − ε(T_in − T_coolant) (definisi US 8725386
+  pers. 2; cooler bersih 0.87–0.97 — US 7281529, fouling −20–30 % — SAE 2008-01-2475). **Temuan**: node port intake
+  isotermal dan tetap di ambien + 15 K — suhu plenum (EGR, boost, intercooler) tidak pernah sampai ke silinder. Untuk
+  diesel port kini mengikuti suhu plenum (+15 K, τ 0.05 s); **mesin bensin belum** (base map dan kalibrasinya dibuat dengan
+  perilaku lama — perlu dikerjakan terpisah). Akibatnya EGR panas kini benar-benar mengurangi udara: ECU memakai batas
+  bawah λ untuk EGR (`egr_min_lambda` 1.6, dipilih) seperti kontrol EGR berbasis massa udara. Peta EGR dibaca dari
+  permintaan pengemudi (dibaca setelah pembatas asap ia membuat lingkaran yang mencekik mesin).
+- **D5** — W&E pers. 48 **tidak** punya suku posisi vane (dikoreksi): η = η_max − c_m(BSR − BSR_opt)², BSR = R_t ω_t /
+  √(2 c_p T (1 − Π^(1−1/γ))). Untuk turbin VGT generik: η_max 0.68 (konstanta lama), BSR_opt 0.58 (dalam rentang gbr. 9
+  W&E), c_m 2.5 dan radius dari kecepatan ujung 500 m/s (dipilih). Turbin wastegate bensin tetap 0.68.
+- **D8** — busi pijar sebagai jalur penyalaan paralel: tunda pada suhu ujung (dibatasi 1200 K), tidak pernah di bawah
+  1.5 ms (Pastor dkk., CMT-UPV); BERU: post-heat mengurangi opasitas asap sampai 40 %. Efek di model kecil
+  (tunda −5 °C: 5.05° → 4.82°).
+- **D9** — pembagi tunda main 2.2 kini didukung pengukuran Sandia (SAND2013-3498P: tunda post 3.4–5.5° vs main
+  9.1–9.6°, rasio ±2.1); batas dingin 815 K, peluruhan ringing, dwell idle, f_vgt, peta EGR / boost tetap kalibrasi.
+- **D11 preset** (spesifikasi dari sumber; panjang rod, nosel, kuantitas bahan bakar, timing, boost dipilih):
+  26 EA189 2.0 CR (81 × 95.5, 16.5:1, DOHC 4V belt, 1800 bar, VTG, EGR berpendingin) — 312 Nm @ 2250 (rating 320 Nm);
+  27 Cummins 6BT 5.9 pompa P7100 (102 × 120, 17:1, OHV, wastegate) — 613 Nm @ 1750 (597 Nm @ 1600);
+  28 Duramax L5P 6.6 V8 (103 × 99, 16:1, OHV 4V, 2000 bar, VGT) — 1148 Nm, ±460 hp @ 2900 (1234 Nm / 445 hp);
+  29 Hatz 1B40 1 silinder berpendingin udara (88 × 76, 20.5:1) — 19–22 Nm (±19–22 Nm dari datasheet). Timing statis
+  pompa-pipa-nosel bukan awal injeksi di nosel (tunda saluran): Hatz memakai SOI dinamis 6° + 6° (dipilih).
+- **Tes** `diesel_test` (bagian D1–D11) dan probe `diesel_probe`, `diesel_emis_probe`, `diesel_start_probe`.
 
 ### Paket 5 – Mesin 2-tak (tahap 5a + 5b + pengisian): port, karter, reed, scavenging, expansion chamber ✅
 Rujukan dicek (teks dibaca kecuali disebut lain); yang tidak terverifikasi disebut "dipilih". Rujukan utama pengisian:

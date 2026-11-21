@@ -10,11 +10,11 @@ const SensorDef kDefs[kSensorCount] = {
     {"TPS throttle position", "%",     0,   100,   0.15,    2,     0, true,  "DFCO, WOT enrichment, MAP fallback (alpha-N)"},
     {"APP pedal position",    "%",     0,   100,   0.15,    2,     0, true,  "idle control, anti-lag"},
     {"MAP manifold pressure", "kPa",  10,   310,   0.25,    3,   100, true,  "fuel load (speed density), vacuum advance, boost retard"},
-    {"MAF air flow",          "g/s",   0,   800,   0.6,    10,     0, true,  "monitoring (MAF load mode: Phase 2)"},
+    {"MAF air flow",          "g/s",-100,   800,   0.6,    10,     0, true,  "monitoring (MAF load mode: Phase 2)"},
     {"IAT intake air temp",   "C",   -40,   150,   0.1,  3000,    30, true,  "air density for the fuel calculation"},
     {"ECT coolant temp",      "C",   -40,   150,   0.1,  2000,    80, true,  "warm-up / cranking enrichment, fast idle, closed-loop enable"},
     {"O2 narrowband",         "V",     0,   1.1,   0.01,  120,  0.45, true,  "backup closed loop if the wideband fails"},
-    {"Wideband lambda",       "lambda", 0.6, 1.6,  0.004,  50,     1, true,  "closed-loop fuel trim"},
+    {"Wideband lambda",       "lambda", 0.6, 20,   0.004,  50,     1, true,  "closed-loop fuel trim"},
     {"CKP crank position",    "rpm",   0, 20000,   0,       0,     0, false, "engine speed and angle: no signal = no spark / fuel"},
     {"CMP cam position",      "sync",  0,     1,   0,       0,     1, false, "cycle phase: lost = semi-sequential injection"},
     {"Knock sensor",          "index", 0,     5,   0.05,   10,     0, true,  "monitoring (knock control: Phase 3)"},
@@ -29,10 +29,16 @@ const SensorDef kDefs[kSensorCount] = {
     {"Flex fuel (alcohol)",   "%",     0,   100,   0.3,   800,     0, false, "stoich AFR, injector flow, spark, cold enrichment by alcohol content"},
     {"EMAP exhaust pressure", "kPa",  10,   710,   0.5,    15,   101, true,  "backpressure, drive pressure ratio (EMAP / MAP) protection"},
     {"EGT after turbine",     "C",     0,  1250,   2,     400,     0, true,  "monitoring (turbine heat drop)"},
+    {"Rail pressure",         "bar",   0,  2500,   2,       5,   300, true,  "common rail: injector energizing times, rail pressure control"},
 };
 
 double toVolts(const SensorDef& d, double x) { return 0.5 + 4.0 * (x - d.lo) / (d.hi - d.lo); }
 double fromVolts(const SensorDef& d, double v) { return d.lo + (v - 0.5) / 4.0 * (d.hi - d.lo); }
+// wideband: a broadband (LSU-type) sensor's pump current follows the oxygen excess, ~ (1 - 1 / lambda), from rich
+// lambda 0.6 up to free air - linear in that over the 0.5-4.5 V output (a diesel runs lambda 1.5-8: a linear 0.6-1.6
+// range read every diesel as a sensor fault). Resolution at lambda 1: ~0.002 with the 10-bit ADC.
+double lambdaToVolts(double lam) { const double x = 1.0 - 1.0 / std::max(0.3, lam); return 0.5 + 4.0 * (x + 2.0 / 3.0) / (5.0 / 3.0); }
+double voltsToLambda(double v) { const double x = (v - 0.5) / 4.0 * (5.0 / 3.0) - 2.0 / 3.0; return x >= 0.999 ? 1000.0 : 1.0 / (1.0 - x); }
 } // namespace
 
 const SensorDef& sensorDef(int id) { return kDefs[clampv(id, 0, kSensorCount - 1)]; }
@@ -84,12 +90,12 @@ void SensorLayer::update(double dt, const SensorTruth& t, const EngineParams& p)
         int status = kStatusOk;
         double v = 0;
         if (d.analog) {
-            v = (i == kSnsO2) ? m : toVolts(d, m);
+            v = (i == kSnsO2) ? m : (i == kSnsWideband) ? lambdaToVolts(m) : toVolts(d, m);
             if (f == SensorFault::Open) v = 0.0;
             if (f == SensorFault::Short) v = 5.0;
             v = clampv(v, 0.0, 5.0);
             v = std::round(v / 5.0 * 1023.0) / 1023.0 * 5.0;       // 10-bit ADC
-            m = (i == kSnsO2) ? v : fromVolts(d, v);
+            m = (i == kSnsO2) ? v : (i == kSnsWideband) ? std::min(20.0, voltsToLambda(v)) : fromVolts(d, v);
             if (i == kSnsO2) { if (v > 1.2) status = kStatusHigh; }
             else if (v < 0.2) status = kStatusLow;
             else if (v > 4.8) status = kStatusHigh;

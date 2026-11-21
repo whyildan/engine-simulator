@@ -220,11 +220,20 @@ struct Calibration {
     float pilotMaxRpm;      // rpm: no pilot above
     // exhaust gas recirculation (Package 4b): valve opening over rpm x fuel, only with a warm engine
     Table2D egrMap;         // % over rpm x fuel mg/stroke
+    // common rail (D2): rail pressure target, bar over rpm x fuel mg/stroke
+    Table2D railMap;
+    // more injections (D1, common rail only): a second pilot ahead of the first, a post injection after the main
+    float pilot2Mg;         // mg (0 = off)
+    float pilot2DwellUs;    // us from its end to the first pilot's start
+    float postMg;           // mg (0 = off), taken out of the demand like the pilots
+    float postDwellUs;      // us from the end of the main injection to its start
+    float postMaxRpm;       // used up to here (and above the idle)
     float egrMinEct;        // C
+    float egrMinLambda;     // EGR is held back below this lambda (fresh air per stroke over the fuel)
 };
 
 // table identities (UI / files)
-enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalLtft, kCalBoostTarget, kCalVtc, kCalDieselFuel, kCalSoi, kCalEgr, kCalTableCount };
+enum CalTableId : int { kCalVeMap, kCalVeTps, kCalLambda, kCalIgnition, kCalLtft, kCalBoostTarget, kCalVtc, kCalDieselFuel, kCalSoi, kCalEgr, kCalRail, kCalTableCount };
 enum CalCurveId : int { kCalCrankAfr, kCalWarmup, kCalAccel, kCalIatFuel, kCalIatSpark, kCalEctSpark, kCalDeadTime,
                         kCalIdleTarget, kCalDbwMap, kCalBoostGear, kCalTcSlip, kCalDwell, kCalTqGear, kCalGearRev,
                         kCalGearSpark, kCalFlexFuel, kCalFlexSpark, kCalFlexCold, kCalFlexKnock, kCalGlowPreheat, kCalCurveCount };

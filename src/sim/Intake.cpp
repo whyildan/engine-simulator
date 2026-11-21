@@ -243,6 +243,21 @@ void IntakeSystem::stepAir(double dt, double pedal, double rpm, bool fuelEnabled
         }
     }
 
+    // diesel (D4): the intake ports take the plenum's temperature (+15 K from the warm head, as they start), so the charge
+    // the cylinders draw follows the boost / intercooler / EGR mix. (The port nodes are isothermal and otherwise stay at
+    // ambient + 15 K: the plenum's temperature never reached the cylinders - an EGR cooler, or hot EGR, changed nothing.
+    // Petrol engines keep that behaviour for now: their base maps and calibrations were measured with it.)
+    if (isDiesel(p_)) {
+        for (int i = 0; i < n; ++i) {
+            GasNode& g = ports_[i];
+            const GasNode& src = inlets_[p_.itb ? i : 0];
+            const double pNow = g.p(), m0 = g.m;
+            g.T += (src.T + 15.0 - g.T) * std::min(1.0, dt / 0.05);
+            g.setPressure(pNow);
+            if (m0 > 1e-12) { const double sc = g.m / m0; g.mf *= sc; g.mb *= sc; }
+        }
+    }
+
     airFlow_ = totalAir;
     fuelFlow_ = totalFuel / dt;
     fuelFlowAvg_ += (fuelFlow_ - fuelFlowAvg_) * (1.0 - std::exp(-dt / 0.3));

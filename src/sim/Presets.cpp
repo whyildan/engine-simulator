@@ -80,6 +80,8 @@ static EngineParams base() {
     p.fuelType = 2; p.flexSensor = 1;   // premium RON 95 (kFuelPremium95), flex fuel sensor fitted
     p.dieselInjRate = 40; p.dieselMaxFuel = 40; p.soiBase = 4; p.soiAdvance = 8; p.glowPlugs = 0;   // (diesel presets only)
     p.egrValveDia_mm = 0; p.vgt = 0; p.vgtMinArea = 0.3f;
+    p.egrCooler = 0; p.egrCoolerEff = 0.85f;
+    p.dieselInjSystem = 0; p.railMaxBar = 1600; p.nozzleHoles = 7; p.nozzleHoleDia_mm = 0.12f;
     p.emapSensor = 1; p.widebandPos = 1; p.egtPerCyl = 0; p.egtPostTurbo = 1;
     p.refuelType = 7; p.refuelLitres = 20;   // E85
 
@@ -267,6 +269,10 @@ static const char* kNames[] = {
     "Rotary 2-rotor 1.3L bridge port (brap idle)",
     "I4 1.9 turbo diesel (TDI-style)",
     "1-cyl 250 two-stroke (MX-style)",
+    "I4 2.0 common rail diesel (EA189-style)",
+    "I6 5.9 inline-pump truck diesel (6BT-style)",
+    "V8 6.6 common rail diesel (Duramax L5P-style)",
+    "1-cyl 0.46 air-cooled diesel (Hatz 1B40-style)",
 };
 
 int presetCount() { return (int)(sizeof(kNames) / sizeof(kNames[0])); }
@@ -584,6 +590,73 @@ EngineParams makePreset(int idx) {
         p.tsPipe = 1; p.tsPipeRpm = 8000; p.primaryLen_mm[0] = 150;
         p.sweepStartRpm = 3000; p.sweepEndRpm = 9500;
         break;
+    // ---- more diesels (D11). Bore x stroke, compression, valvetrain, induction, injection system and ratings from
+    //      the sources named; rod lengths, injector rates / nozzles, fuel quantities and the timing / boost / EGR set
+    //      points are chosen (calibration starting points sized from the rated torque - see docs/ECU_PLAN.md D11)
+    case 26: // VW EA189 2.0 TDI common rail, 103 kW (VW SSP 826803: 81 x 95.5 mm, 16.5:1, DOHC 4 valves - a toothed
+             // belt drives one camshaft, spur gears the other -, piezo injectors, 230-1800 bar, VTG turbo, EGR;
+             // 103 kW at 4000 rpm, 320 Nm at 1750-2500 rpm). Eight-hole nozzles (Wikipedia, EA189); hole size chosen.
+        p = makePreset(24);
+        p.bore_mm = 81; p.stroke_mm = 95.5f; p.rod_mm = 144; p.compression = 16.5f;
+        p.intakeValves = 2; p.exhaustValves = 2; p.intakeValveDia_mm = 27; p.exhaustValveDia_mm = 24;
+        p.intakeDuration = 230; p.exhaustDuration = 232; p.intakeLift_mm = 8.5f; p.exhaustLift_mm = 8.5f;
+        p.dieselInjSystem = 1; p.railMaxBar = 1800; p.nozzleHoles = 8; p.nozzleHoleDia_mm = 0.11f;
+        p.dieselMaxFuel = 62; p.soiBase = 2; p.soiAdvance = 8; p.glowPlugs = 2;
+        p.vgt = 1; p.vgtMinArea = 0.12f; p.turbineAR = 0.8f; p.compFlow_gs = 190; p.wastegateBar = 1.5f; p.intercooler = 1; p.turboInertia = 0.06f; p.chargeVolume_L = 2.8f;
+        p.egrValveDia_mm = 28; p.egrCooler = 1; p.egrCoolerEff = 0.85f;
+        p.revLimit = 5000; p.idleTargetRpm = 800; p.flywheel = 0.15f;
+        p.sweepStartRpm = 1000; p.sweepEndRpm = 4900;
+        break;
+    case 27: // Cummins 6BT 5.9 12-valve with the Bosch P7100 inline pump (Dieselhub / Drivingline: 102 x 120 mm, 17.0:1,
+             // OHV 2 valves, cam in the block; wastegated turbo, air-to-air intercooler; 1996-98 manual 215 hp at
+             // 2600 rpm, 440 lb-ft at 1600; static timing 12 deg BTDC - Diesel World). No glow plugs (an intake grid
+             // heater, not modelled).
+        p = makePreset(24);
+        p.cylinders = 6; p.layout = Layout::Inline; applyLayoutDefaults(p);
+        p.bore_mm = 102; p.stroke_mm = 120; p.rod_mm = 192; p.compression = 17.0f;
+        p.intakeValves = 1; p.exhaustValves = 1; p.intakeValveDia_mm = 46; p.exhaustValveDia_mm = 42;
+        p.intakeDuration = 230; p.exhaustDuration = 240; p.intakeLift_mm = 11; p.exhaustLift_mm = 11;
+        p.dieselInjSystem = 0; p.dieselInjRate = 28; p.dieselMaxFuel = 74; p.soiBase = 12; p.soiAdvance = 0; p.glowPlugs = 0;
+        p.vgt = 0; p.turbineAR = 0.45f; p.compFlow_gs = 260; p.wastegateBar = 1.3f; p.intercooler = 1; p.turboInertia = 0.4f; p.chargeVolume_L = 8.0f;
+        p.egrValveDia_mm = 0;
+        p.header = HeaderType::Log; p.primaryDia_mm = 45; p.collectorDia_mm = 65; p.pipeDia_mm = 89;
+        p.revLimit = 2900; p.idleTargetRpm = 750; p.flywheel = 0.9f; p.muffler = Muffler::Turbo;
+        p.sweepStartRpm = 900; p.sweepEndRpm = 2800;
+        break;
+    case 28: // Duramax L5P 6.6 V8 (WardsAuto / Dieselhub / Wikipedia: 103 x 99 mm, 16.0:1, pushrod OHV with four valves
+             // per cylinder, Denso HP4 common rail 2000 bar, electronically actuated VGT without a wastegate; 445 hp
+             // at 2800 rpm, 910 lb-ft at 1600 - 2017-23)
+        p = makePreset(24);
+        p.cylinders = 8; p.layout = Layout::V; p.bankAngle = 90; applyLayoutDefaults(p);
+        for (int i = 0; i < 8; ++i) p.bank[i] = (i % 2 == 0) ? 0 : 1;
+        p.bore_mm = 103; p.stroke_mm = 99; p.rod_mm = 162; p.compression = 16.0f;
+        p.intakeValves = 2; p.exhaustValves = 2; p.intakeValveDia_mm = 32; p.exhaustValveDia_mm = 29;
+        p.intakeDuration = 232; p.exhaustDuration = 236; p.intakeLift_mm = 10; p.exhaustLift_mm = 10;
+        p.dieselInjSystem = 1; p.railMaxBar = 2000; p.nozzleHoles = 8; p.nozzleHoleDia_mm = 0.14f;
+        p.dieselMaxFuel = 110; p.soiBase = 2; p.soiAdvance = 8; p.glowPlugs = 2;
+        p.vgt = 1; p.vgtMinArea = 0.12f; p.turbineAR = 1.0f; p.compFlow_gs = 650; p.wastegateBar = 1.8f; p.intercooler = 1; p.turboInertia = 0.45f; p.chargeVolume_L = 9.0f;
+        p.egrValveDia_mm = 35; p.egrCooler = 1; p.egrCoolerEff = 0.85f;
+        p.header = HeaderType::Log; p.primaryDia_mm = 45; p.collectorDia_mm = 65; p.pipeDia_mm = 102;
+        p.revLimit = 3400; p.idleTargetRpm = 680; p.flywheel = 0.6f; p.muffler = Muffler::Turbo;
+        p.sweepStartRpm = 1000; p.sweepEndRpm = 3300;
+        break;
+    case 29: // Hatz 1B40 single (Hatz B-series data sheet 2022: 88 x 76 mm, 0.462 L, 20.5:1, direct injection, air-cooled,
+             // one cam working the injection pump and - through rockers - the valves; 7.3 kW at 3600 rpm). Static
+             // timing taken from the similar Yanmar L100 (15.5 deg BTDC, its spec sheet); no glow plugs.
+        p = makePreset(24);
+        p.cylinders = 1; p.layout = Layout::Inline; applyLayoutDefaults(p);
+        p.bore_mm = 88; p.stroke_mm = 76; p.rod_mm = 122; p.compression = 20.5f;
+        p.intakeValves = 1; p.exhaustValves = 1; p.intakeValveDia_mm = 36; p.exhaustValveDia_mm = 31;
+        p.intakeDuration = 228; p.exhaustDuration = 232; p.intakeLift_mm = 8; p.exhaustLift_mm = 8;
+        applyInductionDefaults(p, Induction::Natural);
+        p.vgt = 0; p.intercooler = 0;
+        p.dieselInjSystem = 0; p.dieselInjRate = 15; p.dieselMaxFuel = 21; p.soiBase = 6; p.soiAdvance = 6; p.glowPlugs = 0;
+        p.egrValveDia_mm = 0;
+        p.header = HeaderType::Collector; p.primaryLen_mm[0] = 300; p.primaryDia_mm = 30; p.collectorDia_mm = 32; p.pipeDia_mm = 32;
+        p.muffler = Muffler::Chambered; p.tailpipeLen_mm = 100; p.cat = 0; p.resonator = 0;
+        p.revLimit = 3700; p.idleTargetRpm = 1200; p.flywheel = 0.12f;
+        p.sweepStartRpm = 1500; p.sweepEndRpm = 3600;
+        break;
     case 20: // centrifugal supercharged V6
         p = makePreset(3);
         applyInductionDefaults(p, Induction::Supercharger, Supercharger::Centrifugal);
@@ -607,6 +680,10 @@ EngineParams makePreset(int idx) {
             {20, CamLayout::SOHC, CamDrive::Belt, Cooling::Liquid},   // on the V6 3.5
             {21, CamLayout::DOHC, CamDrive::Belt, Cooling::Liquid},   // I5 2.5
             {24, CamLayout::SOHC, CamDrive::Belt, Cooling::Liquid},   // 1.9 turbo diesel, two valves per cylinder
+            {26, CamLayout::DOHC, CamDrive::Belt, Cooling::Liquid},   // EA189 (belt to one cam, gears to the other)
+            {27, CamLayout::OHV, CamDrive::Gears, Cooling::Liquid},   // 6BT (cam in the block; gear drive chosen)
+            {28, CamLayout::OHV, CamDrive::Gears, Cooling::Liquid},   // L5P (pushrod; gear drive chosen)
+            {29, CamLayout::OHV, CamDrive::Gears, Cooling::Air},      // Hatz single cam system (gears chosen)
         };
         for (const Build& b : kBuild)
             if (b.preset == idx) { p.camLayout = b.cam; p.camDrive = b.drive; p.cooling = b.cool; }

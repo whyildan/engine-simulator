@@ -181,6 +181,24 @@ void App::sectionEngineControl() {
                  "dwell above 200 us). Too short a dwell: the pilot has not lit yet and does nothing.");
             ImGui::Text("Now: pilot %.1f mg at %.1f deg BTDC, main %.1f mg at %.1f deg; main delay after the pilot %.1f deg",
                         tel_.pilotMg, tel_.pilotSoi, tel_.dieselFuelMg, tel_.soi, tel_.mainDelayDeg);
+            if (p_.dieselInjSystem == 1) {
+                ImGui::SeparatorText("More injections (common rail)");
+                ImGui::PushItemWidth(-260);
+                ImGui::SliderFloat("Second pilot", &c.pilot2Mg, 0, 5, "%.1f mg (0 = off)");
+                ImGui::SliderFloat("Its dwell", &c.pilot2DwellUs, 0, 2000, "%.0f us");
+                ImGui::SliderFloat("Post injection", &c.postMg, 0, 10, "%.1f mg (0 = off)");
+                ImGui::SliderFloat("Post dwell after the main", &c.postDwellUs, 0, 2000, "%.0f us");
+                ImGui::SliderFloat("Post up to", &c.postMaxRpm, 0, 6000, "%.0f rpm");
+                ImGui::PopItemWidth();
+                Help("Post: a small injection right after the main (within a few degrees). It burns in the main's hot gas;\n"
+                     "engines use it against soot (Sandia measured 16-55 %% less). This 0-D model burns it fully but does not\n"
+                     "resolve the mixing that oxidises the soot - its soot effect here is small.");
+                ImGui::Text("Now: second pilot %.1f mg, post %.1f mg at %.1f deg ATDC", tel_.pilot2Mg, tel_.postMg, -tel_.postSoi);
+                ImGui::SeparatorText("Rail pressure: bar over rpm x fuel mg/stroke");
+                OpPoint ro; ro.valid = tel_.running; ro.x = tel_.rpm; ro.y = tel_.dieselFuelMg;
+                tabEd_[kCalRail].draw("rail", c.railMap, calTableInfo(kCalRail), ro, nullptr, ref ? &ref->railMap : nullptr, refName_.c_str());
+                ImGui::Text("Now: rail %.0f bar (target %.0f)", tel_.railBar, tel_.railTargetBar);
+            }
             ImGui::SeparatorText("Glow plugs");
             ImGui::SliderFloat("Post-heat at most", &c.afterglowTime, 0, 600, "%.0f s");
             ImGui::SliderFloat("Post-heat until coolant", &c.afterglowEct, 0, 100, "%.0f C");
@@ -193,6 +211,9 @@ void App::sectionEngineControl() {
             if (p_.egrValveDia_mm <= 0) ImGui::TextDisabled("No EGR valve fitted (Engine Setup > Intake / fuel).");
             ImGui::PushItemWidth(-260);
             ImGui::SliderFloat("EGR only above coolant", &c.egrMinEct, 0, 100, "%.0f C");
+            ImGui::SliderFloat("EGR held back below lambda", &c.egrMinLambda, 1.0f, 3.0f, "%.2f");
+            Help("An air-mass floor: when the measured fresh air per stroke falls below this lambda for the fuel, a trim closes\n"
+                 "the valve (diesel ECUs run their EGR on an air-mass target).");
             ImGui::PopItemWidth();
             {
                 OpPoint eo; eo.valid = tel_.running; eo.x = tel_.rpm; eo.y = tel_.dieselFuelMg;

@@ -1,4 +1,5 @@
 #include "sim/Engine.h"
+#include "sim/Injector.h"
 #include "sim/Scavenge.h"
 #include "sim/Flame.h"
 #include <cstdlib>
@@ -297,7 +298,8 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     t.v[kSnsTPS] = intake.throttlePosition() * 100.0;
     t.v[kSnsAPP] = clampv(pedal, 0.0, 1.0) * 100.0;
     t.v[kSnsMAP] = mapPa / 1000.0;
-    t.v[kSnsMAF] = std::max(0.0, intake.airFlow()) * 1000.0;
+    t.v[kSnsMAF] = intake.airFlow() * 1000.0;   // (signed: a hot-film meter that senses reverse flow - clipping the
+                                                 //  backflow of the pulses at zero made it read ~8 % high at low rpm)
     t.v[kSnsIAT] = isBoosted(p_) ? intake.inlet(0).T - 273.15 : thermal.iatC;
     t.v[kSnsECT] = thermal.coolantC;
     // the lambda sensors read the gas in the pipe (collector, or downpipe after a turbo): misfires, fresh air
@@ -316,6 +318,7 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     }
     t.v[kSnsEMAP] = emapKPa_;
     t.v[kSnsEGT2] = egtPost_ - 273.15;
+    t.v[kSnsRail] = railBar_;
     for (int i = 0; i < nPorts_ && i < kMaxCyl; ++i) t.egtCyl[i] = egtCylProbe_[i] - 273.15;
     t.v[kSnsCKP] = ckpRpm_;
     t.in.crankSync = crankSync_;
@@ -389,109 +392,144 @@ void Engine::injectPort(int port, double rpm, double share) {
     intake.injectPulse(port, pw, cyc, flow, dead);
 }
 
-// diesel (Package 4): the ECU's fuel quantity is injected straight into the cylinder from its start of injection at
-// the injector's rate; the injected fuel lights after the ignition delay (Hardenberg-Hase, integrated over the
-// changing charge state - Fuel.h); what was injected during the delay burns premixed, the rest in the mixing-
-// controlled diffusion and tail phases (Watson-type shapes, Fuel.h), never faster than it is injected. A charge
+// diesel (Package 4, D1 / D2): the ECU's injections - pilots, main, post - go straight into the cylinder, each from
+// its own start: a cam-driven pump at its constant rate, a common rail injector at the orifice flow of its nozzle
+// holes for the rail pressure against the chamber pressure, with its needle ramps (Injector.h). The fuel lights after
+// the ignition delay (Assanis, integrated over the changing charge state - Fuel.h). Pulses that start before any of
+// the cycle's fuel has lit share one delay (a group); a pulse that starts into a burning chamber gets its own, shorter
+// one (Fuel.h kPilotMainDelayDiv). Each group burns what was injected during its delay premixed, the rest in the
+// mixing-controlled diffusion and tail phases (Watson-type shapes), never faster than it is injected. A first charge
 // that has not lit by exhaust opening leaves unburned (a misfire: white smoke).
 void Engine::dieselStep(Cylinder& c, double dt, double phiPrev, double phi, double rpm, bool exOpen, bool fuelCut,
                         double& dm, double& dmf, double& dmb, double& dmbNew, double& dU) {
-    // start of the cycle's injections: the pilot (if any) first, the main quantity waits for its own start. (If the
-    // ECU switched the pilot on after its start angle had passed, the cycle starts at the main angle without it.)
-    if (exOpen) c.injStarted = false;
-    const bool atMain = crossed(phiPrev, phi, wrapPos(-ecu.cmd.soi, cycle_));
-    const bool pilot = ecu.cmd.pilotMg > 0 && !(atMain && !c.injStarted);
-    if (!c.injStarted && (crossed(phiPrev, phi, wrapPos(-(pilot ? ecu.cmd.pilotSoi : ecu.cmd.soi), cycle_)) || atMain)) {
-        c.injStarted = true;
-        const bool on = p_.ignition && !fuelCut && !failure && !ecu.cmd.syncLost;
-        const double qMain = on ? std::max(0.0, ecu.cmd.dieselFuelMg) * 1e-6 : 0.0;
-        const double qPilot = on && pilot ? ecu.cmd.pilotMg * 1e-6 : 0.0;
-        c.injLeft = pilot ? qPilot : qMain; c.mainPending = pilot ? qMain : 0.0; c.injDone = 0;
-        c.injPlanned = qMain + qPilot;
-        c.injRate = std::max(1.0, (double)p_.dieselInjRate) * 1e-3;   // mg/ms -> kg/s
-        c.idI = 0; c.idOpen = c.injPlanned > 0; c.dBurning = false; c.dBurned = 0; c.soiPhi = phi; c.ringKickPeak = 0; c.dpStep = 0;
-        c.dPre = c.dDiff = c.dTail = 0;
-        c.idOpen2 = c.main2 = false; c.idI2 = 0; c.dPre2 = 0; c.preMain = 0;
-        const double air = std::max(1e-9, c.m - c.mf - c.mb);
-        c.dPhiNow = c.injPlanned * fuel_.stoich / air;
+    if (exOpen) {
+        c.injStarted = false;
+        if (c.emisOpen) {   // the cycle's NO and soot leave with the exhaust (D3)
+            c.emisOpen = false;
+            emisNoMol_ += c.noMol; emisSoot_ += c.soot; emisGasKg_ += c.m;
+            c.noMol = 0; c.soot = 0;
+        }
     }
-    if (c.mainPending > 0 && atMain) {
-        c.injLeft += c.mainPending; c.mainPending = 0;
-        // the pilot is already burning: the main injection gets its own ignition delay (Busch et al., Sandia
-        // SAND2015-2001: the pilot's heat release shortens it - and it is shorter here too, through the delay's
-        // temperature term); until it lights its fuel waits
-        if (c.dBurning) { c.idOpen2 = true; c.idI2 = 0; c.preMain = c.injDone; c.soc2Phi = phi; }
+    const ActuatorCommands& k = ecu.cmd;
+    // ---- the cycle's schedule is taken at the first start angle passed (pulses whose angle had already gone by when
+    //      the ECU added them are left out: e.g. a pilot switched on late - the cycle starts at the main)
+    if (!c.injStarted) {
+        Cylinder::DieselPulse sched[Cylinder::kMaxPulses];
+        int n = 0;
+        auto add = [&](double soi, double mg, bool main) {
+            if (mg > 0 && n < Cylinder::kMaxPulses) { sched[n] = Cylinder::DieselPulse{}; sched[n].soi = soi; sched[n].q = mg * 1e-6; sched[n].main = main; ++n; }
+        };
+        add(k.pilot2Soi, k.pilot2Mg, false);
+        add(k.pilotSoi, k.pilotMg, false);
+        add(k.soi, k.dieselFuelMg, true);
+        add(k.postSoi, k.postMg, false);
+        int first = -1;
+        for (int i = 0; i < n && first < 0; ++i)
+            if (crossed(phiPrev, phi, wrapPos(-sched[i].soi, cycle_))) first = i;
+        if (n == 0 && crossed(phiPrev, phi, wrapPos(-k.soi, cycle_))) first = 0;   // (no fuel: the cycle still starts)
+        if (first >= 0) {
+            c.injStarted = true;
+            const bool on = p_.ignition && !fuelCut && !failure && !ecu.cmd.syncLost;
+            c.nPulse = 0;
+            if (on) for (int i = first; i < n; ++i) c.dPulse[c.nPulse++] = sched[i];
+            c.nGroup = 0; c.injDone = 0; c.injPlanned = 0;
+            for (int i = 0; i < c.nPulse; ++i) c.injPlanned += c.dPulse[i].q;
+            c.dBurning = false; c.dBurned = 0; c.soiPhi = phi; c.ringKickPeak = 0; c.dpStep = 0; c.mainOwnDelay = false;
+            c.emisOpen = true; c.noMol = 0; c.soot = 0;
+            const double air = std::max(1e-9, c.m - c.mf - c.mb);
+            c.dPhiNow = c.injPlanned * fuel_.stoich / air;
+        }
     }
-    if (c.injLeft > 0) {
-        const double q = std::min(c.injLeft, c.injRate * dt);
-        c.injLeft -= q; c.injDone += q;
+    // ---- pulses start at their angles and inject
+    const bool cr = p_.dieselInjSystem == 1;
+    const double fullFlow = cr ? nozzleFlow(p_, fuel_.density * 1000.0, railBar_ * 1e5, c.p) : 0.0;
+    for (int i = 0; i < c.nPulse; ++i) {
+        Cylinder::DieselPulse& u = c.dPulse[i];
+        if (!u.started) {
+            const bool first = i == 0;   // (the first pulse starts with the cycle, at the angle that started it)
+            if (!first && !crossed(phiPrev, phi, wrapPos(-u.soi, cycle_))) continue;
+            if (first && c.nGroup > 0) continue;
+            u.started = true; u.t = 0;
+            if (cr) u.dur = energizingFor(u.q, nozzleFlow(p_, kDieselDensityEcu, railBar_ * 1e5, kInjAssumedCylBar * 1e5));
+            // into a group still waiting to light, or a new one (after a burning group: its own, shorter delay)
+            int g = -1;
+            for (int j = c.nGroup - 1; j >= 0 && g < 0; --j) if (!c.dGroup[j].lit && c.dGroup[j].open) g = j;
+            if (g < 0 && c.nGroup < Cylinder::kMaxPulses) {
+                g = c.nGroup++;
+                c.dGroup[g] = Cylinder::DieselGroup{};
+                c.dGroup[g].startPhi = phi;
+                c.dGroup[g].afterBurn = c.dBurning;
+            }
+            u.group = g;
+            if (g >= 0) { c.dGroup[g].planned += u.q; c.dGroup[g].hasMain = c.dGroup[g].hasMain || u.main; }
+        }
+        // delivery
+        double q;
+        if (cr) {
+            q = fullFlow * needleOpen(u.t, u.dur) * dt;
+            if (needleClosed(u.t, u.dur)) q = 0;
+        } else q = std::min(std::max(0.0, u.q - u.done), std::max(1.0, (double)p_.dieselInjRate) * 1e-3 * dt);
+        u.t += dt;
+        if (q <= 0) continue;
+        u.done += q; c.injDone += q; injStepKg_ += q;
+        if (u.group >= 0) c.dGroup[u.group].done += q;
         dm += q; dmf += q;
         // the spray evaporates in the hot air: its latent heat comes out of the charge (rail fuel taken at 330 K)
         dU += q * (thermo::enthalpy(0.0, c.yb, 330.0) - fuel_.hvap);
     }
-    // ignition delay: integral of dt / tau over the charge state since the start of injection
-    if (c.idOpen && c.injDone > 0) {
-        if (exOpen) {   // never lit: the fuel leaves unburned
-            c.idOpen = false; c.misfired = true; c.burnEta = 0;
-            ++misfires; ++misfireCause[kMisLean];
-        } else {
-            // (Assanis correlation with the cetane factor - Fuel.h; the charge state now, integrated)
-            const double tauS = dieselDelayMs(c.dPhiNow, c.p * 1e-5, c.T, fuel_.cetane) * 1e-3;
-            // (cold: the charge alone lights only above the cold limit, otherwise a hot glow plug has to - Fuel.h)
-            if (c.T >= kDieselColdIgnK || glowC_ >= kGlowIgnC) c.idI += dt / tauS;
-            if (c.idI >= 1.0) {
-                c.idOpen = false; c.dBurning = true; c.socPhi = phi;
-                c.idDeg = wrapPos(phi - c.soiPhi, cycle_);
-                const double total = c.injPlanned;   // (with a pilot: the main quantity still to come counts)
-                const double air = std::max(0.0, c.m + dm - (c.mf + dmf) - (c.mb + dmb));
-                c.dPhi = std::min(0.85, total * fuel_.stoich / std::max(1e-12, air));
-                c.dPre = c.injDone;                     // injected during the delay: premixed
-                // (a pilot that lights before the main injection starts: the main burns on its own clock, below)
-                const double rest = c.mainPending > 0 ? 0.0 : std::max(0.0, total - c.injDone);   // still to come: diffusion and tail
-                c.dTail = rest * 0.6 * c.dPhi * c.dPhi;
-                c.dDiff = rest - c.dTail;
-                const thermo::Burn bp = thermo::burn(fuel_.molC, fuel_.molH, fuel_.molO, air / std::max(1e-12, total));
-                c.airPerFuel = bp.airUsed;
-                c.yNew = bp.products;
-                c.qTotal = std::max(0.0, fuel_.lhv - bp.energyLeft) * 0.97;   // J per kg of fuel burned (as the SI burn)
-                c.lambda = air / std::max(1e-12, total * fuel_.stoich);
-                c.fired = true; c.misfired = false; c.burnEta = 1.0;
-                fireTimer_ = 0;
-            }
+    // ---- ignition delays: one integral of dt / tau per group waiting to light
+    for (int g = 0; g < c.nGroup; ++g) {
+        Cylinder::DieselGroup& G = c.dGroup[g];
+        if (G.lit || !G.open || G.done <= 0) continue;
+        if (exOpen) {   // never lit: its fuel leaves unburned (the cycle's first charge: a misfire)
+            G.open = false;
+            if (g == 0) { c.misfired = true; c.burnEta = 0; ++misfires; ++misfireCause[kMisLean]; }
+            continue;
         }
-    }
-    // the main injection's own delay (after a burning pilot)
-    if (c.idOpen2) {
-        if (exOpen) c.idOpen2 = false;   // (never lit: its fuel leaves unburned)
-        else {
-            // (the main spray enters the pilot's burning zone: shorter than the bulk charge state gives - Fuel.h)
-            const double tauS = dieselDelayMs(c.dPhiNow, c.p * 1e-5, c.T, fuel_.cetane) * 1e-3 / kPilotMainDelayDiv;
-            if (c.T >= kDieselColdIgnK || glowC_ >= kGlowIgnC) c.idI2 += dt / tauS;
-            if (c.idI2 >= 1.0) {
-                c.idOpen2 = false; c.main2 = true;
-                c.idDegMain = wrapPos(phi - c.soc2Phi, cycle_);
-                c.soc2Phi = phi;
-                c.dPre2 = std::max(0.0, c.injDone - c.preMain);        // main fuel injected during its delay: premixed
-                const double rest = std::max(0.0, c.injPlanned - c.injDone);
-                c.dTail = rest * 0.6 * c.dPhi * c.dPhi;
-                c.dDiff = rest - c.dTail;
-            }
+        // (Assanis with the cetane factor - Fuel.h; a pulse into a burning chamber enters the burning zone: shorter)
+        double tauS = dieselDelayMs(c.dPhiNow, c.p * 1e-5, c.T, fuel_.cetane) * 1e-3;
+        if (G.afterBurn) tauS /= kPilotMainDelayDiv;
+        // (cold: the charge alone lights only above the cold limit - Fuel.h. D8: a hot glow plug lights the spray that
+        //  reaches it in parallel - its own delay at the tip temperature, capped at 1200 K (no shorter chemistry above),
+        //  and never under the ~1.5 ms the fuel takes to get there (Pastor et al., CMT-UPV) - Fuel.h glowPlugDelayS)
+        if (c.T >= kDieselColdIgnK) G.idI += dt / tauS;
+        if (glowC_ >= kGlowIgnC) G.idI += dt / glowPlugDelayS(c.dPhiNow, c.p * 1e-5, glowC_ + 273.15, fuel_.cetane);
+        if (G.idI < 1.0) continue;
+        G.lit = true; G.litPhi = phi;
+        if (!c.dBurning) {   // the cycle's first ignition: the burn's composition and energy for all its fuel
+            c.dBurning = true; c.socPhi = phi;
+            c.idDeg = wrapPos(phi - c.soiPhi, cycle_);
+            const double total = std::max(1e-12, c.injPlanned);
+            const double air = std::max(0.0, c.m + dm - (c.mf + dmf) - (c.mb + dmb));
+            c.dPhi = std::min(0.85, total * fuel_.stoich / std::max(1e-12, air));
+            const thermo::Burn bp = thermo::burn(fuel_.molC, fuel_.molH, fuel_.molO, air / total);
+            c.airPerFuel = bp.airUsed;
+            c.yNew = bp.products;
+            c.qTotal = std::max(0.0, fuel_.lhv - bp.energyLeft) * 0.97;   // J per kg of fuel burned (as the SI burn)
+            c.lambda = air / (total * fuel_.stoich);
+            c.fired = true; c.misfired = false; c.burnEta = 1.0;
+            fireTimer_ = 0;
+        } else if (G.hasMain && G.afterBurn) {
+            c.idDegMain = wrapPos(phi - G.startPhi, cycle_); c.mainOwnDelay = true;
         }
+        G.pre = G.done;                                    // injected during the delay: premixed
+        const double rest = std::max(0.0, G.planned - G.done);   // still to come: diffusion and tail
+        G.tail = rest * 0.6 * c.dPhi * c.dPhi;
+        G.diff = rest - G.tail;
     }
+    // ---- the burn: every lit group on its own clock
     if (c.dBurning) {
-        const double d = wrapPos(phi - c.socPhi, cycle_);
-        const double t = d / 125.0;
         const double cd3 = 0.055 / (1.0 + 0.5 * c.dPhi), ct3 = 3.7 * cd3 / (1.0 + 1.12 * c.dPhi);
-        double target;
-        if (c.main2 || c.idOpen2 || c.preMain > 0) {
-            // pilot + main on their own clocks: the pilot's premixed burn from the first start of combustion, the
-            // main's premixed, diffusion and tail from its own
-            const double t2 = c.main2 ? wrapPos(phi - c.soc2Phi, cycle_) / 125.0 : 0.0;
-            target = c.dPre * wiebeWave(0.75, 2.0, t);
-            if (c.main2) target += c.dPre2 * wiebeWave(0.75, 2.0, t2) + c.dDiff * wiebeWave(cd3, 1.75, t2) + c.dTail * wiebeWave(ct3, 2.5, t2);
-            target = std::min(target, c.main2 ? c.injDone : c.preMain);   // the main fuel waits for its own ignition
-        } else
-            target = c.dPre * wiebeWave(0.75, 2.0, t) + c.dDiff * wiebeWave(cd3, 1.75, t) + c.dTail * wiebeWave(ct3, 2.5, t);
+        double target = 0;
+        bool burning = false;
+        for (int g = 0; g < c.nGroup; ++g) {
+            const Cylinder::DieselGroup& G = c.dGroup[g];
+            if (!G.lit) { if (G.open && G.done > 0) burning = true; continue; }
+            const double d = wrapPos(phi - G.litPhi, cycle_), t = d / 125.0;
+            target += std::min(G.done, G.pre * wiebeWave(0.75, 2.0, t) + G.diff * wiebeWave(cd3, 1.75, t) + G.tail * wiebeWave(ct3, 2.5, t));
+            if (d < 170.0) burning = true;
+        }
+        for (int i = 0; i < c.nPulse; ++i) if (!c.dPulse[i].started) burning = true;   // (a post injection still to come)
         target = std::min(target, c.injDone);                       // nothing burns before it is injected
         double fb = std::min(std::max(0.0, target - c.dBurned), std::max(0.0, c.mf + dmf));
         c.dBurned += fb;
@@ -499,8 +537,47 @@ void Engine::dieselStep(Cylinder& c, double dt, double phiPrev, double phi, doub
         dmf -= fb;
         dmb += fb * (1.0 + c.airPerFuel);
         dmbNew += fb * (1.0 + c.airPerFuel);
-        if (exOpen || (d > 170.0 && !c.idOpen2 && (!c.main2 || wrapPos(phi - c.soc2Phi, cycle_) > 170.0))) c.dBurning = false;   // what is left goes out with the exhaust
+        if (exOpen || !burning) c.dBurning = false;   // what is left goes out with the exhaust
     }
+    emissionsStep(c, dt, dm, dmf, dmb);
+}
+
+// diesel emissions (D3), for the readouts - the thermodynamics are not changed by them.
+// NO: Zeldovich, Heywood's initial formation rate d[NO]/dt = 6e16 / T^0.5 exp(-69090 / T) [O2]^0.5 [N2] (mol/cm3 s),
+// in the burned gas of this cycle as one zone: the mixing-controlled flame's products at a near-stoichiometric local
+// lambda (kNoZoneLambda, chosen), at the adiabatic flame temperature over the unburned charge (isentropic from intake
+// closing - so it cools as the piston expands it), diluted by the EGR / residual gas in the charge.
+// Soot: Hiroyasu's two-step model as in Tao et al. (JSME Int. J. B 48(4), 2005, eqs. 2-3): formation
+// A_f m_fuel p^0.5 exp(-E_f / R T), oxidation A_o m_soot X_O2 p^1.8 exp(-E_o / R T), E_f 80 kJ/mol, E_o 120 kJ/mol (the
+// original values); A_f, A_o are calibration constants by nature (Fuel.h). Both leave with the exhaust at its opening.
+void Engine::emissionsStep(Cylinder& c, double dt, double dm, double dmf, double dmb) {
+    (void)dm; (void)dmb;
+    if (!c.emisOpen) return;
+    const double air = std::max(1e-9, c.m - c.mf - c.mb);
+    const double pBar = std::max(1e-3, c.p * 1e-5);
+    // unburned (air) zone: isentropic from intake closing; the burned zone above it by the flame's temperature rise
+    const double tu = std::max(300.0, c.tIvc * std::pow(std::max(1e-3, c.p / std::max(1.0, c.pIvc)), (kZoneGamma - 1.0) / kZoneGamma));
+    const double dil = c.dilIvc;   // EGR + residual gas per kg of air (at intake closing)
+    const double f = 1.0 / (kNoZoneLambda * fuel_.stoich);
+    const double tz = tu + f * fuel_.lhv * 0.97 / ((1.0 + f + dil) * kZoneCp);
+    c.tZone = tz;
+    // zone composition (per kg of air: 34.5 mol, O2 7.25, N2 27.3; the diluent ~29 g/mol, 3/4 of it N2)
+    const double nDil = dil / 0.029, nTot = 34.5 + nDil;
+    const double xO2 = 7.25 * (1.0 - 1.0 / kNoZoneLambda) / nTot, xN2 = (27.3 + 0.75 * nDil) / nTot;
+    const double conc = c.p / (8.314 * tz) * 1e-6;   // mol/cm3
+    const double burnedGas = c.dBurned * (1.0 + kNoZoneLambda * fuel_.stoich);   // kg in the zone
+    if (burnedGas > 0) {
+        const double rate = 6e16 / std::sqrt(tz) * std::exp(-69090.0 / tz) * std::sqrt(xO2 * conc) * (xN2 * conc);   // mol/cm3 s
+        const double vz = burnedGas * kR * tz / std::max(1.0, c.p) * 1e6;   // cm3
+        c.noMol += rate * vz * dt;
+    }
+    // soot: formed from the fuel vapour not yet burned at the flame zone's temperature, oxidised by the charge's oxygen
+    // as it mixes out into the hot bulk gas - at the bulk temperature (what a late post injection's heat raises)
+    const double bulkO2 = 0.21 * air / std::max(1e-9, c.m);   // (oxygen of the air still unburned, mole share ~ mass share)
+    const double form = kSootAf * std::max(0.0, c.mf) * std::sqrt(pBar) * std::exp(-80000.0 / (8.314 * std::max(300.0, c.T)));
+    const double oxid = kSootAo * c.soot * bulkO2 * std::pow(pBar, 1.8) * std::exp(-120000.0 / (8.314 * std::max(300.0, c.T)));
+    c.soot = std::max(0.0, c.soot + (form - oxid) * dt);
+    (void)dmf;
 }
 
 // reed petal (crankcaseStep): first mode (Collins 1994), and calibrated static stiffness / flow damping
@@ -916,6 +993,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
         double rho = kPatm / (kR * ambT_);
         c.ve = air / (rho * geom_.Vd);
         c.pIvc = c.p; c.tIvc = c.T; c.vIvc = c.V;
+        c.dilIvc = air > 0 ? c.mb / air : 0.0;
         c.lwI = 0; c.lwOpen = true; c.tEnd = c.T; c.knockCycle = 0; c.knockPCycle = 0;
     }
     c.prevIntakeOpen = trapOpen;
@@ -1219,8 +1297,39 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     // (the fresh air averaged the same way: the instantaneous flow stops between intake pulses, and a share taken
     // from it read 100 % EGR there - overheating the plenum and inflating the reported rate)
     egrAir_ += (std::max(0.0, intake.airFlow()) - egrAir_) * std::min(1.0, dt / 0.1);
-    // uncooled: the plenum takes the flow-weighted mix of the fresh charge and the gas at the exhaust temperature
-    intake.setEgr(egrRate(), std::max(400.0, egtAvg));
+    // the plenum takes the flow-weighted mix of the fresh charge and the EGR gas: at the exhaust temperature, or out of
+    // a water-cooled EGR cooler at T_in - eff (T_in - T_coolant) (D4: the effectiveness definition of US 8725386 eq. 2;
+    // clean coolers measure ~0.87-0.97 - US 7281529 - and fouling takes 20-30 % off - Hoard et al., SAE 2008-01-2475)
+    {
+        const double tIn = std::max(400.0, egtAvg), tCool = thermal.coolantC + 273.15;
+        egrGasT_ = p_.egrCooler ? tIn - clampv((double)p_.egrCoolerEff, 0.0, 0.98) * std::max(0.0, tIn - tCool) : tIn;
+        intake.setEgr(egrRate(), egrGasT_);
+    }
+    // ---- common rail (D2): the rail pressure follows the ECU's target through the pressure control (first order,
+    //      0.05 s - chosen); the high-pressure pump builds pressure only as it turns (full from ~600 rpm - chosen: a
+    //      cranking engine reaches part of the full pressure). Pump drive power: hydraulic power of what it delivers
+    //      (the injected fuel x 1.3 for leakage and the control's spill - chosen) over a pump efficiency of 0.6
+    //      (chosen) - a few kW at full load, as a three-piston pump at ~1600 bar takes "up to 5 kW" (kfz-tech.de)
+    if (diesel_ && p_.dieselInjSystem == 1) {
+        const double cap = p_.railMaxBar * clampv(rpm / 600.0, 0.0, 1.0);
+        railBar_ += (std::min(ecu.cmd.railBar, cap) - railBar_) * std::min(1.0, dt / 0.05);
+        const double hyd = injStepKg_ / std::max(1e-9, dt) / (fuel_.density * 1000.0) * railBar_ * 1e5 * 1.3 / 0.6;
+        pumpKw_ += (hyd * 1e-3 - pumpKw_) * std::min(1.0, dt / 0.05);
+    } else { railBar_ = 0; pumpKw_ = 0; }
+    injStepKg_ = 0;
+    // ---- diesel emissions (D3): what the cylinders let out over the last ~0.5 s
+    if (diesel_) {
+        emisT_ += dt;
+        if (emisT_ >= 0.5) {
+            if (emisGasKg_ > 0) {
+                noxPpm_ = emisNoMol_ / (emisGasKg_ / 0.0289) * 1e6;
+                sootMgM3_ = emisSoot_ * 1e6 / (emisGasKg_ * 287.0 * 298.15 / 1e5);
+                fsn_ = fsnFromSootMgM3(sootMgM3_);
+            } else { noxPpm_ = 0; sootMgM3_ = 0; fsn_ = 0; }
+            noxGs_ = emisNoMol_ * 46.0 / emisT_;   // NOx counted as NO2 (the regulations' convention), g/s
+            emisNoMol_ = emisSoot_ = emisGasKg_ = 0; emisT_ = 0;
+        }
+    }
     intake.stepAir(dt, diesel_ ? 1.0 : pedal, rpm, p_.ignition && !fuelCut);   // a diesel has no throttle
 
     // ---- cylinders
@@ -1306,7 +1415,7 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
                            frictionScale(p_);
     // (+ a constant drag: a car engine's accessories, ~4 N m; a two-stroke bike engine has a flywheel magneto and no
     //  accessories - Blair's measured friction is the whole engine's)
-    const double accessory = twoStroke_ ? 0.0 : 4.0;
+    const double accessory = (twoStroke_ ? 0.0 : 4.0) + pumpKw_ * 1e3 / std::max(30.0, omega_);   // (+ the common rail pump)
     double tFric = (fmepAll * perRev / (2.0 * kPi) + accessory) * std::tanh(omega_ / 3.0);
     if (failure) tFric += 600.0 * std::tanh(omega_ / 3.0);     // broken parts: the engine locks up
     lastFricW_ = tFric * omega_;
