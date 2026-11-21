@@ -96,6 +96,51 @@ Bobot: **S** kecil (beberapa jam) · **M** sedang (±1 sesi) · **L** besar (beb
 
 Tiap paket ditutup dengan tes sendiri dan regresi penuh, seperti fase-fase sebelumnya.
 
+### Yang belum / bisa disempurnakan — diesel dan 2-tak (dicatat 2026-11-21)
+
+Dicatat atas permintaan, belum dikerjakan. Dicek terhadap kode saat ini (commit 1f192d6). **Belum ada** = fitur tidak ada
+di kode; **dipilih / kalibrasi** = ada, tetapi angkanya bukan dari sumber; **akurasi** = ada, hasilnya masih menyimpang
+dari data. Bobot seperti tabel di atas.
+
+**Diesel (paket 4)**
+
+| # | Hal | Jenis | Keadaan sekarang | Bobot |
+|---|---|---|---|---|
+| D1 | Injeksi multi-pulsa: post-injection (dan lebih dari satu pilot) | belum ada | hanya satu pilot + main | M |
+| D2 | Bentuk laju injeksi dan tekanan rail common rail | belum ada | laju injeksi konstan, tanpa tekanan rail / pompa | M |
+| D3 | Emisi NOx dan jelaga (asap) | belum ada | EGR hanya mengencerkan; pembatas asap memakai λ, bukan jelaga | L |
+| D4 | Pendingin EGR | belum ada | EGR panas: suhu intake ±135 °C di 1500 rpm pedal 30 % | S–M |
+| D5 | Efisiensi turbin VGT tergantung posisi vane (W&E pers. 48) | belum ada | efisiensi turbin tetap model lama | M |
+| D6 | Pembatas asap mendarat di λ 1.30–1.34 (target 1.38) | akurasi | estimasi udara ECU sedikit optimis | S |
+| D7 | Korelasi tunda masih menyalakan pada CR rendah (mis. 9.5:1) | akurasi | batas korelasi HH / Assanis | S |
+| D8 | Post-heat busi pijar belum memendekkan tunda / mengurangi asap putih | belum ada | post-heat hanya menjamin penyalaan | S |
+| D9 | Konstanta pilihan: batas start dingin 815 K, peluruhan ringing 1 ms, pembagi tunda main 2.2, dwell pilot idle, f_vgt, peta EGR / boost | dipilih / kalibrasi | dikalibrasi ke perilaku bersumber, bukan diukur | — |
+| D10 | Porsi premixed Watson (SAE 800029) dan faktor BRPM WAVE | tidak dipakai | sumber tidak bisa diverifikasi — dibiarkan | — |
+| D11 | Hanya satu preset diesel (24, I4 1.9 TDI-style) | belum ada | — | S |
+
+**2-tak (paket 5)**
+
+| # | Hal | Jenis | Keadaan sekarang | Bobot |
+|---|---|---|---|---|
+| T1 | Delivery ratio masih ±0.1–0.15 di bawah terukur (125 Blair: 1.10 / 1.03 vs 1.26 / 1.15); TE putaran rendah 0.41 vs 0.50 | akurasi | intake (karburator + reed + karter) belum gas-dinamika 1D | L |
+| T2 | Tenaga preset 25 ±31 N·m vs CR250R 51 N·m (Honda) / YZ250 41.5 N·m (MXA) | akurasi | gabungan T1, T3, T5 | — |
+| T3 | Pipa tala memuncak terlalu tinggi (tala 8000 → puncak 9000 rpm) | akurasi | suhu gas pipa / proporsi desain Blair | S–M |
+| T4 | Panjang saluran transfer 1.5 × langkah | dipilih | parameter (tab Ports); Blair tidak memberi dimensinya | — |
+| T5 | Periode bakar per ruang bakar (41° preset 25) | dipilih | dari data Blair; squish / bentuk ruang bakar tidak dihitung dari geometri | M |
+| T6 | Power valve (katup knalpot yang menurunkan timing buang di putaran rendah) | belum ada | — | M |
+| T7 | Oli campur (premix): rasio oli, efek kecil ke AFR / LHV, asap | belum ada | — | S |
+| T8 | Intake port piston dan rotary / disc valve (selain reed) | belum ada | hanya reed valve | M |
+| T9 | Tampilan 3D 2-tak | belum ada | masih menggambar kepala 4-tak (noken / katup) | M |
+| T10 | Beban CPU: 1 / 2 / 3 silinder ±32 / 55 / 75–90 % (rig) | akurasi / performa | 3 silinder perlu oversampling lebih rendah | M |
+| T11 | Mesin 2-tak EFI (injeksi) | belum dites | jalurnya ada, tidak ada preset / tes; base map EFI 2-tak akan lambat | S |
+| T12 | Konstanta pilihan: kekakuan / redaman reed (kalibrasi ke Collins), Cd transfer 0.75 (dipinjam), gesek / kalor dinding pipa, interpolasi kelas pipa, timing port preset 25 (tidak terverifikasi), muatan awal karter λ 0.8 | dipilih / kalibrasi | — | — |
+| T13 | Tidak ada preset 2-tak multi-silinder (twin / triple) | belum ada | bisa dibuat dari preset 25 dengan mengubah jumlah silinder | S |
+
+**Umum (ikut memengaruhi turbo diesel)**
+- Fluks massa rata-rata waveguide knalpot tidak persis kekal antar pipa yang suhunya berbeda (turbin melihat ±13 % lebih
+  dari katup buang) — diketahui sejak paket 2, belum diperbaiki.
+
+
 **Paket 1 – Bahan bakar dan flex fuel (detail):** ✅ selesai — lihat "Paket 1 – implementasi" di bagian 4.
 - Pilihan bahan bakar di Engine Setup, masing-masing dengan sifat fisiknya. Nilai di bawah adalah kisaran dari
   literatur dan masih perlu dicek ulang saat implementasi:
