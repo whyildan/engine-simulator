@@ -166,6 +166,7 @@ struct Cylinder {
     double dpStep = 0;                    // highest pressure rise rate since the start of combustion, Pa / deg
     double ringKickPeak = 0;              // pressure rise rate (Pa / deg) that last excited the ringing this cycle
     // two-stroke (Package 5): scavenging of this cycle (the gas that leaves: sim/Scavenge.h)
+    double mdotTr = 0;                              // two-stroke: mass flow in the transfer passages (kg/s, + into the cylinder)
     double scDelivered = 0, scFreshEvo = 0;         // kg this cycle: fresh air delivered through the transfers; fresh air
                                                     // in the cylinder when the exhaust opened
     double dr = 0, te = 0, se = 0, ce = 0;          // last cycle: delivery ratio, trapping, scavenging and charging efficiency

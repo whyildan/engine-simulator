@@ -210,6 +210,7 @@ private:
     ComponentModel comp_;
     int repairSeen_ = 0;
     double burnDuration(Cylinder& c, double rpm, double lambda);
+    double transferFlow(Cylinder& c, Crankcase& cc, double cdA, double dt);
 
     EngineParams p_;
     double fs_;

@@ -101,6 +101,7 @@ static EngineParams base() {
     p.tsCrankcaseCR = 1.40f; p.tsReedArea_cm2 = 20; p.tsScavenge = 9;   // (YAM14: a good 5-port loop cylinder)
     p.tsPipe = 0; p.tsPipeRpm = 8000; p.tsPipeClass = 0.5f;
     p.tsBurnDeg = 50;   // (Blair's measured 41-64 deg: a middle value)
+    p.tsTransferLen = 1.5f;
 
     p.induction = Induction::Natural; p.scType = Supercharger::Roots;
     p.compFlow_gs = 220; p.turbineAR = 0.64f; p.turboInertia = 0.15f; p.wastegateBar = 1.0f;

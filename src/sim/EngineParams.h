@@ -180,6 +180,7 @@ struct EngineParams {
     float tsPipeRpm;          // ... the speed the expansion chamber is tuned for (sets its length)
     float tsPipeClass;        // ... its design (Blair): 0 = broad enduro pipe, 0.5 = motocross, 1 = road racing
     float tsBurnDeg;          // combustion: burn period (Vibe, deg) - the combustion chamber's (squish) speed
+    float tsTransferLen;      // transfer passages: length of the gas column, share of the stroke (its inertia)
 
     // ---------------------------------------------------------- forced induction
     Induction induction;

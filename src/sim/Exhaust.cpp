@@ -235,10 +235,12 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
         ducts_.resize(n);
         portPipe_.assign(n, 0);
         const TunedPipeGeom& g = tp_;
-        // faces every ~20 mm along the profile: L1 parallel, the three diffuser cones, the belly, the rear cone, the tail
+        // faces every ~40 mm along the profile (MC-limited slopes: the Blair 125 check gives charging efficiency 0.65
+        // against 0.67 at 20-30 mm - 3 % for about a third less work, so a twin stays inside real time): L1 parallel, the three diffuser cones, the belly, the rear cone, the tail
         // pipe (diameters linear along each cone)
         double total = 0; for (double l : g.len) total += l;
-        const int nc = std::max(24, (int)std::lround(total / 0.02));
+        const int nc = std::max(12, (int)std::lround(total / 0.04));
+        const int stepsPer = std::max(1, (int)std::lround(fs / 48000.0));   // (the duct at ~48 kHz)
         std::vector<double> xs(nc + 1), as(nc + 1);
         auto diaAt = [&](double x) {
             double x0 = 0, d0 = g.dia[0];
@@ -251,7 +253,7 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
         };
         for (int k = 0; k <= nc; ++k) { xs[k] = total * k / nc; const double d = diaAt(xs[k]); as[k] = kPi * 0.25 * d * d; }
         for (int i = 0; i < n; ++i) {
-            ducts_[i].build(xs, as, kGasT, kPatm);
+            ducts_[i].build(xs, as, kGasT, kPatm, stepsPer);
             // a short acoustic stub of the tail pipe's size: its first end takes the duct's outflow
             const double S = circ(p_.pipeDia_mm);
             fixedZone_ = 0.75;

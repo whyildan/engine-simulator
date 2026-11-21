@@ -190,9 +190,8 @@ implementasi" di bagian 4.
   thread: preset 1 22 → 6 s, preset 0 25 → 5 s, preset 17 47 → 17 s. Beda peta VE rata-rata 0.7–1.5 %; selisih
   terbesar (preset 0, 9100 rpm 37 kPa, +21 %) justru kesalahan cara lama: titik gas tertutup langsung setelah gas
   penuh kolom sebelumnya belum tenang (MAP 32.7 kPa > 15.4 kPa pada gas 2 %; kini 12.7 kPa, monoton).
-- **Pipa tala 2-tak (Duct)**: base map 2-tak lama karena dinamika gas 1D ±0.6 s per detik simulasi (vs 0.16 s pipa
-  biasa) — kini tidak relevan untuk preset 25 (karburator). Optimasi kecil (geometri dihitung sekali, solver batas
-  mulai dari solusi langkah sebelumnya): −13 %; sisanya aritmetika skema orde-2 per sel (±70 ns / sel / langkah).
+- **Pipa tala 2-tak (Duct)**: dulu ±0.6 s per detik simulasi; kini ±0.1 s (limiter MC, sel 40 mm, ±48 kHz — lihat
+  Paket 5, "Kecepatan"). Preset 25 (karburator) tidak memakai base map.
 - **Cache** (`basemaps/` di samping exe; tes tidak memakai cache kecuali `BASEMAP_CACHE` di-set):
   - kunci = hash FNV-1a 64-bit atas seluruh `EngineParams` (bagian yang tidak menentukan udara dinolkan) XOR
     `kBaseMapVersion`. Parameter baru (mis. `resonator_hz`, `muffler_ext_tubes`, jenis bahan bakar) otomatis ikut;
@@ -1270,6 +1269,17 @@ gambar halaman; angka dari grafik ±3–5 %).
   pipa tala 11 750 rpm; terukur Gbr. 5.29): TE 0.45 / 0.66 (terukur 0.50 / 0.69) di 8780 / 11 740 rpm — sesuai;
   CE 0.36 / 0.58 (0.63 / 0.79); DR 0.81 / 0.89 (1.26 / 1.15). Sebelum paket pengisian: DR 0.66, TE 0.55, CE 0.37 di
   11 740 dan tanpa puncak tala. Dengan pembakaran 50° (uji): pmax 80 bar (terukur ±87), bmep 6.8 bar (10.5).
+- **Inersia saluran transfer** (2026-11-21, `Engine::transferFlow`, `ts_transfer_len`): aliran transfer bukan lagi
+  orifice kuasi-tunak — kolom gas di saluran (panjang L = 1.5 × langkah, dipilih; luas = luas port transfer penuh)
+  dm/dt = (A/L)(Δp − m|m|/(2ρ CdA²)), implisit, dibatasi aliran tercekik. Momentum kolom tetap mendorong muatan saat
+  tekanan silinder naik lagi (plugging) — Blair memodelkan saluran sebagai pipa. Cek 125 Blair: DR 0.86–0.91 tanpa
+  inersia → 1.10 / 1.13 / 1.03 di 8780 / 9600 / 11 740 rpm (terukur 1.26 / 1.20 / 1.15; simulasi Blair sendiri ±1.1),
+  CE 0.45 / 0.57 / 0.65 (0.63 / 0.65 / 0.79), TE 0.41 / 0.51 / 0.64 (0.50 / 0.54 / 0.69). Panjang 1 / 2 × langkah
+  memberi DR 1.01 / 1.04 di 11 740 — sensitif, jadi parameter (tab Ports).
+- **Kecepatan (2026-11-21)**: sim load di rig (render penuh dengan suara) preset 25 1 / 2 / 3 silinder: 77 / 141 / 207 %
+  (commit 2732411) → 31–33 / 54–55 / 75–90 % (diukur berulang; app idle preset 25: 27 %). Caranya: limiter MC (lebih tajam dari minmod: 40 mm ≈ minmod 20 mm), sel ±40 mm,
+  duct melangkah ±48 kHz (aliran port dirata-rata antar langkah — massa / energi tetap kekal), geometri dihitung sekali,
+  solver batas mulai dari solusi sebelumnya, loop digabung. Harga: CE 125 Blair 0.65 vs 0.67 pada sel 20–30 mm (−3 %).
 - **Pembakaran 2-tak — Blair** (sec. 4.3.6; `Engine::burnDuration`): tunda nyala lalu kurva Vibe
   x = 1 − exp(−a (θ/b)^(m+1)) dengan a 5.25, m 1.25 (fit Blair untuk mesin GP 125 terukur, Cartwright). Data terukur:
   GP 125 10 350 rpm SE 0.96 — tunda 12°, b 41°; LS400 3000 rpm WOT — tunda 10°, b 60°; Reid 3000 rpm gas 100 / 25 /
@@ -1297,17 +1307,16 @@ gambar halaman; angka dari grafik ±3–5 %).
 - **UI**: Engine › tipe mesin "Two-stroke"; tab Ports: port, karter, reed, silinder scavenging (Blair), DR / TE / SE /
   tekanan karter / bukaan reed langsung, expansion chamber (tala rpm, desain enduro…road race, dimensi L1–L7 / d0–d7).
 - **Tes** (`twostroke_test`): geometri port; karter dipompa, reed tertutup saat tekanan karter puncak, angkat reed vs
-  Collins; kemurnian keluar Blair (gas buang dulu, segar kemudian), YAM14 > YAM12 (TE, SE); validasi 125 Blair (TE ±0.08
-  dari terukur di dua putaran, tala menaikkan TE / CE, CE > 0.5); pembakaran (tunda GP 125 ±1.5° dari 12°, 50 %
+  Collins; kemurnian keluar Blair (gas buang dulu, segar kemudian), YAM14 > YAM12 (TE, SE); validasi 125 Blair (DR ±0.2 dan TE ±0.1
+  dari terukur di dua putaran, tala menaikkan TE / CE, CE > 0.6); pembakaran (tunda GP 125 ±1.5° dari 12°, 50 %
   terbakar 5–11° ATDC, tunda bertambah > 6° di beban ringan seperti Reid); pipa tala > pipa biasa, puncak torsi pindah
   dengan tala; four-stroking di gas 4.5 %; start dan idle.
-- **Batas (penting)**: preset 25 kini ±26 N·m di 8000 rpm, puncak ±30 N·m di 9000 (awal paket: ±12–15) vs CR250R
-  51 N·m @ 8000 (spesifikasi Honda) / YZ250 41.5 N·m (dyno MXA). Sisa: (a) **delivery ratio** ±0.9 vs 1.15 terukur
-  (125 Blair; CE 0.59 vs 0.79): saluran transfer (inersia) dan sistem intake belum gas-dinamika 1D; (b) pipa tala
-  sedikit terlalu "tinggi" (tala 8000 → puncak 9000); (c) b per mesin (squish) dipilih dari data Blair, tidak
-  dihitung dari geometri ruang bakar. Biaya CPU: ±0.5 detik per detik simulasi untuk pipa tala (1 silinder, 96 kHz;
-  total mesin ±0.7); preset 25 (karburator) tidak memakai base map. Belum: oli campur (premix), port intake piston / rotary valve, power
-  valve, tampilan 3D 2-tak.
+- **Batas (penting)**: preset 25 kini ±31 N·m di 8000–9000 rpm (awal paket: ±12–15) vs CR250R 51 N·m @ 8000
+  (spesifikasi Honda) / YZ250 41.5 N·m (dyno MXA). Sisa: (a) DR masih ±0.1–0.15 di bawah terukur dan TE di putaran
+  rendah lebih kecil (0.41 vs 0.50): intake (karburator + reed) belum gas-dinamika 1D, panjang saluran transfer
+  dipilih; (b) pipa tala sedikit terlalu "tinggi" (tala 8000 → puncak 9000); (c) b per mesin (squish) dipilih dari
+  data Blair. Preset 25 (karburator) tidak memakai base map. Belum: oli campur (premix), port intake piston / rotary
+  valve, power valve, tampilan 3D 2-tak.
 
 ---
 

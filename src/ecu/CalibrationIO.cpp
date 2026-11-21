@@ -680,7 +680,7 @@ const EngineField kEngineFields[] = {
     EF("ts_exhaust_open", tsExhaustOpen), EF("ts_transfer_open", tsTransferOpen), EF("ts_exhaust_width", tsExhaustWidth),
     EF("ts_transfer_width", tsTransferWidth), EF("ts_crankcase_cr", tsCrankcaseCR), EF("ts_reed_area_cm2", tsReedArea_cm2),
     EI("ts_scavenge", tsScavenge),
-    EI("ts_pipe", tsPipe), EF("ts_pipe_rpm", tsPipeRpm), EF("ts_pipe_class", tsPipeClass), EF("ts_burn_deg", tsBurnDeg),
+    EI("ts_pipe", tsPipe), EF("ts_pipe_rpm", tsPipeRpm), EF("ts_pipe_class", tsPipeClass), EF("ts_burn_deg", tsBurnDeg), EF("ts_transfer_len", tsTransferLen),
     // forced induction
     EI("induction", induction), EI("sc_type", scType), EF("comp_flow_gs", compFlow_gs), EF("turbine_ar", turbineAR),
     EF("turbo_inertia", turboInertia), EF("wastegate_bar", wastegateBar), EI("intercooler", intercooler),
@@ -865,7 +865,7 @@ bool engineFromJson(const std::string& text, EngineParams& p, EngineMeta& m, std
     // keep the numbers in their working ranges (a hand-edited file must not crash the simulation)
     n.cylinders = clampv((int)n.cylinders, 1, isRotary(n) ? 4 : kMaxCyl);
     n.tsCrankcaseCR = clampv(n.tsCrankcaseCR, 1.1f, 3.0f); n.tsReedArea_cm2 = clampv(n.tsReedArea_cm2, 0.0f, 200.0f);
-    n.tsPipeClass = clampv(n.tsPipeClass, 0.0f, 1.0f); n.tsBurnDeg = clampv(n.tsBurnDeg, 25.0f, 90.0f); n.tsScavenge = clampv(n.tsScavenge, 0, 9);
+    n.tsPipeClass = clampv(n.tsPipeClass, 0.0f, 1.0f); n.tsBurnDeg = clampv(n.tsBurnDeg, 25.0f, 90.0f); n.tsTransferLen = clampv(n.tsTransferLen, 0.05f, 4.0f); n.tsScavenge = clampv(n.tsScavenge, 0, 9);
     n.gears = clampv((int)n.gears, 1, kMaxGears);
     n.bore_mm = clampv(n.bore_mm, 20.0f, 200.0f); n.stroke_mm = clampv(n.stroke_mm, 20.0f, 200.0f);
     n.compression = clampv(n.compression, 4.0f, 25.0f); n.revLimit = clampv(n.revLimit, 1000.0f, 25000.0f);

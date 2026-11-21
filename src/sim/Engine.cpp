@@ -597,6 +597,29 @@ double Engine::valveLift(const ValveSpec& v, double phi, const ValveDynamics& dy
     return std::max(0.0, L + dyn.dev(wrapSym(phi - v.center, 720.0)));
 }
 
+// Two-stroke transfer passages: the gas in them has mass, so the flow does not follow the pressure difference at
+// once - it builds up as the crankcase pressure rises over the cylinder's, and keeps going on its momentum when the
+// cylinder pressure comes back up (the plugging pulse) - (Blair models the passages as pipes). Lumped: a column of
+// length L and the passages' area A, the port an orifice of effective area cdA:
+//   dm/dt = (A / L) (dp - m |m| / (2 rho cdA^2)),
+// integrated implicitly (stable while the port is barely open), capped at the choked flow. A: the transfer ports'
+// full area; L = tsTransferLen x stroke (chosen: 1.5 - the passage from the crankcase mouth past the skirt up to the
+// port window). Blair 125 check: delivery ratio 0.86-0.91 without the inertia, 1.12 / 1.03 at 8780 / 11,740 rpm with
+// 1.5 strokes (measured 1.26 / 1.15; Blair's own simulation with pipes for the passages ~1.1).
+double Engine::transferFlow(Cylinder& c, Crankcase& cc, double cdA, double dt) {
+    const double pc = cc.g.p(), dp = pc - c.p;
+    const double aDuct = std::max(1e-6, geom_.wTr * (geom_.stroke - geom_.sTr));
+    const double len = clampv((double)p_.tsTransferLen, 0.05, 4.0) * geom_.stroke;
+    const double k1 = dt * aDuct / len;
+    const double b = c.mdotTr + k1 * dp;
+    const double rho = b >= 0 ? pc / (kR * cc.g.T) : c.p / (kR * c.T);
+    const double k = k1 / (2.0 * rho * cdA * cdA);
+    double m = (std::sqrt(1.0 + 4.0 * k * std::fabs(b)) - 1.0) / (2.0 * k);
+    m = std::min(m, b >= 0 ? orificeFlow(cdA, pc, cc.g.T, 0.0) : orificeFlow(cdA, c.p, c.T, 0.0));
+    c.mdotTr = b >= 0 ? m : -m;
+    return c.mdotTr;
+}
+
 // Two-stroke exhaust port discharge coefficient: measured at the exhaust port of a 125 cc Grand Prix engine on a
 // steady-flow rig and reduced for use in a simulation ("actual" Cda) - Blair, Design and Simulation of Two-Stroke
 // Engines (SAE 1996), App. A2.3, Figs. A2.4-A2.7, read off the graphs (+-0.01). k: geometric port area / pipe area;
@@ -731,6 +754,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     Ai *= 1.0 + 0.02 * imp * sprPort_[0][port];
     Ae *= 1.0 + 0.02 * imp * sprPort_[1][port];
     bool inOpen = Ai > 0, exOpen = Ae > 0;
+    if (cc && !inOpen) c.mdotTr = 0;   // (transfer ports shut: the gas in the passages stops)
     if (exOpen && !c.prevExhaustOpen) {
         c.tEvo = c.T; c.fired = false;
         // two-stroke: a new scavenging event
@@ -742,7 +766,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     if (Ai > 0) {
         // (two-stroke: the transfer ports, fed by the crankcase)
         GasNode& src = cc ? cc->g : ip;
-        double f = limitedFlow(Ai, src.p(), src.T, src.V, c.p, c.T, c.V, dt, 0.35);
+        double f = cc ? transferFlow(c, *cc, Ai, dt) : limitedFlow(Ai, src.p(), src.T, src.V, c.p, c.T, c.V, dt, 0.35);
         double q = f * dt;
         if (q > 0) {
             q = std::min(q, src.m * 0.5);

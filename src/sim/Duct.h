@@ -12,9 +12,9 @@
 // x A), the wall pressure on the changing area as the momentum source, plus two passive scalars (fuel vapour, burned
 // gas) carried with the flow - so the fresh charge that escapes into the pipe is still there for the plugging pulse
 // to push back. Ideal gas, gamma and R as in Gas.h.
-// Scheme: finite volumes, MUSCL-Hancock (second order: limited slopes, a half-step predictor) with the HLLC
+// Scheme: finite volumes, MUSCL-Hancock (second order: MC-limited slopes, a half-step predictor) with the HLLC
 // approximate Riemann solver (Toro, Riemann Solvers and Numerical Methods for Fluid Dynamics, 3rd ed., ch. 10 and
-// 14); sub-steps keep the Courant number below 0.8.
+// 14); ~40 mm cells, stepped at ~48 kHz, sub-steps keep the Courant number below 0.8.
 // Walls: friction tau = Cf rho u|u| / 2 and heat by the Reynolds analogy h = Cf rho |u| cp / 2 (Cf 0.005, chosen);
 // the wall temperature follows the gas slowly (Twall = ambient + 0.55 (mean gas - ambient), chosen so a racing pipe
 // near 650 C sits at Blair's assumed exhaust duct wall temperature, 350 C).
@@ -30,7 +30,8 @@ namespace es {
 class Duct {
 public:
     // x: positions of the cell faces from the port (m), area: face areas (m2) - same size, >= 3
-    void build(const std::vector<double>& x, const std::vector<double>& area, double T0, double p0);
+    // stepsPer: the duct steps once every so many step() calls (the engine runs at 96-192 kHz; the duct at ~48 kHz)
+    void build(const std::vector<double>& x, const std::vector<double>& area, double T0, double p0, int stepsPer = 1);
 
     // ---- port end (cylinder side), once per engine step, before step():
     // solve the port flow for the cylinder's pressure / temperature and the port's effective area (0 = shut).
@@ -84,6 +85,8 @@ private:
     double tWall_ = 600, tMean_ = 600, p0_ = 101325;
     double smax_ = 1000, dxMin_ = 0.02;          // last step's highest wave speed, smallest cell
     double ubPort_ = 0, ubOut_ = 0;              // last boundary velocities: the solves start next to them
+    int div_ = 1, cnt_ = 0;                      // steps once every div_ calls
+    double accT_ = 0, accM_ = 0, accMu_ = 0, accE_ = 0, accF_ = 0, accB_ = 0;   // port flux summed over those calls
 };
 
 } // namespace es

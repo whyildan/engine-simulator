@@ -379,6 +379,9 @@ void App::panelTwoStroke() {
     SliderF("Crankcase compression", &p_.tsCrankcaseCR, 1.15f, 1.8f, "%.2f : 1", "Primary compression: crankcase volume with the piston at TDC over BDC.\n"
             "Higher = the crankcase pumps harder (more low-end), but holds less charge.");
     SliderF("Reed valve area", &p_.tsReedArea_cm2, 4, 60, "%.0f cm2", "Flow area with the petals fully lifted (a spring-mass petal, 150 Hz).");
+    SliderF("Transfer passage length", &p_.tsTransferLen, 0.3f, 3.0f, "%.2f x stroke",
+            "Length of the gas column in the transfer passages, crankcase to port window. Its momentum keeps the charge\n"
+            "flowing into the cylinder as the cylinder pressure comes back up: longer = more delivery at high revs.");
     ImGui::SeparatorText("Scavenging");
     {
         const int cur = clampv((int)p_.tsScavenge, 0, 9);

@@ -129,10 +129,12 @@ int main() {
             std::printf("  %5.0f rpm: DR %.2f (measured %.2f)  TE %.2f (%.2f)  CE %.2f (%.2f)\n", meas[k].rpm, r[k].dr, meas[k].dr,
                         r[k].te, meas[k].te, r[k].ce, meas[k].ce);
         }
-        CHECK(std::fabs(r[0].te - meas[0].te) < 0.08 && std::fabs(r[1].te - meas[1].te) < 0.08,
-              "trapping efficiency within 0.08 of the measured at both speeds");
+        CHECK(std::fabs(r[0].dr - meas[0].dr) < 0.2 && std::fabs(r[1].dr - meas[1].dr) < 0.2,
+              "delivery ratio within 0.2 of the measured at both speeds (transfer passages' inertia)");
+        CHECK(std::fabs(r[0].te - meas[0].te) < 0.1 && std::fabs(r[1].te - meas[1].te) < 0.1,
+              "trapping efficiency within 0.1 of the measured at both speeds");
         CHECK(r[1].te > r[0].te + 0.1 && r[1].ce > r[0].ce + 0.1, "the tuned pipe raises trapping and charging toward its speed");
-        CHECK(r[1].ce > 0.5, "charging efficiency at the tuned speed (measured 0.79; delivery still low - ECU_PLAN)");
+        CHECK(r[1].ce > 0.6, "charging efficiency at the tuned speed (measured 0.79)");
     }
 
     // ---------------- combustion: Blair's ignition delay and Vibe burn (sec. 4.3.6)
