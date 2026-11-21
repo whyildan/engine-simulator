@@ -32,6 +32,7 @@ struct HealthReport {
 
 const char* flowPartName(int part);
 const char* healthItemName(int item);
+const char* healthItemName(int item, const EngineParams& p);   // (a diesel's glow plugs, a two-stroke's ports)
 HealthReport evaluateHealth(const EngineParams& p, const Telemetry& t);
 
 // level of a reading against a warning and a limit threshold (high = the value is bad when high)

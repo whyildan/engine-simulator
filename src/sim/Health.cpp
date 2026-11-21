@@ -40,6 +40,11 @@ int ruleLevel(const EngineParams& p, const Telemetry& t, int rule, double v) {
 
 const char* flowPartName(int part) { return kPartNames[clampv(part, 0, kPartCount - 1)]; }
 const char* healthItemName(int item) { return kItemNames[clampv(item, 0, kHealthItemCount - 1)]; }
+const char* healthItemName(int item, const EngineParams& p) {
+    if (item == kHealthPlugs && isDiesel(p)) return "Glow plugs";
+    if (item == kHealthValves && (isTwoStroke(p) || isRotary(p))) return "Ports";
+    return healthItemName(item);
+}
 
 HealthReport evaluateHealth(const EngineParams& p, const Telemetry& t) {
     HealthReport h;
@@ -129,6 +134,13 @@ HealthReport evaluateHealth(const EngineParams& p, const Telemetry& t) {
     {
         HealthEntry& e = h.part[kPartPlugs];
         ok(e);
+        if (isDiesel(p)) {   // a diesel has glow plugs: their state, not a spark plug's
+            if (!p.glowPlugs) reason(e, kHealthNone, "No glow plugs fitted (the compressed air alone lights the fuel)");
+            else if (t.glowLight) reason(e, kHealthWarn, "Pre-heating: wait for the glow lamp before cranking");
+            else reason(e, kHealthOk, t.glowOn ? "Heating (post-heat after a cold start)" : "Off - the engine is warm enough");
+            setValue(e, p.glowPlugs ? "tip %.0f C%s" : "none", t.glowTipC, t.glowOn ? " on" : "");
+            goto plugsDone;
+        }
         // above ~850 C the tip itself lights the charge (pre-ignition); fouling makes plugs misfire (0.6 x fouling)
         reason(e, healthLevel(t.plugTempC, 850.0, 950.0), "Tip %.0f C (pre-ignition from 850 C: warning 850, limit 950)", t.plugTempC);
         if (t.fouling > 0.02f) reason(e, healthLevel(t.fouling, 0.15, 0.4), "Fouling %.0f %%: carbon from rich running on a cold plug (misfires)", t.fouling * 100);
@@ -136,6 +148,7 @@ HealthReport evaluateHealth(const EngineParams& p, const Telemetry& t) {
             reason(e, healthLevel(t.sparkMargin, 1.25, 1.0, false), "Spark energy %.2fx what the charge needs (below 1: misfires)", t.sparkMargin);
         if (t.fouling > 0.02f) setValue(e, "%.0f C  %.0f %% fouled", t.plugTempC, t.fouling * 100);
         else setValue(e, "tip %.0f C", t.plugTempC);
+    plugsDone:;
     }
     {
         HealthEntry& e = h.part[kPartHeader];
@@ -213,7 +226,12 @@ HealthReport evaluateHealth(const EngineParams& p, const Telemetry& t) {
     }
     {
         HealthEntry& e = h.item[kHealthValves];
-        if (!rotary) {
+        if (isTwoStroke(p)) {   // no valves: the piston opens its ports
+            ok(e);
+            reason(e, kHealthOk, "Piston-controlled ports - last cycle: delivery ratio %.2f, trapping %.2f, scavenging %.2f",
+                   t.tsDelivery, t.tsTrapping, t.tsScavenging);
+            setValue(e, "ports  DR %.2f", t.tsDelivery);
+        } else if (!rotary) {
             ok(e);
             const double fl = std::max(t.floatIn, t.floatEx);
             reason(e, healthLevel(fl, 0.05, 0.5), "Float %.0f %% now; floats from %.0f rpm (intake) / %.0f rpm (exhaust)", fl * 100,
