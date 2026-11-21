@@ -45,7 +45,23 @@ void IntakeSystem::build(const EngineParams& p, double fs, double displacement) 
 
     net = WaveNetwork();
     net.init(fs, std::sqrt(1.4 * kR * ambT_), kPatm / (kR * ambT_), kPatm);
-    for (int i = 0; i < n; ++i) {
+    // two-stroke (T1): the tract from the reed block / inlet port out to the carburettor bell and the air box as 1D
+    // unsteady gas dynamics - the crankcase draws on it with suction waves of a third of an atmosphere and more, and
+    // the ramming it sends back fills the crankcase past what a quasi-steady (or small-signal) runner gives (Blair
+    // models the intake ducting this way, sec. 5.2.3). Length / bore: the runner's (Intake tab); ~20 mm cells.
+    ducts_.clear();
+    if (isTwoStroke(p)) {
+        const double len = std::max(0.06, p.runnerLen_mm * 1e-3), a = circ(p.runnerDia_mm);
+        const int nc = std::max(4, (int)std::lround(len / 0.04));
+        std::vector<double> xs(nc + 1), as(nc + 1, a);
+        for (int k = 0; k <= nc; ++k) xs[k] = len * k / nc;
+        ducts_.resize(n);
+        for (Duct& d : ducts_) {
+            d.build(xs, as, ambT_, kPatm, std::max(1, (int)std::lround(fs / 48000.0)));
+            d.setFresh();
+        }
+    }
+    for (int i = 0; i < n && ducts_.empty(); ++i) {
         int id = net.addPipe(circ(p.runnerDia_mm), p.runnerLen_mm * 1e-3, 10000, 0.04);
         GasNode& in = inlets_[p.itb ? i : 0];
         net.addNodeEnd(PipeEnd{id, 0}, &ports_[i], &in);
@@ -269,6 +285,42 @@ void IntakeSystem::stepAir(double dt, double pedal, double rpm, bool fuelEnabled
     double a = onePoleCoef(fc, fs_);
     radLp_ += a * (d - radLp_);
     radiated_ = radLp_ / (4.0 * kPi) * (boosted_ ? 0.3 : 1.0);  // boosted: throttle is inside the pipework
+}
+
+// two-stroke intake ducts: the far end opens into the plenum / air box (its pressure: p = p0 + 2 in with no
+// impedance), the mass that crosses moves between the duct and the plenum node; fuel an injector put into the port
+// node goes into the duct's first cell (the reed end); the port node mirrors that cell (traces, sensors)
+void IntakeSystem::stepDucts(double dt) {
+    stepDuctsPre(dt);
+    for (Duct& d : ducts_) d.step(dt, ambT_);
+    stepDuctsPost();
+}
+
+// (pre: the outlets and the mass they move - the outflow is fixed by the outlet solve, before the duct steps; post:
+//  the port nodes mirror the first cells. The steps between can run in parallel - Engine / DuctPool)
+void IntakeSystem::stepDuctsPre(double dt) {
+    for (size_t i = 0; i < ducts_.size(); ++i) {
+        Duct& d = ducts_[i];
+        GasNode& pl = inlets_[p_.itb ? i : 0];
+        GasNode& g = ports_[i];
+        if (g.mf > 1e-15) { d.addFuel(g.mf); g.mf = 0; }
+        d.setOutlet(0.5 * (pl.p() - kPatm), 0.0, 1.0, pl.T, pl.fuelFrac(), pl.burnedFrac());
+        d.solveOutlet(dt);
+        const double q = d.outflow() * dt;   // + into the plenum
+        if (q > 0) { pl.m += q; pl.mf += q * d.outFuelFrac(); pl.mb += q * d.outBurnedFrac(); }
+        else if (q < 0) {
+            const double r = std::min(-q, pl.m * 0.5), ff = pl.fuelFrac(), bf = pl.burnedFrac();
+            pl.m -= r; pl.mf -= r * ff; pl.mb -= r * bf;
+        }
+    }
+}
+
+void IntakeSystem::stepDuctsPost() {
+    for (size_t i = 0; i < ducts_.size(); ++i) {
+        const Duct& d = ducts_[i];
+        GasNode& g = ports_[i];
+        g.setPressure(d.cellP(0)); g.mf = 0; g.mb = g.m * d.cellBurned(0);
+    }
 }
 
 // physical injector: the needle opens after its dead time, then sprays at the flow the rail

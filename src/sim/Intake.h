@@ -2,6 +2,7 @@
 #include "sim/Fuel.h"
 #include "sim/EngineParams.h"
 #include "sim/Waveguide.h"
+#include "sim/Duct.h"
 #include <vector>
 
 namespace es {
@@ -15,7 +16,11 @@ public:
 
     // per sim step, before cylinders: throttle airflow, carb fuel, film evaporation
     void stepAir(double dt, double pedal, double rpm, bool fuelEnabled);
-    void stepWaves(double dt) { net.step(dt); }
+    void stepWaves(double dt) { net.step(dt); stepDucts(dt); }
+    // ... split around the two-stroke intake ducts' own steps (parallel: DuctPool): pre, step(dt, ambientK()), post
+    void stepWavesPre(double dt) { net.step(dt); stepDuctsPre(dt); }
+    void stepWavesPost() { stepDuctsPost(); }
+    double ambientK() const { return ambT_; }
 
     // EFI actuators (commanded by the ECU)
     void setIac(double v) { iac_ = clampv(v, 0.0, 1.0); }
@@ -30,6 +35,10 @@ public:
     void setFuel(const FuelProps& f) { fuel_ = f; }
 
     GasNode& port(int i) { return ports_[i]; }
+    // two-stroke: the intake tract from the reed / inlet port to the air box is 1D gas dynamics (Duct.h), one per
+    // cylinder - its port end is the crankcase's inlet (Engine::crankcaseStep), its far end the plenum / air box
+    bool ductPorts() const { return !ducts_.empty(); }
+    Duct& duct(int i) { return ducts_[i]; }
     // nitrous: air-equivalent charge and fuel fed straight into a port, and the charge cooling it causes
     void addPortCharge(int i, double airKg, double fuelKg) { GasNode& g = ports_[i]; g.m += airKg + fuelKg; g.mf += fuelKg; }
     void setPortCooling(double dK) { for (GasNode& g : ports_) g.T = ambT_ + 15.0 - clampv(dK, 0.0, 150.0); }
@@ -70,6 +79,10 @@ private:
     double egrShare_ = 0, egrT_ = 600, plenumT0_ = 300;   // EGR mix into the plenum; NA plenum temperature without it
     bool boosted_ = false;
     std::vector<GasNode> ports_;
+    std::vector<Duct> ducts_;
+    void stepDucts(double dt);
+    void stepDuctsPre(double dt);
+    void stepDuctsPost();
     std::vector<double> inletFilm_, portFilm_;
     std::vector<double> backM_, backMf_, backMb_;   // standoff: gas pushed back out in front of each throttle
     std::vector<double> inletFlow_;  // kg/s per inlet (last step)

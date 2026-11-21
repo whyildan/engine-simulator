@@ -9,6 +9,8 @@ struct CylGeom {
     bool rotary = false;
     bool twoStroke = false;
     double sEx = 0, sTr = 0, wEx = 0, wTr = 0;     // two-stroke ports: top edges (m below TDC of the crown), widths (m)
+    double sExLow = 0;                             // ... the exhaust's timing edge with the power valve fully lowered
+    double sIn = 0, wIn = 0;                       // ... piston-ported inlet: piston position it opens at, port width
     double bore, stroke, rod, cr;
     double r, A, Vd, Vc;            // Vd / Vc per chamber
     double R = 0.105, ecc = 0.015, width = 0.08;   // Wankel geometry
@@ -42,6 +44,11 @@ struct CylGeom {
             kin(to * kDeg, s, ds); sTr = s;
             wEx = clampv((double)p.tsExhaustWidth, 0.1, 1.5) * bore;
             wTr = clampv((double)p.tsTransferWidth, 0.1, 2.5) * bore;
+            kin(clampv((double)p.tsPvLowOpen, eo, std::max(eo, to - 2.0)) * kDeg, s, ds); sExLow = p.tsPowerValve ? s : sEx;
+            // piston port: the skirt's lower edge uncovers it while the piston is near TDC - open from tsInletOpen BTDC
+            // to as far ATDC, fully open at TDC; its height is the piston travel from there to TDC, width from its area
+            kin(clampv((double)p.tsInletOpen, 20.0, 170.0) * kDeg, s, ds); sIn = s;
+            wIn = clampv((double)p.tsInletArea_cm2, 1.0, 80.0) * 1e-4 / std::max(1e-4, sIn);
         }
     }
     // two-stroke: geometric area of a port the crown has uncovered at a crank angle (deg, 0 = TDC)
@@ -49,6 +56,24 @@ struct CylGeom {
         double s, ds;
         kin(wrapPos(phiDeg, 360.0) * kDeg, s, ds);
         return w * clampv(s - sTop, 0.0, stroke - sTop);
+    }
+    // piston-ported inlet: geometric area at a crank angle (open while the piston is within sIn of TDC)
+    double inletPortArea(double phiDeg) const {
+        double s, ds;
+        kin(wrapPos(phiDeg, 360.0) * kDeg, s, ds);
+        return wIn * clampv(sIn - s, 0.0, sIn);
+    }
+    // exhaust port with a power valve at pv (0 = fully lowered, 1 = lifted clear): the valve's edge stands in for the
+    // port's top edge; it does not seal perfectly - a narrow leakage path of kPvLeak x the width stays (Blair: "can
+    // never seal the port to the extent that a piston can"; share chosen)
+    static constexpr double kPvLeak = 0.05;
+    double exhaustArea(double phiDeg, double pv) const {
+        double s, ds;
+        kin(wrapPos(phiDeg, 360.0) * kDeg, s, ds);
+        const double top = sExLow + clampv(pv, 0.0, 1.0) * (sEx - sExLow);
+        double a = wEx * clampv(s - top, 0.0, stroke - top);
+        if (top > sEx) a += kPvLeak * wEx * clampv(std::min(s, top) - sEx, 0.0, top - sEx);
+        return a;
     }
     // piston distance from TDC (m) and its derivative per radian
     void kin(double thetaRad, double& s, double& dsdth) const {

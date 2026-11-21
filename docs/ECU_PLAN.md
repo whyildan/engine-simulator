@@ -122,19 +122,19 @@ dari data. Bobot seperti tabel di atas.
 
 | # | Hal | Jenis | Keadaan sekarang | Bobot |
 |---|---|---|---|---|
-| T1 | Delivery ratio masih ±0.1–0.15 di bawah terukur (125 Blair: 1.10 / 1.03 vs 1.26 / 1.15); TE putaran rendah 0.41 vs 0.50 | akurasi | intake (karburator + reed + karter) belum gas-dinamika 1D | L |
-| T2 | Tenaga preset 25 ±31 N·m vs CR250R 51 N·m (Honda) / YZ250 41.5 N·m (MXA) | akurasi | gabungan T1, T3, T5 | — |
-| T3 | Pipa tala memuncak terlalu tinggi (tala 8000 → puncak 9000 rpm) | akurasi | suhu gas pipa / proporsi desain Blair | S–M |
-| T4 | Panjang saluran transfer 1.5 × langkah | dipilih | parameter (tab Ports); Blair tidak memberi dimensinya | — |
-| T5 | Periode bakar per ruang bakar (41° preset 25) | dipilih | dari data Blair; squish / bentuk ruang bakar tidak dihitung dari geometri | M |
-| T6 | Power valve (katup knalpot yang menurunkan timing buang di putaran rendah) | belum ada | — | M |
-| T7 | Oli campur (premix): rasio oli, efek kecil ke AFR / LHV, asap | belum ada | — | S |
-| T8 | Intake port piston dan rotary / disc valve (selain reed) | belum ada | hanya reed valve | M |
-| T9 | Tampilan 3D 2-tak | belum ada | masih menggambar kepala 4-tak (noken / katup) | M |
-| T10 | Beban CPU: 1 / 2 / 3 silinder ±32 / 55 / 75–90 % (rig) | akurasi / performa | 3 silinder perlu oversampling lebih rendah | M |
-| T11 | Mesin 2-tak EFI (injeksi) | belum dites | jalurnya ada, tidak ada preset / tes; base map EFI 2-tak akan lambat | S |
-| T12 | Konstanta pilihan: kekakuan / redaman reed (kalibrasi ke Collins), Cd transfer 0.75 (dipinjam), gesek / kalor dinding pipa, interpolasi kelas pipa, timing port preset 25 (tidak terverifikasi), muatan awal karter λ 0.8 | dipilih / kalibrasi | — | — |
-| T13 | Tidak ada preset 2-tak multi-silinder (twin / triple) | belum ada | bisa dibuat dari preset 25 dengan mengubah jumlah silinder | S |
+| T1 | Delivery ratio masih ±0.1–0.15 di bawah terukur (125 Blair: 1.10 / 1.03 vs 1.26 / 1.15); TE putaran rendah 0.41 vs 0.50 | ✅ 2026-11-21 | saluran intake 2-tak kini gas-dinamika 1D (Duct): DR 125 Blair 1.25 / 1.19 / 1.15 / 1.10 vs 1.20 / 1.15 / 1.15 / 1.10; panjang saluran 200 mm dipilih | L |
+| T2 | Tenaga preset 25 ±31 N·m vs CR250R 51 N·m (Honda) / YZ250 41.5 N·m (MXA) | sebagian | 125 Blair dengan pipa A2 asli: bmep 9.0 vs 10.4 bar (−10…−14 %); preset 25 ±33 N·m, preset baru −8…−25 % | — |
+| T3 | Pipa tala memuncak terlalu tinggi (tala 8000 → puncak 9000 rpm) | sebagian | penyebab: gas pipa terlalu panas (603 vs 517 °C terukur); gesek / kalor kini cara Blair (Blasius + analogi Reynolds dengan Pr): 582 °C; sisa +55…70 K | S–M |
+| T4 | Panjang saluran transfer 1.5 × langkah | dipilih (tetap) | parameter (tab Ports); Blair tidak memberi dimensinya — dengan intake 1D, DR 125 Blair cocok tanpa mengubahnya | — |
+| T5 | Periode bakar per ruang bakar (41° preset 25) | ✅ sebagian | kecepatan squish Blair pers. 4.5.7 (cocok Prog.4.1: 21.0 vs 20.9 m/s); periode bakar dari squish = opsi (kalibrasi satu mesin, GP 125 meleset +6…+19°) | M |
+| T6 | Power valve (katup knalpot yang menurunkan timing buang di putaran rendah) | ✅ 2026-11-21 | tepi port + kebocoran, servo dari rpm; optimum 125 Blair di 8500 rpm = 100° ATDC (Blair Gbr. 5.31: 100°) | M |
+| T7 | Oli campur (premix): rasio oli, efek kecil ke AFR / LHV, asap | ✅ 2026-11-21 | campuran cairan (karburator mengukur volume); porsi oli terbakar 0.5 dan sifat oli dipilih; asap g/jam | S |
+| T8 | Intake port piston dan rotary / disc valve (selain reed) | ✅ 2026-11-21 | port piston (rok piston), disc valve (Blair pers. 5.2.8–5.2.10, sudut port 56°) — dua arah | M |
+| T9 | Tampilan 3D 2-tak | ✅ (565245e) | silinder ber-port, pipa tala terlipat | M |
+| T10 | Beban CPU: 1 / 2 / 3 silinder ±32 / 55 / 75–90 % (rig) | ✅ 2026-11-21 | 2-tak ≥ 2 silinder di 48 kHz + duct paralel (DuctPool, hasil identik bit-per-bit): blip gas penuh / lepas 2 / 3 / 4 silinder 43 / 52 / 63 % (sebelumnya 56 / 77 / 114 %) | M |
+| T11 | Mesin 2-tak EFI (injeksi) | ✅ 2026-11-21 | preset 32 (KTM 300 TPI-style): start, idle, torsi dites; base map ±17 s | S |
+| T12 | Konstanta pilihan: kekakuan / redaman reed (kalibrasi ke Collins), Cd transfer 0.75 (dipinjam), gesek / kalor dinding pipa, interpolasi kelas pipa, timing port preset 25 (tidak terverifikasi), muatan awal karter λ 0.8 | sebagian | gesek / kalor pipa kini Blair (Blasius, pers. 2.4.1); timing preset 25 sesuai tipikal Blair Gbr. 1.9 (MX 82 / 113); sisanya tetap | — |
+| T13 | Tidak ada preset 2-tak multi-silinder (twin / triple) | ✅ 2026-11-21 | preset 30 (RD350 YPVS twin), 31 (H1 triple port piston) | S |
 
 **Umum (ikut memengaruhi turbo diesel)**
 - Fluks massa rata-rata waveguide knalpot tidak persis kekal antar pipa yang suhunya berbeda (turbin melihat ±13 % lebih
@@ -1441,6 +1441,75 @@ gambar halaman; angka dari grafik ±3–5 %).
   valve, power valve, tampilan 3D 2-tak.
 
 ---
+
+### Paket 5 lanjutan – item 2-tak T1–T13 ✅ (2026-11-21)
+Atas permintaan ("Yang bagian 2-tak kerjain semua"). Rujukan utama tetap Blair, *Design and Simulation of Two-Stroke
+Engines* (SAE 1996); probe: `tests/ts_probe.cpp` (mode 0–8), tes: `twostroke_test`.
+
+- **Mesin 125 Blair dengan data aslinya** (sec. 5.5.2): rig uji kini memakai pipa "A2" terukur (L1–L7 83 / 189 / 209 /
+  65 / 78 / 205 / 250 mm, d1–d7 37.5 / 48.5 / 100 / 116 / 116 / 21 / 21 mm — sebelumnya pipa empiris Blair) dan power
+  valve-nya (turun = tutup 95° BTDC, terangkat penuh 9500 rpm). Parameter baru `ts_pipe_custom`, `ts_pipe_len_mm`,
+  `ts_pipe_dia_mm` (tab Ports, tombol salin dari desain empiris). Titik 8780 rpm tidak dibandingkan (posisi katupnya
+  tidak diketahui — Blair juga melewatinya).
+- **T1 intake 1D**: saluran dari reed / port inlet ke airbox kini persamaan Euler kuasi-1D (`Duct`, sel ±40 mm — 20 mm
+  memberi DR / CE yang sama ±0.01 dengan biaya dua kali),
+  satu per silinder (`IntakeSystem::ductPorts`). Ujung port = reed / port karter (orifis + karakteristik, dua arah;
+  reed digerakkan beda tekanan sel pertama vs karter), ujung lain = plenum (tekanan p = p0 + 2·in, impedansi 0).
+  Bahan bakar karburator datang dari plenum, injektor EFI masuk ke sel ujung reed. Sensitivitas (125 Blair 11 750 rpm):
+  runner 40 mm DR 0.84, 250 mm 1.03, airbox besar 1.09 — dinamika intake kini nyata (dulu waveguide linear, ±0.04).
+  Dengan corong terbuka + 200 mm (dipilih; Blair tidak memberi dimensi intake): DR 1.25 / 1.19 / 1.15 / 1.10 di
+  9600 / 11 200 / 11 750 / 12 300 rpm (terukur 1.20 / 1.15 / 1.15 / 1.10; simulasi Blair 1.10 / 1.11 / 1.09 / 1.03),
+  TE 0.52–0.69 (0.54–0.72), CE 0.66 / 0.74 / 0.75 / 0.76 (0.66 / 0.76 / 0.79 / 0.80), bmep 7.7 / 8.8 / 9.0 / 9.0 bar
+  (8.6 / 10.2 / 10.4 / 9.9: −10…−14 %).
+- **T3 suhu gas pipa**: tengah pipa A2 di 11 750 rpm 603 °C vs termokopel 517 °C (Blair Gbr. 5.30; simulasinya ±540) —
+  gas terlalu panas → gelombang terlalu cepat → puncak bergeser naik. Gesek dan kalor dinding duct kini cara Blair:
+  Cf Blasius 0.0791 Re^-0.25 (laminar 0.01; pers. 2.3.13), Nu = Cf Re / 2 (pers. 2.4.1) → h = Cf ρ|u| cp / (2 Pr),
+  Pr 0.7, μ Sutherland. Hasil 582 °C (−21 K); sisa +55…70 K (tiap putaran), puncak bmep pipa A2 ±500 rpm di atas
+  terukur. Belum ditemukan sebab sisanya (suhu gas keluar port, kalor dinding saluran buang di silinder?).
+- **T6 power valve** (`ts_power_valve`, `ts_pv_low_open`, `ts_pv_rpm_low/high`; Blair sec. 5.2.2, Gbr. 5.2): tepi
+  katup menggantikan tepi atas port buang (`CylGeom::exhaustArea`), celah bocor 5 % lebar port (dipilih — Blair: katup
+  "tidak pernah menyegel seperti piston"); rasio kompresi terperangkap naik dengan sendirinya (pers. 5.2.7 implisit di
+  geometri). Servo linear antara dua rpm, τ 0.12 s (dipilih). Uji: 125 Blair 8500 rpm, katup ditahan turun pada
+  81…110° ATDC → optimum 100° (Blair Gbr. 5.31: ±100°), +51 % torsi vs katup naik. YPVS: tertutup < 6000, terbuka
+  penuh 8000 rpm, durasi buang 180 / 200° (kutipan manual servis, rd350lc.net).
+- **T8 inlet** (`ts_inlet` 0 reed / 1 port piston / 2 disc valve, `ts_inlet_open/close`, `ts_inlet_area_cm2`): port
+  piston dibuka rok piston di sekitar TDC (simetris, tinggi = langkah dari titik buka ke TDC); disc valve: luas naik
+  linear selama sudut port 56° (contoh desain Blair Gbr. 6.29 untuk GP 125, dipakai untuk semua — dipilih), penuh, lalu
+  turun (pers. 5.2.8–5.2.10). Keduanya dua arah: karter menyembur balik ke intake saat port masih terbuka (tes: ±9 %
+  waktu di 7000 rpm). Cd 0.7 (sama dengan reed, dipilih). Timing tipikal Blair Gbr. 1.9.
+- **T7 oli campur** (`ts_oil_ratio`, 0 = pompa oli): cairan premix — karburator mengukur volume, jadi oli menggeser
+  bensin (lebih banyak oli = lebih kurus; 20:1 vs 50:1 → λ 0.897 vs 0.884). Oli: ρ 0.87, LHV 42 MJ/kg, CH1.9 (nilai
+  tipikal, dipilih); porsi yang terbakar 0.5 (dipilih — tidak ditemukan angka terukur, sumber yang ada forum / Wikipedia).
+  Readout asap oli (g/jam), peringatan kesehatan di atas 100:1.
+- **T5 squish** (`sim/Squish.h`, `ts_squish_area`, `ts_squish_clear_mm`, `ts_burn_from_squish`): kecepatan squish
+  ruang bakar sentral Blair pers. 4.5.1–4.5.8 (murni geometri, ∝ rpm). Cek Prog.4.1 (Gbr. 4.14): 21.0 m/s di 10.9° BTDC,
+  7.06 mJ vs 20.9 / 10 / 6.94. Opsi periode bakar dari squish: kecepatan nyala = bagian ∝ kecepatan piston (1.84 Up) +
+  kecepatan squish (Blair pers. 4.3.1, nyala Kee 24.5 / 50 m/s), menempuh 0.96 bore — dua konstanta dikalibrasi pada
+  LS400 Kee (b 60°). GP 125 memberi 47–60° dengan squish wajar vs 41° terukur: hanya panduan kasar, default mati.
+- **T10 CPU**: intake 1D menambah beban (1 / 2 / 3 silinder 42 / 68 / 98 % di 96 kHz). 2-tak ≥ 2 silinder kini jalan
+  di 48 kHz (`Simulator::rebuild`): rig 125 Blair di 48 vs 96 kHz sama ±0.01 (DR / CE / bmep). Lalu dilaporkan user:
+  2–3 silinder ke atas kena batas simulasi saat gas penuh / lepas berulang. Diukur (ts_probe 9, blip 1.5 s penuh /
+  1.5 s lepas, jendela 0.25 s): 4 silinder 105–114 %, profil (rdtsc): sel duct knalpot 47 %, silinder (solver batas
+  duct, `pow`) 22 %, intake 18 %, sub-langkah selalu 1 — biayanya murni per sel (MUSCL-Hancock + HLLC, ±70 ns).
+  Perbaikan: (1) sel intake 40 mm (hasil sama); (2) Cf Blasius di-cache, disegarkan tiap 16 langkah duct; (3) orifice
+  duct dengan satu `pow` (identik secara matematis); (4) `DuctPool` — duct knalpot + intake semua silinder melangkah
+  paralel di 1–3 thread pekerja (silinder − 1, maks 3, sisakan core untuk UI / audio); urutan pre (solusi batas) /
+  langkah / post membuat hasilnya identik dengan serial (tes `[parallel]`: 0 dari 144 001 langkah berbeda). Pekerja
+  berputar ±100 µs, lalu tidur di condition variable dan dibangunkan langsung oleh langkah berikutnya. Sel knalpot
+  50 mm dicoba dan ditolak (CE −0.02…0.03, bmep −3…5 %). Hasil blip: 2 / 3 / 4 silinder 43 / 52 / 63 %, triple H1 47 %.
+- **T11 / T13 preset baru** (data dari sumber yang disebut; port, rod, luas reed / port, pipa, pengapian dipilih):
+  30 "2-cyl 350 two-stroke YPVS (RD350-style)" 64 × 54, YPVS 6000→8000 rpm, 59 hp @ 9000 / 40.2 N·m @ 8000 (spesifikasi
+  RD350F2) — sim 35.3 N·m @ 8000; 31 "3-cyl 500 piston-port (H1-style)" 60 × 58.8, 6.8:1, port piston, berpendingin
+  udara, 60 hp @ 7500 / 56 N·m @ 7000 (Moto-Data) — sim 51.3 N·m; timing H1 sendiri tidak ditemukan → tipikal Blair
+  (97 / 120 / 75); 32 "1-cyl 300 two-stroke EFI (300 TPI-style)" 72 × 72, throttle body 39 mm, pompa oli, power valve
+  (KTM MY22) — saudara 300 SX: 43.7 N·m @ 7500 di roda (dyno Dirt Rider) — sim 32.6 N·m (−25 %). Injeksi port transfer
+  KTM diwakili injeksi di ujung reed (bahan bakar ke karter). Base map EFI 2-tak ±17 s.
+- **UI**: tab Ports — power valve, jenis inlet, squish (readout kecepatan / energi + panduan Blair 15–20 m/s), oli,
+  dimensi pipa terukur. Peta aliran: komponen inlet mengikuti jenisnya (jendela port / disc), tooltip pipa menunjukkan
+  posisi power valve dan asap oli. Kesehatan "Ports": posisi power valve, premix / pompa oli.
+- **Batas yang tersisa**: bmep 2-tak masih −8…−25 % (125 Blair −10…−14 %; imep/CE ±7 % di bawah — AFR 11.5 avgas
+  Blair vs λ 0.88 kita, gesek); gas pipa +55…70 K; panjang saluran intake dan transfer dipilih; periode bakar dari squish
+  hanya panduan.
 
 ## 5. Keputusan (sudah disepakati)
 

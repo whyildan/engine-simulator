@@ -378,10 +378,40 @@ void App::panelTwoStroke() {
         const double eo = p_.tsExhaustOpen, to = std::max((double)p_.tsTransferOpen, eo + 2.0);
         ImGui::Text("Exhaust duration %.0f deg   transfer duration %.0f deg   blowdown %.0f deg", 360.0 - 2.0 * eo, 360.0 - 2.0 * to, to - eo);
     }
-    ImGui::SeparatorText("Crankcase and reed valve");
+    ImGui::SeparatorText("Power valve");
+    Check("Power valve (exhaust timing control)", &p_.tsPowerValve);
+    Help("A valve in the exhaust port's roof (Yamaha YPVS, Honda HPP, KTM...) that lowers the port's timing edge at low\n"
+         "speed: a shorter exhaust period and a higher trapped compression ratio where the pipe cannot help, the full\n"
+         "port up top. A servo lifts it with engine speed. It never seals like the piston: a little leaks past it.\n"
+         "Blair's 125 racing engine: lowered it opens ~95-100 deg ATDC; fully lifted by 9500 rpm.");
+    if (p_.tsPowerValve) {
+        SliderF("Lowered: exhaust opens", &p_.tsPvLowOpen, p_.tsExhaustOpen, std::min(150.0f, p_.tsTransferOpen - 2.0f), "%.0f deg ATDC");
+        SliderF("Starts to lift at", &p_.tsPvRpmLow, 1000, 15000, "%.0f rpm");
+        SliderF("Fully lifted at", &p_.tsPvRpmHigh, p_.tsPvRpmLow, 16000, "%.0f rpm");
+        ImGui::Text("Now %.0f %% lifted: exhaust duration %.0f .. %.0f deg", tel_.tsPowerValve * 100.0f, 360.0f - 2.0f * p_.tsPvLowOpen,
+                    360.0f - 2.0f * p_.tsExhaustOpen);
+    }
+    ImGui::SeparatorText("Crankcase and inlet");
     SliderF("Crankcase compression", &p_.tsCrankcaseCR, 1.15f, 1.8f, "%.2f : 1", "Primary compression: crankcase volume with the piston at TDC over BDC.\n"
             "Higher = the crankcase pumps harder (more low-end), but holds less charge.");
-    SliderF("Reed valve area", &p_.tsReedArea_cm2, 4, 60, "%.0f cm2", "Flow area with the petals fully lifted (a spring-mass petal, 150 Hz).");
+    Combo("Inlet", &p_.tsInlet, "Reed valve\0Piston port (skirt)\0Disc (rotary) valve\0");
+    Help("How the charge gets into the crankcase.\n"
+         "Reed valve: spring petals that open whenever the crankcase is below the intake - one way, they adapt to speed.\n"
+         "Piston port: the piston skirt uncovers the port around TDC - symmetric timing, and the crankcase spits some\n"
+         "charge back out as the piston comes down again (strong ramming at its tuned speed, weak elsewhere).\n"
+         "Disc valve: a cutaway disc on the crank - opens early, shuts early (MZ, Rotax racers).");
+    if (p_.tsInlet == 0)
+        SliderF("Reed valve area", &p_.tsReedArea_cm2, 4, 60, "%.0f cm2", "Flow area with the petals fully lifted (a spring-mass petal, 150 Hz).");
+    else if (p_.tsInlet == 1) {
+        SliderF("Inlet port opens", &p_.tsInletOpen, 40, 130, "%.0f deg BTDC", "The skirt uncovers it; it shuts as far after TDC. Blair (Fig. 1.9): ~65 deg on\n"
+                "industrial / moped engines, ~75 enduro, ~100 motocross / GP.");
+        SliderF("Inlet port area", &p_.tsInletArea_cm2, 2, 40, "%.1f cm2");
+    } else {
+        SliderF("Disc opens", &p_.tsInletOpen, 90, 170, "%.0f deg BTDC", "Blair: ~150 / 65 on a scooter, ~140 / 80 on a racing engine.");
+        SliderF("Disc closes", &p_.tsInletClose, 30, 110, "%.0f deg ATDC");
+        SliderF("Inlet port area", &p_.tsInletArea_cm2, 2, 40, "%.1f cm2", "The port window the disc uncovers (it opens and shuts over 56 deg).");
+    }
+    ImGui::TextDisabled("Intake tract (carb / throttle to the inlet): runner length and bore on the Intake tab - 1D gas dynamics.");
     SliderF("Transfer passage length", &p_.tsTransferLen, 0.3f, 3.0f, "%.2f x stroke",
             "Length of the gas column in the transfer passages, crankcase to port window. Its momentum keeps the charge\n"
             "flowing into the cylinder as the cylinder pressure comes back up: longer = more delivery at high revs.");
@@ -410,6 +440,26 @@ void App::panelTwoStroke() {
             "the chamber and its squish, not by load or speed. Measured (Blair): 41 deg for a 125 cc Grand Prix\n"
             "engine, 49-60 deg for 400 cc research engines, 64 deg for a chainsaw. Before it comes an ignition\n"
             "delay of ~10-14 deg, longer with more burned gas left in the cylinder (up to ~23 deg at light load).");
+    {
+        ImGui::SeparatorText("Squish band");
+        SliderF("Squish area ratio", &p_.tsSquishArea, 0.0f, 0.8f, "%.2f", "Share of the bore area covered by the squish band (central chamber).");
+        SliderF("Squish clearance", &p_.tsSquishClear_mm, 0.6f, 4.0f, "%.2f mm", "Piston crown to head at TDC across the band.");
+        ImGui::Text("Max squish velocity %.1f m/s, squished kinetic energy %.1f mJ (now, Blair Prog.4.1)", tel_.tsSquishMs, tel_.tsSquishKeMJ);
+        Help("As the piston comes up, the band squeezes the charge into the bowl: the jet stirs the charge and speeds\n"
+             "the flame. Blair: aim for 15-20 m/s at peak-power speed with a central chamber on gasoline - more and the\n"
+             "end gas can knock; natural gas wants 30+.");
+        Check("Burn period from the squish band", &p_.tsBurnFromSquish);
+        Help("Flame speed = a part that grows with piston speed + the squish velocity (Blair eq. 4.3.1, Kee's flame\n"
+             "speeds), over ~1 bore. Calibrated on one engine (QUB LS400): it gives the 125 GP engine ~47-60 deg where\n"
+             "Blair measured 41 - a rough guide, not a prediction. Off: the burn period slider above.");
+        if (p_.tsBurnFromSquish) ImGui::Text("Burn period in use: %.0f deg", tel_.tsBurnDeg);
+    }
+    ImGui::SeparatorText("Lubrication");
+    SliderF("Premix fuel : oil", &p_.tsOilRatio, 0, 120, p_.tsOilRatio < 1.0f ? "oil pump (none in the fuel)" : "%.0f : 1",
+            "Oil mixed into the fuel. The carburettor meters liquid by volume, so the oil takes the place of some\n"
+            "gasoline: more oil runs leaner. About half of it burns (chosen); the rest leaves as blue smoke.\n"
+            "0 = a separate oil pump (oil injection) - nothing in the fuel.");
+    if (p_.tsOilRatio >= 1.0f) ImGui::Text("Unburned oil out of the exhaust: %.0f g/h", tel_.tsOilSmokeGh);
     ImGui::SeparatorText("Expansion chamber");
     Check("Expansion chamber (tuned pipe)", &p_.tsPipe);
     Help("Header, diverging cone, belly, converging cone, stinger. The blowdown pulse reflects off the diverging cone\n"
@@ -422,6 +472,24 @@ void App::panelTwoStroke() {
                 "Blair's empirical expansion chamber: broad enduro pipe (0) .. motocross (0.5) .. road racing (1).\n"
                 "Racing: a first pipe barely wider than the port, a fatter belly and a narrower tail pipe -\n"
                 "stronger suction and plugging, over a narrower speed range.");
+        Check("Measured dimensions", &p_.tsPipeCustom);
+        Help("Your own pipe's lengths and diameters (Blair's Fig. 5.7 segments) instead of the empirical design.\n"
+             "The defaults are Blair's 125 cc racing engine pipe \"A2\".");
+        if (p_.tsPipeCustom) {
+            if (ImGui::SmallButton("Copy the empirical design")) {
+                EngineParams q = p_; q.tsPipeCustom = 0;
+                const TunedPipeGeom e = tunedPipeGeometry(q);
+                for (int j = 0; j < 7; ++j) { p_.tsPipeLen_mm[j] = (float)(e.len[j] * 1e3); p_.tsPipeDia_mm[j] = (float)(e.dia[j] * 1e3); }
+            }
+            static const char* kSeg[7] = {"L1 first pipe", "L2 diffuser 1", "L3 diffuser 2", "L4 diffuser 3", "L5 belly", "L6 rear cone", "L7 tail pipe"};
+            static const char* kDia[7] = {"d1 first pipe", "d2 end of L2", "d3 end of L3", "d4 belly", "d5 belly end", "d6 end of rear cone", "d7 tail pipe"};
+            for (int j = 0; j < 7; ++j) {
+                ImGui::PushID(j);
+                SliderF(kSeg[j], &p_.tsPipeLen_mm[j], 10, 600, "%.0f mm");
+                SliderF(kDia[j], &p_.tsPipeDia_mm[j], 10, 200, "%.1f mm");
+                ImGui::PopID();
+            }
+        }
         const TunedPipeGeom g = tunedPipeGeometry(p_);
         ImGui::Text("Tuned length %.0f mm (port to tail pipe, waves at %.0f C)", g.lt * 1000.0, g.texcC);
         ImGui::Text("Lengths   %.0f / %.0f / %.0f / %.0f / %.0f / %.0f / %.0f mm", g.len[0] * 1e3, g.len[1] * 1e3, g.len[2] * 1e3,

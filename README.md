@@ -31,7 +31,8 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🌀 **The rotary "brap"** | A bridge-ported 13B idles lumpy because exhaust floods back through the port overlap and the diluted charges misfire — modelled, not faked. |
 | 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control; trigger wheels (60-2, 36-1, 36-2-2-2 …) with crank / cam sync, sequential / semi-sequential / batch injection, coil dwell table. |
 | 🛢️ **Diesel** | Compression ignition with direct injection: Assanis ignition delay, pump or common rail injection (rail pressure, nozzle orifice flow, pilots / main / post), premixed / diffusion burn, no throttle (the load is the fuel quantity), smoke limiter, idle and max-speed governors, glow plugs with pre- and post-heat, variable geometry turbo, cooled EGR, engine-out NOx and soot (smoke number) — and the diesel clatter from the chamber ringing through the engine structure. |
-| 🏍️ **Two-stroke** | One power stroke per revolution: piston-controlled exhaust and transfer ports, the crankcase pumping the charge in through a spring-mass reed valve, scavenging from cylinders measured on Blair's QUB rig, and an expansion chamber (Blair's empirical design) simulated as 1D unsteady gas dynamics, whose suction and plugging waves push the escaped charge back and move the power band with its tuning; Blair-style ignition delay and Vibe burn — checked against Blair's measured 125 cc racing engine. Light load four-strokes on its own residual. |
+| 🏍️ **Two-stroke** | One power stroke per revolution: piston-controlled exhaust and transfer ports, the crankcase pumping the charge in through a spring-mass reed valve, a piston port or a disc valve - its intake tract as 1D gas dynamics too -, a servo-driven power valve, scavenging from cylinders measured on Blair's QUB rig, and an expansion chamber (Blair's empirical design) simulated as 1D unsteady gas dynamics, whose suction and plugging waves push the escaped charge back and move the power band with its tuning; Blair-style ignition delay and Vibe burn, squish velocity from the chamber, premix oil — checked against Blair's measured 125 cc racing engine with its own pipe (delivery ratio within 0.05, charging within 0.04). Light load four-strokes on its own residual; twins and triples step their pipes on extra cores (same result as one core). |
+| 🧊 **3D engine view** | A GPU-rendered (Direct3D 11) model built from the engine's own dimensions: pistons, rods, crank, valvetrain (DOHC / SOHC / OHV) and its belt, chain or gears, manifolds, turbo / supercharger, the diesel's injection system, the two-stroke's ports and expansion chamber, the rotary's housings — moving live with valve lift, spark, gas by stroke and glowing headers. |
 | ⛽ **Fuels and flex fuel** | Regular / premium / race gasoline, E10, E20, E85, E100 and methanol, each with its own stoichiometric AFR, heating value, octane (knock), charge cooling, flame speed and cold start; a tank you can refuel with a blend, and a flex fuel sensor the ECU uses to adapt its fuelling, spark and cold enrichment. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
 | 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; compressor / turbine maps (built in or loaded from CSV) with efficiency islands, surge and choke; intercooler heat soak; Roots, twin-screw and centrifugal superchargers. |
@@ -105,6 +106,9 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 |  |  | 27 | **I6 5.9 inline-pump truck diesel (6BT-style)** |
 |  |  | 28 | **V8 6.6 common rail diesel (Duramax L5P-style)** |
 |  |  | 29 | **1-cyl 0.46 air-cooled diesel (Hatz 1B40-style)** |
+|  |  | 30 | **350 two-stroke twin with power valve (RD350 YPVS-style)** |
+|  |  | 31 | **500 piston-port two-stroke triple, air-cooled (H1-style)** |
+|  |  | 32 | **300 two-stroke EFI single, oil pump, power valve (300 TPI-style)** |
 
 ## Building from source
 
@@ -127,7 +131,9 @@ If CMake is not on your PATH, use the one bundled with Visual Studio
 A fixed header (ignition, START ENGINE, throttle, preset, RPM / MAP / AFR / timing / boost / EGT readouts and
 warning lamps) and a 12-section navigation in the style of ECU software:
 
-1. **Engine Setup** — geometry, valvetrain / rotary ports, exhaust, vehicle, sound, components, and the
+1. **Engine Setup** — geometry, valvetrain / rotary ports / two-stroke ports (power valve, reed / piston port / disc
+   valve inlet, squish band, premix oil, expansion chamber with Blair's design or your measured dimensions), exhaust,
+   vehicle, sound, components, and the
    **engine view**: a GPU-rendered (Direct3D 11) 3D model built from the engine's own dimensions - pistons, rods,
    crank, valvetrain (DOHC buckets, SOHC rockers or OHV pushrods from a block cam) and the timing belt, chain or
    gear train inside glass liners and heads, cooling fins on air-cooled engines, intake and exhaust manifolds, turbo
@@ -310,7 +316,7 @@ build/Release/flow_test.exe          # flow map: the gas-path flows add up, reve
 build/Release/sound_test.exe         # exhaust acoustics vs theory: open-end reflection (Levine & Schwinger), chamber / side-branch / Helmholtz transmission loss
 build/Release/diesel_test.exe        # diesel: ignition delay vs hand calculation, governors, smoke limit, cetane, clatter, pilot injection, glow plugs / cold start, VGT, EGR,
                                      #   common rail / multi-pulse, NOx / soot, EGR cooler, VGT efficiency, glow post-heat, the diesel presets
-build/Release/twostroke_test.exe     # two-stroke: ports, crankcase / reed, scavenging, Blair 125 validation, ignition delay / burn, expansion chamber tuning, four-stroking, start / idle
+build/Release/twostroke_test.exe     # two-stroke: ports, crankcase / reed, scavenging, Blair 125 validation, ignition delay / burn, expansion chamber tuning, four-stroking, start / idle, power valve sweep, piston port / disc valve, squish, premix oil, pipe gas temperature, presets 30-32
 build/Release/model_test.exe         # 3D engine view model (GPU stubbed): every preset builds with sane bounds, no new meshes while turning
 ```
 
@@ -406,6 +412,7 @@ python tools/analyze_wav.py brap.wav 0 8 900       # level + spectral peaks (eng
 - [x] Package 3 — flow map of the gas path and the engine health panel
 - [x] Package 4 — diesel (compression ignition, direct injection, VGT + EGR, smoke limit, glow plugs, diesel clatter)
 - [x] Package 5 — two-stroke engines (crankcase scavenging through a reed valve, piston-controlled ports, measured-cylinder scavenging, 1D gas-dynamic expansion chamber, four-stroking)
+- [x] Package 5 follow-up — 1D intake tract, power valve, piston-port / disc-valve inlets, premix oil, squish, measured pipe dimensions, twin / triple / EFI presets
 
 ## Acknowledgements
 

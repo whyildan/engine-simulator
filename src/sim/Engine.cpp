@@ -2,6 +2,7 @@
 #include "sim/Injector.h"
 #include "sim/Scavenge.h"
 #include "sim/Flame.h"
+#include "sim/Squish.h"
 #include <cstdlib>
 #include <cstdio>
 #include <algorithm>
@@ -38,6 +39,7 @@ Engine::Engine(const EngineParams& p, double fs) : p_(p), fs_(fs) {
     intake.build(p_, fs, geom_.Vd * n);
     fuelSetup(true);
     crankcaseInit();
+    pvPos_ = twoStroke_ && p_.tsPowerValve ? 0.0 : 1.0;
     exhaust.build(p_, phase_, fs);
     boost.init(p_, fs);
     thermal.init(p_);
@@ -191,6 +193,13 @@ void Engine::updateValveDynamics(double rpm) {
     floatEx = (1.0 - b) * vdEx_.severity(vex_.lift) + b * vdExHi_.severity(vexHi_.lift);
 }
 
+// two-stroke with two or more cylinders: step its ducts on `workers` extra threads (0: off - tests, base map)
+void Engine::setParallel(int workers) {
+    pool_.reset();
+    if (workers > 0 && twoStroke_ && nPorts_ >= 2 && (exhaust.ductCount() > 0 || intake.ductPorts()))
+        pool_ = std::make_unique<DuctPool>(workers);
+}
+
 void Engine::apply(const EngineParams& p) {
     p_ = p;
     p_.cylinders = nPorts_;
@@ -252,8 +261,14 @@ void Engine::fuelSetup(bool fresh) {
         }
     }
     tankProps_ = fuelProps(tank_);
-    fuel_ = fuelProps(line_);
+    fuel_ = lineFuel();
     intake.setFuel(fuel_);
+}
+
+// what the engine burns: the fuel in the line - a two-stroke's premix with its oil (Fuel.h, premixed)
+FuelProps Engine::lineFuel() const {
+    const FuelProps f = fuelProps(line_);
+    return twoStroke_ && !f.diesel ? premixed(f, p_.tsOilRatio) : f;
 }
 
 // fuel line + rail (~1 L): the pump circulates it through the return line, so a new fuel in the tank reaches the
@@ -265,7 +280,7 @@ void Engine::fuelStep(double dt, double fuelKgs) {
     const double flowL = (p_.ignition ? 120.0 / 3600.0 * dt : 0.0) + usedL;   // circulation (pump on) + consumption
     if (flowL > 0) {
         line_ = mixBlends(line_, std::max(0.0, lineL - flowL), tank_, std::min(flowL, lineL));
-        fuel_ = fuelProps(line_);
+        fuel_ = lineFuel();
         intake.setFuel(fuel_);
     }
 }
@@ -277,6 +292,13 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     elec.step(h, rpm, p_.ignition != 0, p_.starter != 0);
     rail.step(h, fuelKgs / fuel_.density * 3600.0, (mapPa - kPatm) / 1e5, p_.ignition != 0, p_);
     fuelStep(h, fuelKgs);
+    // power valve: a servo lifts it with engine speed (Yamaha's YPVS: the CDI drives a servo motor) - linear from
+    // tsPvRpmLow to tsPvRpmHigh, first-order with a 0.12 s time constant (chosen; Blair's 125: fully lifted by 9500)
+    if (twoStroke_ && p_.tsPowerValve) {
+        const double lo = p_.tsPvRpmLow, hi = p_.tsPvRpmHigh;
+        const double tgt = hi > lo + 1.0 ? clampv((rpm - lo) / (hi - lo), 0.0, 1.0) : (rpm >= hi ? 1.0 : 0.0);
+        pvPos_ += (tgt - pvPos_) * (1.0 - std::exp(-h / 0.12));
+    } else pvPos_ = 1.0;
     ThermalInputs ti;
     ti.fuelPowerW = fuelKgs * fuel_.lhv;
     ti.frictionPowerW = lastFricW_;
@@ -607,7 +629,51 @@ void Engine::crankcaseInit() {
 // one step of a crankcase: the piston's underside changes its volume (compression work on the gas), the reed valve
 // lets the charge in from the intake port while the crankcase is below the port pressure (one way: the petals close
 // on the seat when it is higher), and the gas exchanges heat with the warm crankcase walls
-void Engine::crankcaseStep(Crankcase& k, GasNode& ip, double vCyl, double dt) {
+// two-stroke squish band (Squish.h): the trapped compression ratio from the exhaust's top edge (valve lifted)
+SquishResult Engine::squish(double rpm) const {
+    if (!twoStroke_) return SquishResult{};
+    const double crT = (geom_.Vc + geom_.A * geom_.sEx) / geom_.Vc;
+    return squishVelocity(geom_.bore, geom_.stroke, geom_.rod, clampv((double)p_.tsExhaustOpen, 45.0, 150.0), crT,
+                          clampv((double)p_.tsSquishArea, 0.0, 0.9), clampv((double)p_.tsSquishClear_mm, 0.5, 6.0) * 1e-3, rpm);
+}
+// burn period: the chamber parameter, or from the squish band (Squish.h - one engine's calibration)
+double Engine::burnDeg2T() const {
+    if (!p_.tsBurnFromSquish) return p_.tsBurnDeg;
+    const double crT = (geom_.Vc + geom_.A * geom_.sEx) / geom_.Vc;
+    return squishBurnDeg(geom_.bore, geom_.stroke, geom_.rod, clampv((double)p_.tsExhaustOpen, 45.0, 150.0), crT,
+                         clampv((double)p_.tsSquishArea, 0.0, 0.9), clampv((double)p_.tsSquishClear_mm, 0.5, 6.0) * 1e-3);
+}
+
+double Engine::oilSmokeGh() const {
+    if (!twoStroke_ || p_.tsOilRatio <= 0) return 0.0;
+    const FuelProps f = fuelProps(line_);
+    if (f.diesel) return 0.0;
+    return std::max(0.0, intake.fuelFlow()) * premixOilShare(p_.tsOilRatio, f.density) * (1.0 - kOilBurned) * 3.6e6;
+}
+
+// disc (rotary) valve port: the disc's cutaway sweeps over the port window - its area rises linearly over the port
+// angle phi_p, stays full, and falls again (Blair eqs. 5.2.8-5.2.10, Fig. 6.28). phi_p 56 deg: Blair's design example
+// for a 125 cc GP engine (Fig. 6.29), used for any engine (chosen). Piston port: the skirt (CylGeom::inletPortArea).
+double Engine::inletArea(double phi) const {
+    if (p_.tsInlet == 1) return geom_.inletPortArea(phi);
+    if (p_.tsInlet != 2) return 0.0;
+    const double open = clampv((double)p_.tsInletOpen, 30.0, 180.0), close = clampv((double)p_.tsInletClose, 0.0, 150.0);
+    const double period = open + close;
+    const double d = wrapPos(phi + open, 360.0);   // deg since it opened
+    if (d >= period) return 0.0;
+    const double ramp = std::min(56.0, 0.5 * period);
+    return clampv((double)p_.tsInletArea_cm2, 1.0, 80.0) * 1e-4 * std::min(1.0, std::min(d, period - d) / ramp);
+}
+
+double Engine::inletOpen(int i) const {
+    if (!twoStroke_ || i >= (int)cc_.size()) return 0.0;
+    if (p_.tsInlet == 0) return cc_[i].reed;
+    const double full = p_.tsInlet == 1 ? geom_.wIn * geom_.sIn : clampv((double)p_.tsInletArea_cm2, 1.0, 80.0) * 1e-4;
+    return full > 0 ? inletArea(cyls_[i].prevPhi) / full : 0.0;
+}
+
+void Engine::crankcaseStep(int idx, GasNode& ip, double vCyl, double phi, double dt) {
+    Crankcase& k = cc_[idx];
     const double vNew = ccVmin_ + (geom_.Vc + geom_.Vd - vCyl);
     const double p0 = k.g.p();
     k.U -= p0 * (vNew - k.g.V);
@@ -617,25 +683,77 @@ void Engine::crankcaseStep(Crankcase& k, GasNode& ip, double vCyl, double dt) {
     // across the petal; the force falls as the tip lifts away from the flow, (15 - lift mm) / 15 (Collins: 1/3 at
     // 10 mm). Stop plate at 10 mm (= lift 1, chosen); the petal rests on its seat when pushed shut. Static stiffness
     // kReedDpFull and the flow damping are calibrated: peak lift 6.3-8.2 mm at full throttle, 5000 rpm (Collins).
+    // two-stroke intake as 1D gas dynamics (T1, IntakeSystem::ductPorts): the inlet (reed petals' area, or the uncovered
+    // port) is the duct's port end - the flow through it solved against the wave arriving from the tract, both ways
+    if (intake.ductPorts()) {
+        Duct& d = intake.duct(idx);
+        const double dpd = d.cellP(0) - p0;
+        double a = 0.0;
+        if (p_.tsInlet == 0) {
+            const double w = 2.0 * kPi * kReedHz;
+            const double force = dpd / kReedDpFull * (1.0 - k.reed * 10.0 / 15.0);
+            k.reedV += (w * w * (force - k.reed) - 2.0 * kReedZeta * w * k.reedV) * dt;
+            k.reed += k.reedV * dt;
+            if (k.reed <= 0.0) { k.reed = 0.0; k.reedV = std::max(0.0, k.reedV); }
+            if (k.reed >= 1.0) { k.reed = 1.0; k.reedV = std::min(0.0, k.reedV); }
+            a = 0.7 * k.reed * std::max(0.0, (double)p_.tsReedArea_cm2) * 1e-4;
+        } else { k.reed = 0; k.reedV = 0; a = 0.7 * inletArea(phi); }
+        const double md = d.solvePort(a > 1e-9 ? a : 0.0, p0, k.g.T);   // + out of the crankcase
+        if (md > 0) {
+            const double q = std::min(md * dt, k.g.m * 0.3);
+            const double ff = k.g.fuelFrac(), bf = k.g.burnedFrac();
+            d.setPortGas(q / dt, ff, bf, k.g.T);
+            k.g.m -= q; k.g.mf -= q * ff; k.g.mb -= q * bf;
+            k.U -= q * kCp * k.g.T;
+        } else if (md < 0) {
+            double ff, bf, t0; d.backGas(ff, bf, t0);
+            const double q = -md * dt;
+            d.setPortGas(-q / dt, ff, bf, t0);
+            k.g.m += q; k.g.mf += q * ff; k.g.mb += q * bf;
+            k.U += q * kCp * t0;
+        }
+    } else {
     const double dp = ip.p() - p0;
-    {
+    if (p_.tsInlet != 0) {
+        // piston port / disc valve: an open window both ways - the crankcase spits charge back out into the intake
+        // when its pressure rises while the port is still open (Cd 0.7, as the reed's flow area: chosen)
+        k.reed = 0; k.reedV = 0;
+        const double a = 0.7 * inletArea(phi);
+        if (a > 0) {
+            const double f = limitedFlow(a, ip.p(), ip.T, ip.V, p0, k.g.T, k.g.V, dt, 0.35);
+            if (f > 0) {
+                const double q = std::min(f * dt, ip.m * 0.5);
+                const double ff = ip.fuelFrac(), bf = ip.burnedFrac();
+                ip.m -= q; ip.mf -= q * ff; ip.mb -= q * bf;
+                k.g.m += q; k.g.mf += q * ff; k.g.mb += q * bf;
+                k.U += q * kCp * ip.T;
+            } else if (f < 0) {
+                const double q = std::min(-f * dt, k.g.m * 0.3);
+                const double ff = k.g.fuelFrac(), bf = k.g.burnedFrac();
+                k.g.m -= q; k.g.mf -= q * ff; k.g.mb -= q * bf;
+                k.U -= q * kCp * k.g.T;
+                ip.m += q; ip.mf += q * ff; ip.mb += q * bf;
+            }
+        }
+    } else {
         const double w = 2.0 * kPi * kReedHz;
         const double force = dp / kReedDpFull * (1.0 - k.reed * 10.0 / 15.0);
         k.reedV += (w * w * (force - k.reed) - 2.0 * kReedZeta * w * k.reedV) * dt;
         k.reed += k.reedV * dt;
         if (k.reed <= 0.0) { k.reed = 0.0; k.reedV = std::max(0.0, k.reedV); }
         if (k.reed >= 1.0) { k.reed = 1.0; k.reedV = std::min(0.0, k.reedV); }
-    }
-    if (k.reed > 1e-4 && dp > 0) {
-        const double a = 0.7 * k.reed * std::max(0.0, (double)p_.tsReedArea_cm2) * 1e-4;
-        const double f = limitedFlow(a, ip.p(), ip.T, ip.V, p0, k.g.T, k.g.V, dt, 0.35);
-        if (f > 0) {
-            const double q = std::min(f * dt, ip.m * 0.5);
-            const double ff = ip.fuelFrac(), bf = ip.burnedFrac();
-            ip.m -= q; ip.mf -= q * ff; ip.mb -= q * bf;
-            k.g.m += q; k.g.mf += q * ff; k.g.mb += q * bf;
-            k.U += q * kCp * ip.T;
+        if (k.reed > 1e-4 && dp > 0) {
+            const double a = 0.7 * k.reed * std::max(0.0, (double)p_.tsReedArea_cm2) * 1e-4;
+            const double f = limitedFlow(a, ip.p(), ip.T, ip.V, p0, k.g.T, k.g.V, dt, 0.35);
+            if (f > 0) {
+                const double q = std::min(f * dt, ip.m * 0.5);
+                const double ff = ip.fuelFrac(), bf = ip.burnedFrac();
+                ip.m -= q; ip.mf -= q * ff; ip.mb -= q * bf;
+                k.g.m += q; k.g.mf += q * ff; k.g.mb += q * bf;
+                k.U += q * kCp * ip.T;
+            }
         }
+    }
     }
     // crankcase walls at about the oil temperature (h ~ 100 W/m2K over ~6 V^(2/3): chosen)
     const double area = 6.0 * std::pow(std::max(1e-6, k.g.V), 2.0 / 3.0);
@@ -774,7 +892,7 @@ double Engine::burnDuration(Cylinder& c, double rpm, double lambda) {
         c.tuSpark = c.tEnd; c.pSpark = c.p;
         const double cov = 0.05 + 0.10 * clampv(1.0 - c.pIvc / kPatm, 0.0, 0.8);
         c.sparkDelay = clampv(k2tDelayPerKernel * flameKernelFactor(c.slSpark) * (1.0 + 0.5 * cov * rng_.gauss()), 4.0, 40.0);
-        const double b = clampv((double)p_.tsBurnDeg, 25.0, 90.0) * (1.0 + cov * rng_.gauss());
+        const double b = clampv(burnDeg2T(), 25.0, 90.0) * (1.0 + cov * rng_.gauss());
         return clampv(b, 22.0, 120.0);
     }
     // base: the turbulence (u' grows with the piston speed) - burn angle rises slowly with rpm (x 1.12: the base was
@@ -806,7 +924,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
     const double dV = Vn - c.V;
     // two-stroke: the crankcase below this piston (pumped by its underside, filled through the reed valve)
     Crankcase* cc = twoStroke_ ? &cc_[i] : nullptr;
-    if (cc) crankcaseStep(*cc, ip, Vn, dt);
+    if (cc) crankcaseStep(i, ip, Vn, phi, dt);
 
     double dU = -c.p * dV;
     double dm = 0, dmf = 0, dmb = 0, dmbNew = 0;   // dmbNew: products made by the burn this step
@@ -822,7 +940,7 @@ void Engine::stepCylinder(int i, double dt, double phiPrev, double phi, double r
         //  duct area ratio, 0.72-0.79 at k 0.44 (App. A2.3, Fig. A2.5, measured on an exhaust port: the nearest
         //  measured case, borrowed); the transfer ducts themselves are not modelled)
         Ai = 0.75 * geom_.portArea(phi, geom_.sTr, geom_.wTr);
-        const double aGeo = geom_.portArea(phi, geom_.sEx, geom_.wEx);
+        const double aGeo = p_.tsPowerValve ? geom_.exhaustArea(phi, pvPos_) : geom_.portArea(phi, geom_.sEx, geom_.wEx);
         Ae = aGeo > 0 ? exhaustPortCd(aGeo / exhaust.portPipeArea(port), c.p / std::max(1.0, ep.p())) * aGeo : 0.0;
     }
     else { Ai = vin_.area(camLift(vin_, vinHi_, phi, true)); Ae = vex_.area(camLift(vex_, vexHi_, phi, false)); }
@@ -1398,8 +1516,21 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
             GasNode& g = exhaust.port(portOf_[i]);
             g.T += (clampv(cyls_[i].egt, 500.0, 1500.0) - g.T) * std::min(1.0, dt / 0.02);
         }
-    exhaust.step(dt);
-    intake.stepWaves(dt);
+    if (pool_) {
+        // multi-cylinder two-stroke: every tuned pipe and intake tract steps at once on the pool (same results as in
+        // order - each duct only reads the boundary fluxes solved before)
+        exhaust.stepPre(dt);
+        intake.stepWavesPre(dt);
+        ductTasks_.clear();
+        for (int i = 0; i < exhaust.ductCount(); ++i) ductTasks_.push_back({&exhaust.duct(i), exhaust.ambientK()});
+        if (intake.ductPorts()) for (int i = 0; i < nPorts_; ++i) ductTasks_.push_back({&intake.duct(i), intake.ambientK()});
+        pool_->run(ductTasks_.data(), (int)ductTasks_.size(), dt);
+        exhaust.stepPost(dt);
+        intake.stepWavesPost();
+    } else {
+        exhaust.step(dt);
+        intake.stepWaves(dt);
+    }
 
     // ---- crank dynamics
     // volume swept per shaft revolution: four-stroke = half the displacement, rotary = Vd per rotor, two-stroke = all

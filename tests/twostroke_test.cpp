@@ -4,6 +4,7 @@
 #include "sim/Simulator.h"
 #include "ecu/BaseMap.h"
 #include "sim/Scavenge.h"
+#include "sim/Squish.h"
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -14,7 +15,7 @@ static int failures = 0;
                            else { ++failures; std::printf("  FAIL: "); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
 
 // the engine held at a fixed speed (a motoring rig with the ignition on): averages over `meas` seconds
-struct Rig { double tq, dr, te, se, ce, ccMin, ccMax, reedMax, reedAtPeak, imep, misShare, dilShare; };
+struct Rig { double tq, dr, te, se, ce, ccMin, ccMax, reedMax, reedAtPeak, imep, misShare, dilShare, lam; };
 static Rig rig(EngineParams p, double rpm, double thr, double settle = 2.0, double meas = 1.0) {
     const double fs = 96000.0, dt = 1.0 / fs;
     p.ignition = 1;
@@ -37,10 +38,10 @@ static Rig rig(EngineParams p, double rpm, double thr, double settle = 2.0, doub
         if (pc > r.ccMax) { r.ccMax = pc; r.reedAtPeak = e.reedOpen(0); }
         r.reedMax = std::max(r.reedMax, e.reedOpen(0));
         const Cylinder& c = e.cyl(0);
-        if (c.prevPhi < lastPhi) { dr += c.dr; te += c.te; se += c.se; ce += c.ce; imep += c.imep; ++cyc; }
+        if (c.prevPhi < lastPhi) { dr += c.dr; te += c.te; se += c.se; ce += c.ce; imep += c.imep; r.lam += c.lambda; ++cyc; }
         lastPhi = c.prevPhi;
     }
-    r.tq = tq / std::max(1, n);
+    r.tq = tq / std::max(1, n); r.lam /= std::max(1, cyc);
     r.dr = dr / std::max(1, cyc); r.te = te / std::max(1, cyc); r.se = se / std::max(1, cyc); r.ce = ce / std::max(1, cyc); r.imep = imep / std::max(1, cyc) * 1e-5;
     r.misShare = ((int)e.misfires - mis0) / std::max(1.0, (double)cyc);
     r.dilShare = (e.misfireCause[Engine::kMisDilution] - dil0) / std::max(1.0, (double)((int)e.misfires - mis0));
@@ -48,14 +49,22 @@ static Rig rig(EngineParams p, double rpm, double thr, double settle = 2.0, doub
 }
 
 // Blair's 125 cc racing engine (Design and Simulation of Two-Stroke Engines, sec. 5.5.2, Cartwright's engine with
-// pipe "A2" - here Blair's empirical road-race pipe for its 11,750 rpm): 56 x 50.6 mm, rod 110, trapped CR 9,
-// crankcase 1.35, exhaust / transfers open 81 / 115 deg ATDC, transfers 80.4 mm wide, exhaust ~42 mm, 38 mm carburettor,
-// ignition 20 deg BTDC, burn 41 deg; the cylinder is taken as YAM14 (Blair used it too)
+// pipe "A2" - its measured lengths / diameters): 56 x 50.6 mm, rod 110, trapped CR 9, crankcase 1.35, exhaust /
+// transfers open 81 / 115 deg ATDC, transfers 80.4 mm wide, exhaust ~42 mm, 38 mm slide carburettor, ignition 20 deg
+// BTDC, burn 41 deg; the cylinder is taken as YAM14 (Blair used it too). Its exhaust control valve closes the port at
+// 95 deg BTDC when lowered and is fully lifted by 9500 rpm. The intake tract (Blair gives no dimensions): an open
+// bell - a big air box - and 200 mm from it to the reed (chosen).
 static EngineParams blair125(EngineParams b) {
     b.bore_mm = 56; b.stroke_mm = 50.6f; b.rod_mm = 110;
     b.tsExhaustOpen = 81; b.tsTransferOpen = 115; b.tsExhaustWidth = 42.0f / 56.0f; b.tsTransferWidth = 80.4f / 56.0f;
     b.tsCrankcaseCR = 1.35f; b.tsReedArea_cm2 = 15; b.tsScavenge = 9; b.tsBurnDeg = 41;
-    b.tsPipe = 1; b.tsPipeRpm = 11750; b.tsPipeClass = 1.0f;
+    b.tsPipe = 1; b.tsPipeRpm = 11750; b.tsPipeClass = 1.0f; b.tsPipeCustom = 1;
+    {
+        const float L[7] = {83, 189, 209, 65, 78, 205, 250}, D[7] = {37.5f, 48.5f, 100, 116, 116, 21, 21};
+        for (int j = 0; j < 7; ++j) { b.tsPipeLen_mm[j] = L[j]; b.tsPipeDia_mm[j] = D[j]; }
+    }
+    b.tsPowerValve = 1; b.tsPvLowOpen = 95; b.tsPvRpmLow = 8800; b.tsPvRpmHigh = 9500;
+    b.plenum_L = 3.0f; b.runnerLen_mm = 200; b.runnerDia_mm = 38;
     b.baseAdvance = 20; b.mechAdvance = 0; b.revLimit = 14000; b.venturi_mm = 38; b.throttleBore_mm = 38;
     CylGeom g; g.set(b);
     const double A = kPi * 0.25 * g.bore * g.bore, vc = A * g.sEx / 8.0;   // trapped compression ratio 9
@@ -115,26 +124,33 @@ int main() {
         const Rig poor = rig(q, 5500, 1.0);
         std::printf("  YAM14: DR %.2f TE %.2f SE %.2f | YAM12: DR %.2f TE %.2f SE %.2f\n", good.dr, good.te, good.se, poor.dr, poor.te, poor.se);
         CHECK(good.se > 0.75 && good.se < 0.99, "full-load scavenging efficiency of a good loop cylinder (%.2f)", good.se);
-        CHECK(good.te > poor.te && good.se > poor.se, "the poor cylinder traps less and keeps more burned gas");
+        // (with the tuned pipe plugging the port both reach SE ~0.95 at this delivery: the poor one loses more of its charge)
+        CHECK(good.te > poor.te && good.ce > poor.ce, "the poor cylinder traps less and charges less");
     }
 
     // ---------------- validation: Blair's 125 cc racing engine (sec. 5.5.2), measured scavenging (Fig. 5.29)
     {
         std::printf("[Blair 125] reed-valve racing engine with its tuned pipe, full throttle on the rig\n");
+        // measured (Figs. 5.28 / 5.29): DR, TE, CE, bmep. (8780 rpm is left out: the valve's position there is not known -
+        // Blair leaves it out of his own comparison too)
         const EngineParams b = blair125(p);
-        struct M { double rpm, dr, te, ce; } meas[2] = {{8780, 1.26, 0.50, 0.63}, {11740, 1.15, 0.69, 0.79}};
-        Rig r[2];
-        for (int k = 0; k < 2; ++k) {
+        struct M { double rpm, dr, te, ce, bmep; } meas[4] = {{9600, 1.20, 0.54, 0.66, 8.6}, {11200, 1.15, 0.66, 0.76, 10.2},
+                                                              {11750, 1.15, 0.69, 0.79, 10.4}, {12300, 1.10, 0.72, 0.80, 9.9}};
+        double eDr = 0, eTe = 0, eCe = 0, eBm = 0;
+        Rig r[4];
+        for (int k = 0; k < 4; ++k) {
             r[k] = rig(b, meas[k].rpm, 1.0, 1.5, 0.8);
-            std::printf("  %5.0f rpm: DR %.2f (measured %.2f)  TE %.2f (%.2f)  CE %.2f (%.2f)\n", meas[k].rpm, r[k].dr, meas[k].dr,
-                        r[k].te, meas[k].te, r[k].ce, meas[k].ce);
+            const double bm = 2.0 * kPi * r[k].tq / (kPi * 0.25 * 0.056 * 0.056 * 0.0506) * 1e-5;
+            std::printf("  %5.0f rpm: DR %.2f (measured %.2f)  TE %.2f (%.2f)  CE %.2f (%.2f)  bmep %.1f (%.1f) bar\n", meas[k].rpm,
+                        r[k].dr, meas[k].dr, r[k].te, meas[k].te, r[k].ce, meas[k].ce, bm, meas[k].bmep);
+            eDr = std::max(eDr, std::fabs(r[k].dr - meas[k].dr)); eTe = std::max(eTe, std::fabs(r[k].te - meas[k].te));
+            eCe = std::max(eCe, std::fabs(r[k].ce - meas[k].ce)); eBm = std::max(eBm, std::fabs(bm / meas[k].bmep - 1.0));
         }
-        CHECK(std::fabs(r[0].dr - meas[0].dr) < 0.2 && std::fabs(r[1].dr - meas[1].dr) < 0.2,
-              "delivery ratio within 0.2 of the measured at both speeds (transfer passages' inertia)");
-        CHECK(std::fabs(r[0].te - meas[0].te) < 0.1 && std::fabs(r[1].te - meas[1].te) < 0.1,
-              "trapping efficiency within 0.1 of the measured at both speeds");
-        CHECK(r[1].te > r[0].te + 0.1 && r[1].ce > r[0].ce + 0.1, "the tuned pipe raises trapping and charging toward its speed");
-        CHECK(r[1].ce > 0.6, "charging efficiency at the tuned speed (measured 0.79)");
+        CHECK(eDr < 0.1, "delivery ratio within 0.1 of the measured (1D intake tract + transfer passages): worst %.2f", eDr);
+        CHECK(eTe < 0.08, "trapping efficiency within 0.08: worst %.2f", eTe);
+        CHECK(eCe < 0.08, "charging efficiency within 0.08: worst %.2f", eCe);
+        CHECK(eBm < 0.2, "bmep within 20 %% of the dyno: worst %.0f %%", eBm * 100.0);
+        CHECK(r[2].ce > r[0].ce + 0.05, "the tuned pipe raises charging toward its speed");
     }
 
     // ---------------- combustion: Blair's ignition delay and Vibe burn (sec. 4.3.6)
@@ -210,6 +226,98 @@ int main() {
         CHECK(peakRpm[0] < peakRpm[1], "a pipe tuned lower (longer) moves the torque peak down");
     }
 
+    // ---------------- power valve (T6): Blair's 125 at 8500 rpm, the valve's timing swept (Fig. 5.31: best ~100 ATDC)
+    {
+        std::printf("[power valve] Blair 125 at 8500 rpm, valve held lowered at each timing\n");
+        EngineParams b = blair125(p);
+        b.tsPvRpmLow = b.tsPvRpmHigh = 20000;   // held fully lowered
+        double best = 0, bestEo = 0, raised = 0;
+        for (float eo : {81.0f, 90.0f, 95.0f, 100.0f, 105.0f, 110.0f}) {
+            b.tsPvLowOpen = eo;
+            const Rig r = rig(b, 8500, 1.0, 1.5, 0.6);
+            std::printf("  opens %3.0f ATDC: %.1f Nm  TE %.2f\n", eo, r.tq, r.te);
+            if (eo == 81.0f) raised = r.tq;
+            if (r.tq > best) { best = r.tq; bestEo = eo; }
+        }
+        CHECK(bestEo >= 95.0f && bestEo <= 105.0f, "best timing at 8500 rpm near Blair's 100 deg ATDC (%.0f)", bestEo);
+        CHECK(best > 1.2 * raised, "lowering the valve gains torque below the pipe's speed (+%.0f %%)", (best / raised - 1.0) * 100.0);
+        Engine e(blair125(p), 96000.0);
+        CHECK(e.powerValve() < 0.01, "the servo holds it lowered at rest");
+    }
+
+    // ---------------- inlet: piston port and disc valve (T8)
+    {
+        std::printf("[inlet] preset 25 with a piston port / a disc valve, full throttle\n");
+        for (int k = 1; k <= 2; ++k) {
+            EngineParams q = p; q.tsInlet = k; q.tsInletArea_cm2 = 14; q.ignition = 1;
+            if (k == 1) q.tsInletOpen = 100; else { q.tsInletOpen = 140; q.tsInletClose = 80; }
+            Engine e(q, 96000.0);
+            const double w = 7000.0 * 2.0 * kPi / 60.0;
+            e.setCrank(w, 0.0);
+            double tq = 0, back = 0, open = 0; int n = 0;
+            for (double t = 0; t < 2.0; t += 1.0 / 96000.0) {
+                e.setCrank(w, e.theta()); e.step(1.0 / 96000.0, 1.0, 0.0);
+                if (t < 1.2) continue;
+                tq += e.netTorque(); ++n;
+                if (e.intake.duct(0).cellU(0) > 5.0 && e.inletOpen(0) > 0.05) back += 1.0;   // gas leaving the crankcase
+                open += e.inletOpen(0) > 0 ? 1.0 : 0.0;
+            }
+            std::printf("  %s: %.1f Nm at 7000 rpm, port open %.0f %% of the time, flowing back out %.0f %%\n",
+                        k == 1 ? "piston port" : "disc valve", tq / n, open / n * 100.0, back / n * 100.0);
+            CHECK(tq / n > 15.0, "%s engine runs and pulls", k == 1 ? "piston-port" : "disc-valve");
+            if (k == 1) CHECK(std::fabs(open / n - 200.0 / 360.0) < 0.02, "piston port open 200 deg of 360 (100 BTDC to 100 ATDC)");
+            if (k == 1) CHECK(back > 0, "the crankcase spits charge back into the intake through the open port");
+            if (k == 2) CHECK(std::fabs(open / n - 220.0 / 360.0) < 0.02, "disc valve open 220 deg (140 BTDC to 80 ATDC)");
+        }
+    }
+
+    // ---------------- squish (T5): Blair's Prog.4.1 example
+    {
+        std::printf("[squish] Blair Fig. 4.14: 70 x 70 x 125, 5000 rpm, EO 104, trapped CR 7, Csq 0.5, 1.2 mm\n");
+        const SquishResult q = squishVelocity(0.070, 0.070, 0.125, 104.0, 7.0, 0.5, 0.0012, 5000.0);
+        std::printf("  max %.1f m/s at %.1f deg BTDC, kinetic energy %.2f mJ (Blair 20.9 / 10 / 6.94)\n", q.vMax, q.degBtdc, q.keJ * 1e3);
+        CHECK(std::fabs(q.vMax - 20.9) < 0.6 && std::fabs(q.degBtdc - 10.0) < 1.5 && std::fabs(q.keJ * 1e3 - 6.94) < 0.3,
+              "squish velocity, its angle and the squished energy as Blair's program");
+        const double bTight = squishBurnDeg(0.056, 0.0506, 0.110, 81.0, 9.0, 0.6, 0.0008), bOpen = squishBurnDeg(0.056, 0.0506, 0.110, 81.0, 9.0, 0.3, 0.002);
+        std::printf("  burn period from squish, 125 GP: tight band %.0f deg, open band %.0f deg (measured 41 with its own band)\n", bTight, bOpen);
+        CHECK(bTight < bOpen, "a tighter, larger squish band burns faster");
+    }
+
+    // ---------------- premix oil (T7)
+    {
+        std::printf("[oil] the same carburettor on 20:1 and 50:1 premix, 7000 rpm full throttle\n");
+        double lam[2], smoke[2];
+        const float ratio[2] = {20.0f, 50.0f};
+        for (int k = 0; k < 2; ++k) {
+            EngineParams q = p; q.tsOilRatio = ratio[k];
+            const Rig r = rig(q, 7000, 1.0, 1.2, 0.6);
+            Engine e(q, 96000.0);
+            lam[k] = r.lam; smoke[k] = premixOilShare(ratio[k], 0.745) * (1.0 - kOilBurned);
+            std::printf("  %2.0f:1  trapped lambda %.3f, oil %.1f %% of the liquid by mass\n", ratio[k], r.lam, premixOilShare(ratio[k], 0.745) * 100.0);
+        }
+        CHECK(lam[0] > lam[1] + 0.01, "more oil in the fuel runs leaner (it displaces gasoline in the jets)");
+        CHECK(smoke[0] > 2.0 * smoke[1], "and puts out more unburned oil");
+    }
+
+    // ---------------- tuned pipe gas temperature (T3): Blair 125 mid-pipe, measured (Fig. 5.30)
+    {
+        std::printf("[pipe gas] Blair 125 at 11,750 rpm: mean gas temperature at the pipe's mid-section\n");
+        const double fs = 96000.0, dt = 1.0 / fs, w = 11750.0 * 2.0 * kPi / 60.0;
+        EngineParams q = blair125(p); q.ignition = 1;
+        Engine e(q, fs);
+        e.setCrank(w, 0.0);
+        double tm = 0; int n = 0;
+        for (double t = 0; t < 2.3; t += dt) {
+            e.setCrank(w, e.theta()); e.step(dt, 1.0, 0.0);
+            if (t < 1.5) continue;
+            Duct& d = e.exhaust.duct(0);
+            int mid = 0; for (int i = 0; i < d.cells(); ++i) if (d.cellX(i) < 0.5 * d.length()) mid = i;
+            tm += d.cellT(mid); ++n;
+        }
+        std::printf("  %.0f C (measured 517, Blair's own simulation ~540)\n", tm / n - 273.15);
+        CHECK(std::fabs(tm / n - 273.15 - 517.0) < 100.0, "within 100 K of the thermocouple");
+    }
+
     // ---------------- light load: four-stroking (residual feedback misfires - SAE 830091), not at full load
     {
         std::printf("[four-stroking] 3000 rpm: a crack of throttle (4.5 %%) vs full throttle\n");
@@ -237,6 +345,47 @@ int main() {
         std::printf("  started after %.2f s, idles at %.0f rpm\n", t0, rpm);
         CHECK(t0 < 3.0, "a warm engine starts within 3 s");
         CHECK(rpm > 1000 && rpm < 2500, "it idles on its own");
+    }
+
+    // ---------------- the multi-cylinder / EFI presets (T11, T13): start, idle, full-throttle torque
+    {
+        std::printf("[presets] start, idle and torque against the makers' / dyno figures\n");
+        struct T { int id; double rpm, nm; const char* src; } tg[3] = {{30, 8000, 40.2, "RD350F2 spec"}, {31, 7000, 56.0, "H1 Moto-Data"},
+                                                                       {32, 7500, 43.7, "300 SX rear-wheel dyno"}};
+        for (const T& t : tg) {
+            EngineParams q = makeCalibratedPreset(t.id);
+            Simulator sim(q);
+            q.ignition = 1; q.starter = 1; sim.setParams(q);
+            double t0 = 0;
+            for (; t0 < 4.0; t0 += 0.01) { run(sim, 0.01); Telemetry x = tel(sim); if (x.running && x.rpm > starterReleaseRpm(q, x.snsValue[kSnsECT])) break; }
+            run(sim, 0.15); q.starter = 0; sim.setParams(q);
+            run(sim, 4.0);
+            double rpm = 0;
+            for (int i = 0; i < 50; ++i) { run(sim, 0.02); rpm += tel(sim).rpm / 50.0; }
+            const Rig r = rig(q, t.rpm, 1.0, 1.2, 0.6);
+            std::printf("  %s: started in %.2f s, idles at %.0f rpm, %.1f Nm at %.0f rpm (%s %.1f)\n", q.name, t0, rpm, r.tq, t.rpm, t.src, t.nm);
+            CHECK(t0 < 3.0 && rpm > 900 && rpm < 2600, "%s starts and idles", q.name);
+            CHECK(std::fabs(r.tq / t.nm - 1.0) < 0.3, "%s torque within 30 %% of its figure", q.name);
+        }
+    }
+
+    // ---------------- parallel ducts (DuctPool): the multi-cylinder engine steps its pipes on worker threads - the result
+    //                  must be the serial one, bit for bit
+    {
+        std::printf("[parallel] triple, serial vs ducts on 2 worker threads, 3 s of start / blip / overrun\n");
+        EngineParams q = makeCalibratedPreset(31); q.ignition = 1; q.starter = 1;
+        Engine a(q, 48000.0), b(q, 48000.0);
+        b.setParallel(2);
+        long diff = 0, n = 0;
+        for (double t = 0; t < 3.0; t += 1.0 / 48000.0) {
+            const double thr = t < 1.0 ? 0.0 : t < 2.0 ? 1.0 : 0.0;
+            if (t > 0.6 && q.starter) { q.starter = 0; a.apply(q); b.apply(q); }
+            a.step(1.0 / 48000.0, thr, 0.0); b.step(1.0 / 48000.0, thr, 0.0);
+            ++n;
+            if (a.netTorque() != b.netTorque() || a.rpm() != b.rpm() || a.sExhL != b.sExhL) ++diff;
+        }
+        std::printf("  %ld of %ld steps differ, %.0f rpm at the end\n", diff, n, a.rpm());
+        CHECK(diff == 0 && a.rpm() > 1000, "identical to the serial engine");
     }
 
     // ---------------- at rest: no sound (the tuned pipe's gas dynamics must not ring by themselves)

@@ -117,6 +117,15 @@ TunedPipeGeom tunedPipeGeometry(const EngineParams& p) {
     g.dia[4] = d4;
     g.dia[5] = kt * g.d0;
     g.dia[6] = kt * g.d0;
+    // a measured pipe (e.g. Blair's "A2" on his 125 cc racing engine): its own lengths and diameters, same segments
+    if (p.tsPipeCustom) {
+        g.lt = 0;
+        for (int k = 0; k < 7; ++k) {
+            g.len[k] = clampv((double)p.tsPipeLen_mm[k], 5.0, 2000.0) * 1e-3;
+            g.dia[k] = clampv((double)p.tsPipeDia_mm[k], 8.0, 300.0) * 1e-3;
+            if (k < 6) g.lt += g.len[k];
+        }
+    }
     return g;
 }
 
@@ -405,14 +414,26 @@ ExhaustSystem::PortWave ExhaustSystem::portWave(int i) const {
 }
 
 void ExhaustSystem::step(double dt) {
-    // tuned pipes: gas dynamics up to the silencer, which gets their outflow as its source (the waveguide's waves
-    // arriving there are already in: arrive() came first)
+    stepPre(dt);
+    for (Duct& d : ducts_) d.step(dt, ambK_);
+    stepPost(dt);
+}
+
+// tuned pipes: gas dynamics up to the silencer, which gets their outflow as its source (the waveguide's waves
+// arriving there are already in: arrive() came first). Pre: each duct's outlet against the silencer's wave; then
+// the ducts step (here, or in parallel - Engine / DuctPool); post: their outflow into the silencers, the waveguide.
+void ExhaustSystem::stepPre(double dt) {
     for (size_t i = 0; i < ducts_.size(); ++i) {
         Duct& d = ducts_[i];
         const Pipe& sp = net.pipes[portPipe_[i]];
         d.setOutlet(sp.in0, sp.Z, sp.rho, sp.T, sp.cm > 1e-12 ? sp.cmf / sp.cm : 0.0, sp.cm > 1e-12 ? sp.cmb / sp.cm : 1.0);
         d.solveOutlet(dt);
-        d.step(dt, ambK_);
+    }
+}
+
+void ExhaustSystem::stepPost(double dt) {
+    for (size_t i = 0; i < ducts_.size(); ++i) {
+        const Duct& d = ducts_[i];
         setPortFlow((int)i, d.outflow(), d.outFuelFrac(), d.outBurnedFrac());
     }
     net.step(dt);

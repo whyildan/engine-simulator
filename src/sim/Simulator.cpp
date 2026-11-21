@@ -1,6 +1,8 @@
 #include "sim/Simulator.h"
 #include "sim/DataLog.h"
 #include <chrono>
+#include <thread>
+#include <algorithm>
 #include "audio/ImpulseResponses.h"
 
 namespace es {
@@ -66,6 +68,10 @@ void Simulator::rebuild(bool crossfade) {
     double omega = eng_ ? eng_->omega() : 0;
     double theta = eng_ ? eng_->theta() : 0;
     int os = clampv(cur_.oversample, 1, 4);
+    // multi-cylinder two-strokes (T10): every cylinder carries two 1D ducts (tuned pipe, intake tract) - they run at
+    // 48 kHz: on Blair's 125 cc rig the delivery / charging / bmep at 48 and 96 kHz agree within 0.01 (ts_probe 4), and
+    // a triple at 96 kHz took ~100 % of real time (48 kHz: ~72 %)
+    if (isTwoStroke(cur_) && cur_.cylinders >= 2) os = 1;
     bool rateChange = os != os_ || !eng_;
     os_ = os;
     fsSim_ = (double)kOutRate * os_;
@@ -78,6 +84,12 @@ void Simulator::rebuild(bool crossfade) {
         fade_ = 1;
     }
     std::unique_ptr<Engine> fresh = std::make_unique<Engine>(cur_, fsSim_);
+    // multi-cylinder two-stroke: its ducts (2 per cylinder, ~2/3 of the work) on extra threads - one per two more
+    // ducts, up to 3, leaving cores for the UI / audio
+    if (isTwoStroke(cur_) && cur_.cylinders >= 2) {
+        const int hw = (int)std::max(1u, std::thread::hardware_concurrency());
+        fresh->setParallel(std::min({cur_.cylinders - 1, 3, std::max(0, hw - 3)}));
+    }
     // keep the engine warm across a rebuild (structural change), not across a reset
     if (old_) fresh->copyThermalFrom(*old_);
     else if (eng_) fresh->copyThermalFrom(*eng_);
@@ -239,7 +251,10 @@ void Simulator::render(float* out, int frames) {
     if (e.twoStroke() && e.cylinders() > 0) {
         const Cylinder& c0 = e.cyl(0);
         t.tsDelivery = (float)c0.dr; t.tsTrapping = (float)c0.te; t.tsScavenging = (float)c0.se;
-        t.tsCrankcaseKPa = (float)(e.crankcaseP(0) * 1e-3); t.tsReed = (float)e.reedOpen(0);
+        t.tsCrankcaseKPa = (float)(e.crankcaseP(0) * 1e-3); t.tsReed = (float)e.inletOpen(0);
+        t.tsPowerValve = (float)e.powerValve(); t.tsOilSmokeGh = (float)e.oilSmokeGh();
+        { const SquishResult sq = e.squish(std::max(500.0, (double)t.rpm)); t.tsSquishMs = (float)sq.vMax; t.tsSquishKeMJ = (float)(sq.keJ * 1e3); }
+        t.tsBurnDeg = (float)e.burnDeg2T();
     }
     t.vgtOpen = e.params().vgt ? (float)e.boost.wastegate : 1.0f;
     t.stress = (float)e.stress; t.floatIn = (float)e.floatIn; t.floatEx = (float)e.floatEx;

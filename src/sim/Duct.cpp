@@ -7,8 +7,18 @@ namespace es {
 namespace {
 constexpr double g = kGamma;
 constexpr double gm1 = kGamma - 1.0;
-constexpr double kCf = 0.005;     // wall friction coefficient (Fanning), chosen
 constexpr double kHMin = 10.0;    // W/m2K: heat transfer floor of still gas, chosen
+constexpr double kPr = 0.7;       // Prandtl number of air / exhaust gas
+// wall friction and heat as Blair computes them (Design and Simulation of Two-Stroke Engines, secs. 2.3.1 and 2.4):
+// Fanning friction factor from Blasius, Cf = 0.0791 Re^-0.25 (turbulent, Re >= 4000; 0.01 below - eq. 2.3.13), and
+// the Reynolds analogy Nu = Cf Re / 2 (eq. 2.4.1), i.e. h = Cf rho |u| cp / (2 Pr) with Re = rho |u| d / mu (mu of air,
+// Sutherland). (Before: Cf 0.005 fixed and h = Cf rho |u| cp / 2 - chosen; the tuned pipe's gas came out 80-160 K
+// hotter than Blair's measured mid-pipe temperatures, Fig. 5.30.)
+inline double blasiusCf(double rho, double u, double d, double T) {
+    const double mu = 1.458e-6 * T * std::sqrt(T) / (T + 110.4);
+    const double re = rho * std::fabs(u) * d / mu;
+    return re < 4000.0 ? 0.01 : 0.0791 / std::sqrt(std::sqrt(re));
+}
 constexpr double kPMin = 2000.0;  // Pa: positivity floor
 
 // monotonised central (MC) slope limiter (van Leer 1977): sharper than minmod - on the Blair 125 check it gives with
@@ -17,6 +27,21 @@ inline double limitedSlope(double a, double b) {
     if (a * b <= 0) return 0.0;
     const double c = 0.5 * (a + b), m = std::min(std::fabs(c), 2.0 * std::min(std::fabs(a), std::fabs(b)));
     return c > 0 ? m : -m;
+}
+
+// orifice flow as Gas.h orificeFlow, with one pow instead of two: pr^(2/g) - pr^((g+1)/g) = x^2 - pr x, x = pr^(1/g)
+// (the port solves call it ~a dozen times a step per duct; same values to rounding)
+inline double ductOrifice(double cdA, double pUp, double tUp, double pDn) {
+    if (cdA <= 0 || pUp <= pDn) return 0;
+    static const double prCrit = std::pow(2.0 / (g + 1.0), g / gm1);
+    static const double psiChoked = std::sqrt(g) * std::pow(2.0 / (g + 1.0), (g + 1.0) / (2.0 * gm1));
+    static const double psi0 = [] { const double x = std::pow(0.995, 1.0 / g); return std::sqrt(2.0 * g / gm1 * (x * x - 0.995 * x)); }();
+    const double pr = pDn / pUp;
+    double psi;
+    if (pr <= prCrit) psi = psiChoked;
+    else if (pr < 0.995) { const double x = std::pow(pr, 1.0 / g); psi = std::sqrt(2.0 * g / gm1 * (x * x - pr * x)); }
+    else psi = psi0 * (1.0 - pr) / 0.005;
+    return cdA * pUp / std::sqrt(kR * tUp) * psi;
 }
 
 // Illinois (regula falsi that does not stall) on f over [a, b], f(a) and f(b) of opposite sign
@@ -54,7 +79,7 @@ void Duct::build(const std::vector<double>& x, const std::vector<double>& area, 
     x_ = x; af_ = area; p0_ = p0;
     div_ = std::max(1, stepsPer); cnt_ = 0; accT_ = accM_ = accMu_ = accE_ = accF_ = accB_ = 0;
     const int n = (int)x_.size() - 1;
-    vol_.assign(n, 0); dx_.assign(n, 0); invVol_.assign(n, 0); wall_.assign(n, 0); dlnA_.assign(n, 0); dA_.assign(n, 0);
+    vol_.assign(n, 0); dx_.assign(n, 0); dia_.assign(n, 0); cf_.assign(n, 0.005); cfAge_ = 0; invVol_.assign(n, 0); wall_.assign(n, 0); dlnA_.assign(n, 0); dA_.assign(n, 0);
     m_.assign(n, 0); mom_.assign(n, 0); e_.assign(n, 0); mf_.assign(n, 0); mb_.assign(n, 0);
     dxMin_ = 1e9; smax_ = 1000.0;
     for (int i = 0; i < n; ++i) {
@@ -65,6 +90,7 @@ void Duct::build(const std::vector<double>& x, const std::vector<double>& area, 
         vol_[i] = kPi * dx_[i] / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1);
         invVol_[i] = 1.0 / vol_[i];
         wall_[i] = 2.0 * std::sqrt(kPi * 0.5 * (af_[i] + af_[i + 1])) * dx_[i];
+        dia_[i] = 2.0 * std::sqrt(0.5 * (af_[i] + af_[i + 1]) / kPi);
         dA_[i] = af_[i + 1] - af_[i];
         dlnA_[i] = 2.0 * dA_[i] / (af_[i + 1] + af_[i]);
         m_[i] = p0 / (kR * T0) * vol_[i];
@@ -143,7 +169,7 @@ double Duct::solvePort(double cdA, double pCyl, double tCyl) {
                                      w.u + 2.0 * a1 / gm1 * (std::pow(pCyl / w.p, gm1 / (2.0 * g)) - 1.0));
         auto f = [&](double u) {
             const double pb = pChar(u), tb = std::max(50.0, tCyl - u * u / (2.0 * kCp));
-            return pb / (kR * tb) * u * A0 - orificeFlow(cdA, pCyl, tCyl, pb);
+            return pb / (kR * tb) * u * A0 - ductOrifice(cdA, pCyl, tCyl, pb);
         };
         ub = uTop > 0 ? warmRoot(f, 0.0, uTop, clampv(ubPort_, 0.0, uTop), 0.03 * a1 + 1.0, 0.05) : 0.0;
         const double pb = pChar(ub), tb = std::max(50.0, tCyl - ub * ub / (2.0 * kCp));
@@ -161,7 +187,7 @@ double Duct::solvePort(double cdA, double pCyl, double tCyl) {
         };
         auto f = [&](double u) {
             double pb, rb, tb; state(u, pb, rb, tb);
-            return -rb * u * A0 - orificeFlow(cdA, pb, tb, pCyl);
+            return -rb * u * A0 - ductOrifice(cdA, pb, tb, pCyl);
         };
         const double lo = std::min(0.0, uLow);
         ub = lo < 0 ? warmRoot(f, lo, 0.0, clampv(ubPort_, lo, 0.0), 0.03 * a1 + 1.0, 0.05) : 0.0;
@@ -287,9 +313,12 @@ void Duct::step(double dtCaller, double ambientK) {
             const double outB = last ? oB : fb_[i + 1] * af_[i + 1];
             const Prim& w = W[i];
             const double perim = wall_[i];   // wall area
-            const double tau = 0.5 * kCf * w.r * w.u * std::fabs(w.u);
             const double T = w.p / (kR * w.r);
-            const double hc = std::max(kHMin, 0.5 * kCf * w.r * std::fabs(w.u) * kCp);
+            // (Cf moves with Re^-0.25 only: refreshed every 16 duct steps, ~3 kHz - it cost ~a quarter of a cell update)
+            if (cfAge_ == 0 && s == 0) cf_[i] = blasiusCf(w.r, w.u, dia_[i], T);
+            const double cf = cf_[i];
+            const double tau = 0.5 * cf * w.r * w.u * std::fabs(w.u);
+            const double hc = std::max(kHMin, 0.5 * cf * w.r * std::fabs(w.u) * kCp / kPr);
             m_[i] += h * (inM - outM);
             mom_[i] += h * (inMu - outMu + w.p * dA_[i] - tau * perim);
             e_[i] += h * (inE - outE + hc * perim * (tWall_ - T));
@@ -302,6 +331,7 @@ void Duct::step(double dtCaller, double ambientK) {
         }
     }
     oAccM_ = oAccMu_ = oAccE_ = oAccF_ = oAccB_ = 0;
+    if (++cfAge_ >= 16) cfAge_ = 0;
     smax_ = smax;
     // wall temperature: follows the mean gas temperature slowly
     double mm = 0;

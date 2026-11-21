@@ -201,7 +201,7 @@ FmLayout buildLayout(const EngineParams& p) {
         L.vCc0 = L.vPl1 + 0.075f; L.vCc1 = L.vHd0 - 0.035f;
         for (int i = 0; i < n; ++i) {
             pipe(Pt{L.cylU[i], L.vPl1}, Pt{L.cylU[i], L.vCc0}, kFlowThrottle, NpPlenum, NtPlenum, rDia, "Intake -> reed valve", 1.0f / n, i);
-            comp(CkReed, -1, Pt{L.cylU[i], (L.vPl1 + L.vCc0) * 0.5f}, 1.6f, 1.1f, "Reed valve", App::kEngineSetup, "valv", 3);
+            comp(CkReed, -1, Pt{L.cylU[i], (L.vPl1 + L.vCc0) * 0.5f}, 1.6f, 1.1f, p.tsInlet == 1 ? "Piston port" : p.tsInlet == 2 ? "Disc valve" : "Reed valve", App::kEngineSetup, "valv", 3);
             const float w = (L.hx1 - L.hx0) / n * 0.22f;
             for (int s = -1; s <= 1; s += 2)
                 pipe(Pt{L.cylU[i] + s * w, L.vCc1}, Pt{L.cylU[i] + s * w, L.vHd0}, kFlowIntakeValve, NpPortIn, NtPortIn, rDia * 0.7f,
@@ -244,7 +244,7 @@ FmLayout buildLayout(const EngineParams& p) {
               L.tsPipe ? "Expansion chamber" : "Exhaust pipe");
         if (L.tsPipe) {
             L.uCh0 = L.uT + 0.02f; L.uCh1 = std::max(L.uCh0 + 0.12f, L.hx0 - 0.04f);
-            box(CkChamber, kPartHeader, Pt{L.uCh0, L.vCol - 0.045f}, Pt{L.uCh1, L.vCol + 0.045f}, "Expansion chamber", App::kEngineSetup, "valv");
+            box(CkChamber, kPartHeader, Pt{L.uCh0, L.vCol - 0.045f}, Pt{L.uCh1, L.vCol + 0.045f}, L.n > 1 ? "Expansion chambers (one per cylinder)" : "Expansion chamber", App::kEngineSetup, "valv");
         }
     } else {
         pipe2(Pt{colStart, L.vCol}, Pt{L.uT, L.vCol}, Pt{L.uT, L.vTail}, kFlowExhaustValve, NpTurbIn, NtCollector, cDia, "Collector / downpipe");
@@ -695,6 +695,13 @@ void App::panelFlowMap() {
             break;
         case CkReed: {   // V-shaped reed block, petals opening with the reed
             const float open = clampv(tel_.tsReed, 0.0f, 1.0f);
+            if (p.tsInlet != 0) {   // piston port / disc valve: the window and how much of it is uncovered
+                card(a, b, 3, kDim, bw, rgba(0.12f, 0.12f, 0.14f));
+                const float h = (b.y - a.y - 6) * open;
+                dl->AddRectFilled(ImVec2(a.x + 3, b.y - 3 - h), ImVec2(b.x - 3, b.y - 3), rgba(0.30f, 0.55f, 0.95f, 0.55f), 2);
+                if (p.tsInlet == 2) dl->AddCircle(c, R * 0.9f, kAccent, 20, 1.5f);
+                break;
+            }
             dl->AddTriangleFilled(ImVec2(a.x, a.y), ImVec2(b.x, a.y), ImVec2(c.x, b.y), rgba(0.12f, 0.12f, 0.14f));
             dl->AddTriangle(ImVec2(a.x, a.y), ImVec2(b.x, a.y), ImVec2(c.x, b.y), kDim, bw);
             for (int s = -1; s <= 1; s += 2) {
@@ -1025,14 +1032,17 @@ void App::panelFlowMap() {
             ImGui::Text("Ignition delay %.1f deg", tel_.ignDelayDeg);
             break;
         case CkReed: case CkCrankcase:
-            ImGui::Text("Crankcase %.0f kPa   reed %.0f %% open", tel_.tsCrankcaseKPa, tel_.tsReed * 100);
-            flowLine("Through the reed valve", kFlowThrottle);
+            ImGui::Text("Crankcase %.0f kPa   %s %.0f %% open", tel_.tsCrankcaseKPa,
+                        p.tsInlet == 1 ? "inlet port" : p.tsInlet == 2 ? "disc valve" : "reed", tel_.tsReed * 100);
+            flowLine(p.tsInlet == 1 ? "Through the inlet port" : p.tsInlet == 2 ? "Through the disc valve" : "Through the reed valve", kFlowThrottle);
             flowLine("Up the transfer ducts", kFlowIntakeValve);
             ImGui::Text("Delivery ratio %.2f   trapping %.2f   scavenging %.2f", tel_.tsDelivery, tel_.tsTrapping, tel_.tsScavenging);
             break;
         case CkChamber:
             ImGui::Text("Tuned for %.0f rpm: the returning pressure wave plugs the exhaust port as it closes", p.tsPipeRpm);
             ImGui::Text("Gas %.0f C", f.tCollector - 273.15);
+            if (p.tsPowerValve) ImGui::Text("Power valve %.0f %% lifted", tel_.tsPowerValve * 100);
+            if (p.tsOilRatio >= 1.0f) ImGui::Text("Unburned oil (blue smoke) %.0f g/h", tel_.tsOilSmokeGh);
             flowLine("Out of the exhaust port", kFlowExhaustValve);
             break;
         default: break;

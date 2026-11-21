@@ -686,6 +686,11 @@ const EngineField kEngineFields[] = {
     EF("ts_transfer_width", tsTransferWidth), EF("ts_crankcase_cr", tsCrankcaseCR), EF("ts_reed_area_cm2", tsReedArea_cm2),
     EI("ts_scavenge", tsScavenge),
     EI("ts_pipe", tsPipe), EF("ts_pipe_rpm", tsPipeRpm), EF("ts_pipe_class", tsPipeClass), EF("ts_burn_deg", tsBurnDeg), EF("ts_transfer_len", tsTransferLen),
+    EI("ts_power_valve", tsPowerValve), EF("ts_pv_low_open", tsPvLowOpen), EF("ts_pv_rpm_low", tsPvRpmLow), EF("ts_pv_rpm_high", tsPvRpmHigh),
+    EI("ts_inlet", tsInlet), EF("ts_inlet_open", tsInletOpen), EF("ts_inlet_close", tsInletClose), EF("ts_inlet_area_cm2", tsInletArea_cm2),
+    EF("ts_oil_ratio", tsOilRatio), EI("ts_burn_from_squish", tsBurnFromSquish), EF("ts_squish_area", tsSquishArea),
+    EF("ts_squish_clear_mm", tsSquishClear_mm), EI("ts_pipe_custom", tsPipeCustom), EFA("ts_pipe_len_mm", tsPipeLen_mm, 7),
+    EFA("ts_pipe_dia_mm", tsPipeDia_mm, 7),
     // forced induction
     EI("induction", induction), EI("sc_type", scType), EF("comp_flow_gs", compFlow_gs), EF("turbine_ar", turbineAR),
     EF("turbo_inertia", turboInertia), EF("wastegate_bar", wastegateBar), EI("intercooler", intercooler),
@@ -871,6 +876,14 @@ bool engineFromJson(const std::string& text, EngineParams& p, EngineMeta& m, std
     n.cylinders = clampv((int)n.cylinders, 1, isRotary(n) ? 4 : kMaxCyl);
     n.tsCrankcaseCR = clampv(n.tsCrankcaseCR, 1.1f, 3.0f); n.tsReedArea_cm2 = clampv(n.tsReedArea_cm2, 0.0f, 200.0f);
     n.tsPipeClass = clampv(n.tsPipeClass, 0.0f, 1.0f); n.tsBurnDeg = clampv(n.tsBurnDeg, 25.0f, 90.0f); n.tsTransferLen = clampv(n.tsTransferLen, 0.05f, 4.0f); n.tsScavenge = clampv(n.tsScavenge, 0, 9);
+    n.tsPowerValve = clampv(n.tsPowerValve, 0, 1); n.tsPvLowOpen = clampv(n.tsPvLowOpen, 45.0f, 150.0f);
+    n.tsPvRpmLow = clampv(n.tsPvRpmLow, 1000.0f, 20000.0f); n.tsPvRpmHigh = clampv(n.tsPvRpmHigh, n.tsPvRpmLow, 20000.0f);
+    n.tsInlet = clampv(n.tsInlet, 0, 2); n.tsInletOpen = clampv(n.tsInletOpen, 30.0f, 180.0f); n.tsInletClose = clampv(n.tsInletClose, 0.0f, 150.0f);
+    n.tsInletArea_cm2 = clampv(n.tsInletArea_cm2, 1.0f, 80.0f); n.tsOilRatio = clampv(n.tsOilRatio, 0.0f, 200.0f);
+    if (n.tsOilRatio > 0.0f && n.tsOilRatio < 10.0f) n.tsOilRatio = 10.0f;
+    n.tsBurnFromSquish = clampv(n.tsBurnFromSquish, 0, 1); n.tsSquishArea = clampv(n.tsSquishArea, 0.0f, 0.9f);
+    n.tsSquishClear_mm = clampv(n.tsSquishClear_mm, 0.5f, 6.0f); n.tsPipeCustom = clampv(n.tsPipeCustom, 0, 1);
+    for (int j = 0; j < 7; ++j) { n.tsPipeLen_mm[j] = clampv(n.tsPipeLen_mm[j], 5.0f, 2000.0f); n.tsPipeDia_mm[j] = clampv(n.tsPipeDia_mm[j], 8.0f, 300.0f); }
     n.gears = clampv((int)n.gears, 1, kMaxGears);
     n.egrCooler = n.egrCooler ? 1 : 0; n.egrCoolerEff = clampv(n.egrCoolerEff, 0.0f, 0.98f); n.dieselInjSystem = n.dieselInjSystem ? 1 : 0;
     n.railMaxBar = clampv(n.railMaxBar, 200.0f, 3000.0f); n.nozzleHoles = clampv((int)n.nozzleHoles, 1, 12); n.nozzleHoleDia_mm = clampv(n.nozzleHoleDia_mm, 0.05f, 0.40f);

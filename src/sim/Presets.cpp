@@ -105,6 +105,15 @@ static EngineParams base() {
     p.tsPipe = 0; p.tsPipeRpm = 8000; p.tsPipeClass = 0.5f;
     p.tsBurnDeg = 50;   // (Blair's measured 41-64 deg: a middle value)
     p.tsTransferLen = 1.5f;
+    p.tsPowerValve = 0; p.tsPvLowOpen = 95; p.tsPvRpmLow = 6000; p.tsPvRpmHigh = 8500;
+    p.tsInlet = 0; p.tsInletOpen = 100; p.tsInletClose = 80; p.tsInletArea_cm2 = 12;   // (Blair Fig. 1.9: motocross / GP)
+    p.tsOilRatio = 40;
+    p.tsBurnFromSquish = 0; p.tsSquishArea = 0.5f; p.tsSquishClear_mm = 1.2f;   // (Blair's Prog.4.1 example)
+    p.tsPipeCustom = 0;
+    {   // (Blair's 125 cc racing engine, pipe "A2": sec. 5.5.2)
+        const float L[7] = {83, 189, 209, 65, 78, 205, 250}, D[7] = {37.5f, 48.5f, 100, 116, 116, 21, 21};
+        for (int j = 0; j < 7; ++j) { p.tsPipeLen_mm[j] = L[j]; p.tsPipeDia_mm[j] = D[j]; }
+    }
 
     p.induction = Induction::Natural; p.scType = Supercharger::Roots;
     p.compFlow_gs = 220; p.turbineAR = 0.64f; p.turboInertia = 0.15f; p.wastegateBar = 1.0f;
@@ -242,6 +251,15 @@ static void finish(EngineParams& p) {
     for (int i = 0; i < p.cylinders; ++i) if (p.evenFire) p.phase[i] = ph[i];
 }
 
+// two-stroke: the geometric compression ratio that gives a trapped one (from the exhaust port's closing, the way the
+// makers quote it) - the clearance volume is the trapped volume / (trapped ratio - 1)
+static float trappedToGeometricCr(const EngineParams& p, float crTrapped) {
+    const double r = p.stroke_mm * 0.5, l = std::max((double)p.rod_mm, r * 1.1), t = clampv((double)p.tsExhaustOpen, 45.0, 150.0) * 3.14159265 / 180.0;
+    const double s = r * (1.0 - std::cos(t)) + l - std::sqrt(l * l - r * r * std::sin(t) * std::sin(t));
+    const double vc = s / std::max(1.01, (double)crTrapped - 1.0);   // per unit piston area (mm)
+    return (float)((p.stroke_mm + vc) / vc);
+}
+
 static const char* kNames[] = {
     "I4 2.0 K20A-style (i-VTEC)",
     "I3 1.0 EFI",
@@ -273,6 +291,9 @@ static const char* kNames[] = {
     "I6 5.9 inline-pump truck diesel (6BT-style)",
     "V8 6.6 common rail diesel (Duramax L5P-style)",
     "1-cyl 0.46 air-cooled diesel (Hatz 1B40-style)",
+    "2-cyl 350 two-stroke YPVS (RD350-style)",
+    "3-cyl 500 piston-port two-stroke (H1-style)",
+    "1-cyl 300 two-stroke EFI (300 TPI-style)",
 };
 
 int presetCount() { return (int)(sizeof(kNames) / sizeof(kNames[0])); }
@@ -657,6 +678,62 @@ EngineParams makePreset(int idx) {
         p.revLimit = 3700; p.idleTargetRpm = 1200; p.flywheel = 0.12f;
         p.sweepStartRpm = 1500; p.sweepEndRpm = 3600;
         break;
+    // ---- more two-strokes (T11, T13). Bore x stroke, ratings and what the sources name; port timings / widths, rods,
+    //      reed / port areas, pipes and ignition curves are chosen (typical values for the class: Blair, Fig. 1.9) -
+    //      see docs/ECU_PLAN.md "Paket 5 lanjutan"
+    case 30: // Yamaha RD350 YPVS twin (1983-): 64 x 54 mm, 347 cc, reed valves, YPVS power valve - closed below ~6000 rpm,
+             // fully open by 8000, exhaust duration 180 deg closed / 200 deg open (Yamaha service manual extract,
+             // rd350lc.net); 59 hp at 9000 rpm, 40.2 Nm at 8000 (RD350F2 spec sheet). Trapped compression 7.0 (chosen).
+        p = makePreset(25);
+        p.cylinders = 2; p.layout = Layout::Inline; applyLayoutDefaults(p);
+        p.bore_mm = 64; p.stroke_mm = 54; p.rod_mm = 105;
+        p.tsExhaustOpen = 80; p.tsTransferOpen = 116; p.tsExhaustWidth = 0.68f; p.tsTransferWidth = 1.10f;
+        p.tsPowerValve = 1; p.tsPvLowOpen = 90; p.tsPvRpmLow = 6000; p.tsPvRpmHigh = 8000;
+        p.tsCrankcaseCR = 1.40f; p.tsReedArea_cm2 = 14; p.tsBurnDeg = 45;
+        p.compression = trappedToGeometricCr(p, 7.0f);
+        p.venturi_mm = 26; p.throttleBore_mm = 26; p.carbBarrels = 1;
+        p.runnerLen_mm = 180; p.runnerDia_mm = 30; p.plenum_L = 0.2f;
+        p.tsPipe = 1; p.tsPipeRpm = 8500; p.tsPipeClass = 0.5f; p.primaryLen_mm[0] = 150;
+        p.baseAdvance = 14; p.mechAdvance = 6; p.mechAdvanceRpm = 6000;
+        p.revLimit = 10000; p.idleTargetRpm = 1300; p.flywheel = 0.03f;
+        p.sweepStartRpm = 3000; p.sweepEndRpm = 9800;
+        break;
+    case 31: // Kawasaki H1 500 Mach III triple (1969-): 60 x 58.8 mm, 498 cc, 6.8:1 (as quoted - taken as trapped),
+             // piston-ported, air-cooled, three carburettors; 60 hp at 7500 rpm, 56 Nm at 7000 (Moto-Data, 1970-71).
+             // Its own port timings were not found: Blair's typical road / enduro values (Fig. 1.9 - exhaust 97, transfers
+             // 120 deg ATDC, inlet opens 75 deg BTDC). Its pipes: broad expansion chambers (enduro design, chosen).
+        p = makePreset(25);
+        p.cylinders = 3; p.layout = Layout::Inline; applyLayoutDefaults(p);
+        p.bore_mm = 60; p.stroke_mm = 58.8f; p.rod_mm = 110;
+        p.tsExhaustOpen = 97; p.tsTransferOpen = 120; p.tsExhaustWidth = 0.72f; p.tsTransferWidth = 1.20f;
+        p.tsInlet = 1; p.tsInletOpen = 75; p.tsInletArea_cm2 = 7;
+        p.tsCrankcaseCR = 1.45f; p.tsScavenge = 9; p.tsBurnDeg = 50;
+        p.compression = trappedToGeometricCr(p, 6.8f);
+        p.venturi_mm = 28; p.throttleBore_mm = 28; p.carbBarrels = 1;
+        p.runnerLen_mm = 160; p.runnerDia_mm = 30; p.plenum_L = 0.2f;
+        p.tsPipe = 1; p.tsPipeRpm = 7000; p.tsPipeClass = 0.0f; p.primaryLen_mm[0] = 150;
+        p.baseAdvance = 16; p.mechAdvance = 6; p.mechAdvanceRpm = 5000;
+        p.revLimit = 8000; p.idleTargetRpm = 1200; p.flywheel = 0.05f;
+        p.sweepStartRpm = 2500; p.sweepEndRpm = 7900;
+        break;
+    case 32: // KTM 300 EXC TPI (2018-): 72 x 72 mm, 293.2 cc, transfer port injection with a 39 mm throttle body and an
+             // electronically regulated oil pump (KTM MY22 EXC technical data) - so no oil in the fuel; power valve.
+             // Its sibling 300 SX (same engine family, throttle-body injection) made 48.8 hp at 8100 rpm and 32.2 lb-ft
+             // (43.7 Nm) at 7500 at the rear wheel (Dirt Rider dyno test, 2023). Injection into the transfer ports is
+             // taken as injection at the reed end of the intake tract (the fuel reaches the crankcase the same way).
+        p = makePreset(25);
+        p.bore_mm = 72; p.stroke_mm = 72; p.rod_mm = 130;
+        p.tsExhaustOpen = 82; p.tsTransferOpen = 117; p.tsExhaustWidth = 0.70f; p.tsTransferWidth = 1.15f;
+        p.tsPowerValve = 1; p.tsPvLowOpen = 94; p.tsPvRpmLow = 4500; p.tsPvRpmHigh = 7500;
+        p.tsCrankcaseCR = 1.40f; p.tsReedArea_cm2 = 20; p.tsBurnDeg = 45; p.tsOilRatio = 0;
+        p.compression = trappedToGeometricCr(p, 8.0f);
+        p.fuelSystem = FuelSystem::EFI; p.injection = Injection::Port; p.injector_ccmin = 240; p.throttleBore_mm = 39;
+        p.runnerLen_mm = 200; p.runnerDia_mm = 39; p.plenum_L = 0.3f;
+        p.tsPipe = 1; p.tsPipeRpm = 7500; p.tsPipeClass = 0.0f; p.primaryLen_mm[0] = 150;
+        p.baseAdvance = 14; p.mechAdvance = 8; p.mechAdvanceRpm = 6000;
+        p.revLimit = 9000; p.idleTargetRpm = 1500; p.flywheel = 0.03f;
+        p.sweepStartRpm = 2500; p.sweepEndRpm = 8800;
+        break;
     case 20: // centrifugal supercharged V6
         p = makePreset(3);
         applyInductionDefaults(p, Induction::Supercharger, Supercharger::Centrifugal);
@@ -684,6 +761,7 @@ EngineParams makePreset(int idx) {
             {27, CamLayout::OHV, CamDrive::Gears, Cooling::Liquid},   // 6BT (cam in the block; gear drive chosen)
             {28, CamLayout::OHV, CamDrive::Gears, Cooling::Liquid},   // L5P (pushrod; gear drive chosen)
             {29, CamLayout::OHV, CamDrive::Gears, Cooling::Air},      // Hatz single cam system (gears chosen)
+            {31, CamLayout::DOHC, CamDrive::Chain, Cooling::Air},     // H1 triple: air-cooled (no camshafts - a two-stroke)
         };
         for (const Build& b : kBuild)
             if (b.preset == idx) { p.camLayout = b.cam; p.camDrive = b.drive; p.cooling = b.cool; }

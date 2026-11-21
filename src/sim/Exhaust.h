@@ -22,6 +22,12 @@ public:
     void build(const EngineParams& p, const float phase[kMaxCyl], double fs);
     void apply(const EngineParams& p);       // live length / diameter changes
     void step(double dt);
+    // ... split around the tuned pipes' own steps, so they can run in parallel (DuctPool): stepPre, every duct's
+    // step(dt, ambientK()), stepPost - the same as step()
+    void stepPre(double dt);
+    void stepPost(double dt);
+    double ambientK() const { return ambK_; }
+    int ductCount() const { return (int)ducts_.size(); }
     // exhaust gas temperature at the valves (K): sets the temperature (sound speed) of every pipe
     void setGasTemp(double egtK);
 

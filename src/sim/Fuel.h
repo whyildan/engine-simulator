@@ -170,6 +170,33 @@ inline double fsnFromSootMgM3(double c) {
 // (rpm / BRPM)^0.3; the reference speed was not verified - left out, the shapes are taken in crank angle.)
 // The premixed share is not from that paper (its source correlation, Watson et al. SAE 800029, was not verified):
 // here it is the fuel that was injected during the ignition delay (Heywood's picture of premixed burning).
+// Two-stroke premix (T7): the fuel carries its lubricating oil. A carburettor meters liquid by volume through its
+// jets, so the oil takes the place of some of the gasoline (the reason more oil runs an engine leaner). Part of the
+// oil burns with the charge; the rest leaves as the blue smoke / "spooge" of unburned oil. Oil properties: a mineral
+// / semi-synthetic two-stroke oil, density 0.87 kg/L, LHV 42 MJ/kg, CH~1.9 (stoich 14.4) - typical values, chosen;
+// the share that burns, 0.5, is chosen (no measured figure found: it varies with the oil, the engine and its load).
+constexpr double kOilDensity = 0.87, kOilLhv = 42e6, kOilStoich = 14.4, kOilBurned = 0.5;
+// mass share of oil in the premixed liquid at fuel:oil = ratio (by volume)
+inline double premixOilShare(double ratio, double fuelDensity) {
+    if (ratio <= 0) return 0.0;
+    const double vo = 1.0 / (ratio + 1.0);
+    return vo * kOilDensity / (vo * kOilDensity + (1.0 - vo) * fuelDensity);
+}
+// the premixed liquid's properties per kg (what the engine meters and burns)
+inline FuelProps premixed(FuelProps f, double ratio) {
+    const double wo = premixOilShare(ratio, f.density);
+    if (wo <= 0) return f;
+    const double wf = 1.0 - wo, vo = 1.0 / (ratio + 1.0);
+    f.lhv = wf * f.lhv + wo * kOilBurned * kOilLhv;
+    f.stoich = wf * f.stoich + wo * kOilBurned * kOilStoich;
+    f.hvap *= wf;
+    f.molC = wf * f.molC + wo * kOilBurned * 1000.0 / 13.85;   // (CH1.9: 13.85 g per C atom)
+    f.molH = wf * f.molH + wo * kOilBurned * 1900.0 / 13.85;
+    f.molO *= wf;
+    f.density = vo * kOilDensity + (1.0 - vo) * f.density;
+    return f;
+}
+
 inline double wiebeWave(double coef, double expo, double t) {
     const double y = std::pow(std::max(0.0, coef * t), expo);
     return y >= 1.0 ? 1.0 : 1.0 - std::exp(5000.0 * std::log1p(-y));

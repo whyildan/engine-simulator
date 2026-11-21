@@ -15,7 +15,8 @@
 // Scheme: finite volumes, MUSCL-Hancock (second order: MC-limited slopes, a half-step predictor) with the HLLC
 // approximate Riemann solver (Toro, Riemann Solvers and Numerical Methods for Fluid Dynamics, 3rd ed., ch. 10 and
 // 14); ~40 mm cells, stepped at ~48 kHz, sub-steps keep the Courant number below 0.8.
-// Walls: friction tau = Cf rho u|u| / 2 and heat by the Reynolds analogy h = Cf rho |u| cp / 2 (Cf 0.005, chosen);
+// Walls: friction tau = Cf rho u|u| / 2 and heat by the Reynolds analogy h = Cf rho |u| cp / (2 Pr), Cf from Blasius
+// (Blair's method, secs. 2.3.1 / 2.4);
 // the wall temperature follows the gas slowly (Twall = ambient + 0.55 (mean gas - ambient), chosen so a racing pipe
 // near 650 C sits at Blair's assumed exhaust duct wall temperature, 350 C).
 // Ends: the port is an orifice (effective area CdA) between the cylinder and the first cell; the duct side obeys the
@@ -68,6 +69,10 @@ public:
     double wallT() const { return tWall_; }
     // an afterfire pop: burned gas of kg at T into the first cell
     void inject(double kg, double T) { m_[0] += kg; mb_[0] += kg; e_[0] += kg * kCv * T; }
+    // fuel vapour into the first cell (an injector at the port end of an intake duct), at the cell's temperature
+    void addFuel(double kg) { const double T = cellT(0); m_[0] += kg; mf_[0] += kg; e_[0] += kg * kCv * T; }
+    // an intake duct: start full of fresh air (build() fills a pipe with burned gas)
+    void setFresh() { for (size_t i = 0; i < mb_.size(); ++i) { mb_[i] = 0; mf_[i] = 0; } }
 
 private:
     struct Prim { double r, u, p, yf, yb; };
@@ -75,7 +80,8 @@ private:
     static void hllc(const Prim& L, const Prim& R, double& fm, double& fmu, double& fe, double& fyf, double& fyb);
 
     std::vector<double> x_, af_, vol_, dx_;     // faces, face areas, cell volumes / lengths
-    std::vector<double> invVol_, wall_, dlnA_, dA_;   // per cell, fixed: 1 / volume, wall area, area change (ln, abs)
+    std::vector<double> invVol_, wall_, dlnA_, dA_, dia_, cf_;
+    int cfAge_ = 0;                              // duct steps since the friction factors were refreshed   // per cell, fixed: 1 / volume, wall area, area change (ln, abs)
     std::vector<double> m_, mom_, e_, mf_, mb_; // per cell: kg, kg m/s, J, fuel kg, burned kg
     std::vector<Prim> wl_, wr_, W_, D_;         // scratch: face states, cell states and slopes
     std::vector<double> fm_, fmu_, fe_, ff_, fb_;   // face fluxes (per area)

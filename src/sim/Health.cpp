@@ -230,6 +230,12 @@ HealthReport evaluateHealth(const EngineParams& p, const Telemetry& t) {
             ok(e);
             reason(e, kHealthOk, "Piston-controlled ports - last cycle: delivery ratio %.2f, trapping %.2f, scavenging %.2f",
                    t.tsDelivery, t.tsTrapping, t.tsScavenging);
+            if (p.tsPowerValve) reason(e, kHealthOk, "Power valve %.0f %% lifted", t.tsPowerValve * 100.0f);
+            if (p.tsOilRatio > 0)
+                reason(e, p.tsOilRatio > 100.0f ? kHealthWarn : kHealthOk, "Premix %.0f:1%s - unburned oil out of the exhaust %.0f g/h",
+                       p.tsOilRatio, p.tsOilRatio > 100.0f ? " (leaner on oil than any maker's recommendation: piston scuffing risk)" : "",
+                       t.tsOilSmokeGh);
+            else reason(e, kHealthOk, "Oil pump (no oil in the fuel)");
             setValue(e, "ports  DR %.2f", t.tsDelivery);
         } else if (!rotary) {
             ok(e);

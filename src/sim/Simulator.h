@@ -27,7 +27,9 @@ struct Telemetry {
     float egrGasC = 0;                                     // EGR gas into the intake (after the cooler)
     float glowTipC = 0; bool glowOn = false, glowLight = false;
     float tsDelivery = 0, tsTrapping = 0, tsScavenging = 0;   // two-stroke, cylinder 1, last cycle: delivery ratio, TE, SE
-    float tsCrankcaseKPa = 0, tsReed = 0;                     // ... crankcase pressure, reed petal opening 0..1
+    float tsCrankcaseKPa = 0, tsReed = 0;                     // ... crankcase pressure, inlet opening 0..1 (reed lift / port)
+    float tsPowerValve = 1, tsOilSmokeGh = 0;                 // ... power valve 0 lowered..1 lifted, unburned oil out (g/h)
+    float tsSquishMs = 0, tsSquishKeMJ = 0, tsBurnDeg = 0;    // ... max squish velocity, squished kinetic energy, burn period
     float egrPos = 0, egrGs = 0, egrRate = 0, vgtOpen = 0;   // EGR valve 0..1, flow g/s, share of the charge; VGT vane opening
     int dynoState = 0, dynoRun = 0;
     int misfires = 0, afterfires = 0;

@@ -12,6 +12,9 @@
 #include "ecu/Ecu.h"
 #include "audio/Filters.h"
 #include "sim/CombustionNoise.h"
+#include "sim/Squish.h"
+#include "sim/DuctPool.h"
+#include <memory>
 #include <vector>
 
 namespace es {
@@ -50,6 +53,13 @@ public:
     double crankcaseP(int i) const { return twoStroke_ && i < (int)cc_.size() ? cc_[i].g.p() : kPatm; }
     double crankcaseT(int i) const { return twoStroke_ && i < (int)cc_.size() ? cc_[i].g.T : ambT_; }
     double reedOpen(int i) const { return twoStroke_ && i < (int)cc_.size() ? cc_[i].reed : 0.0; }
+    // inlet into a crankcase, 0..1 of its full area (reed: petal lift; piston port / disc valve: the uncovered port)
+    double inletOpen(int i) const;
+    void setParallel(int workers);           // multi-cylinder two-stroke: ducts on worker threads (DuctPool)
+    SquishResult squish(double rpm) const;   // two-stroke squish band at this speed (Squish.h)
+    double burnDeg2T() const;                // two-stroke Vibe burn period in use (deg)
+    double oilSmokeGh() const;               // two-stroke premix: unburned oil out of the exhaust (g/h)
+    double powerValve() const { return twoStroke_ && p_.tsPowerValve ? pvPos_ : 1.0; }
     const GasNode* crankcaseGas(int i) const { return twoStroke_ && i < (int)cc_.size() ? &cc_[i].g : nullptr; }
     int ports() const { return nPorts_; }            // cylinders or rotors
     bool running() const { return running_; }
@@ -83,7 +93,7 @@ public:
         egtProbe_ = o.egtProbe_; egtWall_ = o.egtWall_; egtPost_ = o.egtPost_; egtPostWall_ = o.egtPostWall_;
         for (int i = 0; i < kMaxCyl; ++i) { egtCylProbe_[i] = o.egtCylProbe_[i]; egtCylWall_[i] = o.egtCylWall_[i]; }
         tank_ = o.tank_; line_ = o.line_; tankL_ = o.tankL_; fuel_ = o.fuel_; tankProps_ = o.tankProps_;
-        refuelSeen_ = o.refuelSeen_; fuelTypeSeen_ = o.fuelTypeSeen_;
+        refuelSeen_ = o.refuelSeen_; fuelTypeSeen_ = o.fuelTypeSeen_; pvPos_ = o.pvPos_;
         intake.setFuel(fuel_);
     }
     // fuel (Package 1): the tank, and the fuel line that feeds the injectors - a new fuel reaches them gradually
@@ -170,6 +180,7 @@ private:
     double tankL_ = 30;
     int refuelSeen_ = 0, fuelTypeSeen_ = -1;
     void fuelSetup(bool fresh);
+    FuelProps lineFuel() const;
     void fuelStep(double dt, double fuelKgs);
     double exhFlowAvg_ = 0;
     void stepCylinder(int i, double dt, double phiPrev, double phi, double rpm, bool spark, bool fuelCut);
@@ -183,7 +194,11 @@ private:
     bool twoStroke_ = false;
     double ccVmin_ = 1e-4;        // crankcase volume with the piston at BDC
     void crankcaseInit();
-    void crankcaseStep(Crankcase& k, GasNode& ip, double vCyl, double dt);
+    void crankcaseStep(int idx, GasNode& ip, double vCyl, double phi, double dt);
+    double inletArea(double phi) const;   // piston port / disc valve: geometric inlet area at a crank angle
+    std::unique_ptr<DuctPool> pool_;
+    std::vector<DuctTask> ductTasks_;
+    double pvPos_ = 1.0;          // power valve: 0 fully lowered .. 1 lifted clear of the port
     static void ccSync(Crankcase& k) { k.g.T = clampv(k.U / (std::max(1e-12, k.g.m) * kCv), 150.0, 2500.0); }
     // diesel (Package 4): injection, ignition delay and the burn of one cylinder for this step
     void emissionsStep(Cylinder& c, double dt, double dm, double dmf, double dmb);

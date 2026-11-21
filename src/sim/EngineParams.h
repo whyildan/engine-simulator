@@ -197,6 +197,25 @@ struct EngineParams {
     float tsPipeClass;        // ... its design (Blair): 0 = broad enduro pipe, 0.5 = motocross, 1 = road racing
     float tsBurnDeg;          // combustion: burn period (Vibe, deg) - the combustion chamber's (squish) speed
     float tsTransferLen;      // transfer passages: length of the gas column, share of the stroke (its inertia)
+    // power valve (exhaust timing control valve, Blair sec. 5.2.2): lowers the exhaust port's top edge at low speed
+    int32_t tsPowerValve;     // 0 none, 1 fitted (worked by a servo from engine speed)
+    float tsPvLowOpen;        // deg ATDC the exhaust opens with the valve fully lowered (later than tsExhaustOpen)
+    float tsPvRpmLow, tsPvRpmHigh;   // the valve starts to lift / is fully lifted
+    // inlet: how the charge gets into the crankcase
+    int32_t tsInlet;          // 0 reed valve, 1 piston port (the skirt uncovers it), 2 disc (rotary) valve on the crank
+    float tsInletOpen;        // piston port: deg BTDC the skirt opens it (closes as far ATDC); disc: deg BTDC it opens
+    float tsInletClose;       // disc valve: deg ATDC it closes
+    float tsInletArea_cm2;    // piston port / disc valve: the port's full area
+    // lubrication: premix oil in the fuel (fuel : oil by volume, e.g. 40 = 40:1); 0 = an oil pump (none in the fuel)
+    float tsOilRatio;
+    // combustion chamber: squish band (Blair sec. 4.5) - the burn period can follow from it
+    int32_t tsBurnFromSquish; // 1: burn period from the squish velocity instead of tsBurnDeg
+    float tsSquishArea;       // squish area ratio: share of the bore area under the squish band
+    float tsSquishClear_mm;   // squish clearance, piston crown to head at TDC
+    // expansion chamber with measured dimensions instead of Blair's empirical design
+    int32_t tsPipeCustom;
+    float tsPipeLen_mm[7];    // L1..L7 (Blair Fig. 5.7): first pipe, three diffuser cones, belly, rear cone, tail pipe
+    float tsPipeDia_mm[7];    // d at the end of each: d1 (first pipe), d2, d3, d4 (belly), d5 (belly end), d6, d7
 
     // ---------------------------------------------------------- forced induction
     Induction induction;
@@ -342,6 +361,7 @@ struct StructuralKey {
     Induction induction; Supercharger scType;
     int32_t tsPipe; float tsPipeRpm;   // (the expansion chamber's geometry is built with the exhaust:
     float tsPipeGeo[5];                //  its design and what it is proportioned from - the exhaust port and the stroke)
+    int32_t tsPipeCustom; float tsPipeDim[14];   // (or its measured dimensions)
 
     static StructuralKey of(const EngineParams& p) {
         StructuralKey k;
@@ -358,6 +378,8 @@ struct StructuralKey {
         if (isTwoStroke(p) && p.tsPipe) {
             k.tsPipeGeo[0] = p.tsPipeClass; k.tsPipeGeo[1] = p.tsExhaustOpen; k.tsPipeGeo[2] = p.tsExhaustWidth;
             k.tsPipeGeo[3] = p.bore_mm; k.tsPipeGeo[4] = p.stroke_mm;
+            k.tsPipeCustom = p.tsPipeCustom;
+            if (p.tsPipeCustom) for (int j = 0; j < 7; ++j) { k.tsPipeDim[j] = p.tsPipeLen_mm[j]; k.tsPipeDim[7 + j] = p.tsPipeDia_mm[j]; }
         }
         return k;
     }
