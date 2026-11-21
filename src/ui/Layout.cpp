@@ -204,7 +204,7 @@ void App::workArea() {
         beginSplit("##es_cfg", 0.56f);
         if (ImGui::BeginTabBar("engtabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
             if (ImGui::BeginTabItem("Engine", nullptr, tabJump("engine"))) { panelEngine(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem(isRotary(p_) ? "Ports###valv" : "Valvetrain###valv", nullptr, tabJump("valv"))) { panelValvetrain(); ImGui::EndTabItem(); }
+            if (ImGui::BeginTabItem(isRotary(p_) || isTwoStroke(p_) ? "Ports###valv" : "Valvetrain###valv", nullptr, tabJump("valv"))) { panelValvetrain(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Exhaust", nullptr, tabJump("exhaust"))) { panelExhaust(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Vehicle")) { panelVehicle(); ImGui::EndTabItem(); }
             if (ImGui::BeginTabItem("Sound")) { panelAudio(); ImGui::EndTabItem(); }
@@ -319,7 +319,7 @@ void App::sectionEcuSetup() {
     if (p_.fuelSystem == FuelSystem::EFI) {
         int inj = (int)p_.injection;
         if (ImGui::Combo("Injector position", &inj, "Port injection\0Throttle-body injection\0")) p_.injection = (Injection)inj;
-        ImGui::SliderFloat("End of injection", &p_.injectionAngle, 0, isRotary(p_) ? 1080.0f : 720.0f, "%.0f deg");
+        ImGui::SliderFloat("End of injection", &p_.injectionAngle, 0, (float)cycleDeg(p_), "%.0f deg");
     } else {
         ImGui::TextDisabled("Carburettor: the ECU is the ignition module only (curve + limiter).");
     }

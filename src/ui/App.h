@@ -169,6 +169,7 @@ private:
     void panelValvetrain();
     void panelRotary();
     void panelPorts();
+    void panelTwoStroke();   // two-stroke ports, crankcase, scavenging, expansion chamber (Package 5)
     void panelBoost();
     void panelVehicle();
     void panelIgnition();

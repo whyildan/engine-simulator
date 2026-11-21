@@ -179,15 +179,20 @@ implementasi" di bagian 4.
   EGT digambar di posisi pemasangannya (bersama update posisi sensor knalpot).
 - Tidak termasuk: keausan jangka panjang (jarak tempuh, servis) — sudah diputuskan tidak dibuat.
 
-**Catatan base map dan cache (dicek 2026-11-20, belum diubah kecuali versi):**
-- **Mesin karburator tetap diukur base map-nya** (saat preset dimuat / hardware berubah, thread latar). Padahal ECU
-  karburator hanya modul pengapian: peta VE tidak dipakai untuk bahan bakar (`Ecu::injectionPulse` → 0 bila bukan EFI);
-  satu-satunya pemakai adalah estimasi torsi torque management (`airEstimate`), yang jarang dipakai di mesin karburator.
-  Rig mengiterasi VE sampai campuran kena target lewat `veOverride`, tetapi karburator menakar bahan bakarnya sendiri,
-  jadi iterasi itu tidak bisa mengejar target — hasilnya paling banter perkiraan udara, dan waktunya terbuang (juga di
-  tes: `makeCalibratedPreset` mengukur ulang tiap run). Usulan: lewati untuk karburator (atau ukur udara saja tanpa
-  iterasi bila torque management dipakai); ukur saat sistem bahan bakar diganti ke EFI (kunci cache sudah memuat
-  `fuelSystem`).
+**Catatan base map dan cache (dicek 2026-11-20; diperbaiki 2026-11-21, versi 34):**
+- **Karburator tidak lagi diukur** ✅ (2026-11-21): `baseMapApplies()` (BaseMap.h) — diesel dan karburator dilewati
+  (app: pesan "carburettor: no base map needed"; `makeCalibratedPreset` mengembalikan peta generik). ECU karburator
+  hanya modul pengapian: peta VE tidak dipakai untuk bahan bakar (`Ecu::injectionPulse` hanya untuk EFI; karburator
+  menakar dari aliran venturi, Intake.cpp); satu-satunya pemakai lain adalah estimasi torsi torque management
+  (`airEstimate`) — di mesin karburator memakai peta generik. Ganti ke EFI → kunci berubah → diukur.
+- **Kolom rpm diukur paralel** ✅ (2026-11-21): tiap kolom mesin sendiri (kPatm per thread), thread = inti − 2 (sisakan
+  untuk simulasi / audio dan UI), pemanasan 1 s gas penuh per kolom (keadaan termal seperti urutan lama). Di CPU 16
+  thread: preset 1 22 → 6 s, preset 0 25 → 5 s, preset 17 47 → 17 s. Beda peta VE rata-rata 0.7–1.5 %; selisih
+  terbesar (preset 0, 9100 rpm 37 kPa, +21 %) justru kesalahan cara lama: titik gas tertutup langsung setelah gas
+  penuh kolom sebelumnya belum tenang (MAP 32.7 kPa > 15.4 kPa pada gas 2 %; kini 12.7 kPa, monoton).
+- **Pipa tala 2-tak (Duct)**: base map 2-tak lama karena dinamika gas 1D ±0.6 s per detik simulasi (vs 0.16 s pipa
+  biasa) — kini tidak relevan untuk preset 25 (karburator). Optimasi kecil (geometri dihitung sekali, solver batas
+  mulai dari solusi langkah sebelumnya): −13 %; sisanya aritmetika skema orde-2 per sel (±70 ns / sel / langkah).
 - **Cache** (`basemaps/` di samping exe; tes tidak memakai cache kecuali `BASEMAP_CACHE` di-set):
   - kunci = hash FNV-1a 64-bit atas seluruh `EngineParams` (bagian yang tidak menentukan udara dinolkan) XOR
     `kBaseMapVersion`. Parameter baru (mis. `resonator_hz`, `muffler_ext_tubes`, jenis bahan bakar) otomatis ikut;
@@ -222,7 +227,7 @@ dari sumber aslinya saat implementasi (seperti Kelompok A).
 - **Tes:** tunda penyalaan vs angka setana, bentuk laju panas dua fase, smoke limit membatasi λ saat akselerasi, VGT
   menahan boost, start dingin dengan / tanpa busi pijar, regresi penuh.
 
-**Paket 5 – Mesin 2-tak (detail):** belum dikerjakan; diminta 2026-11-20. Rujukan dicek identitas / abstraknya.
+**Paket 5 – Mesin 2-tak (detail):** tahap 5a + 5b + pengisian selesai (lihat bagian 4, "Paket 5"); diminta 2026-11-20. Rujukan dicek identitas / abstraknya.
 - **Siklus dan port:** satu langkah kerja per putaran; port buang, transfer dan intake dibuka-tutup piston (luas port
   dari posisi piston), intake lewat reed valve atau port piston ke karter.
 - **Kompresi karter:** karter sebagai volume gas yang dipompa piston (rasio kompresi karter), mengisi silinder lewat
@@ -1213,6 +1218,96 @@ persamaan dicek oleh agen riset); konstanta hasil fit mereka milik mesin mereka 
   pembakaran.
 - **Batas**: pembagi tunda main 2.2 dan dwell idle adalah kalibrasi; satu pilot (tanpa post-injection); laju injeksi
   konstan (tanpa bentuk laju / tekanan rail).
+
+### Paket 5 – Mesin 2-tak (tahap 5a + 5b + pengisian): port, karter, reed, scavenging, expansion chamber ✅
+Rujukan dicek (teks dibaca kecuali disebut lain); yang tidak terverifikasi disebut "dipilih". Rujukan utama pengisian:
+Blair, *Design and Simulation of Two-Stroke Engines* (SAE R-161, 1996) — dibaca dari salinan pindaian (teks OCR +
+gambar halaman; angka dari grafik ±3–5 %).
+- **Tipe mesin** `EngineType::TwoStroke`: siklus 360°, satu langkah kerja per putaran (`revsPerFiring` = 1 seperti
+  rotari: ECU, injeksi sekuensial, koil, frekuensi pengapian, fase silinder 360/N). Tanpa katup / noken (tanpa float,
+  tanpa sync cam).
+- **Port** (`CylGeom::portArea`): luas = lebar × tinggi yang sudah dibuka mahkota piston (kinematika engkol), simetris
+  terhadap BDC, penuh di BDC. Parameter: buang terbuka (°ATDC), transfer terbuka, lebar buang / transfer (× bore).
+  **Cd port buang terukur** (Blair App. A2.3, Gbr. A2.4–A2.7, port buang mesin GP 125 cc, Cd "aktual" untuk simulasi):
+  fungsi rasio luas port / pipa k dan rasio tekanan — keluar 0.82–0.96 (k 0.13) … 0.59–0.64 (k 0.82), balik 0.64–0.81.
+  Cd transfer 0.75 (koefisien inflow terukur yang sama pada k ±0.44, dipinjam — saluran transfer tidak dimodelkan).
+- **Karter** (`Engine::crankcaseStep`): volume di bawah piston, terbesar di TDC; volume minimum dari rasio kompresi
+  primer (Vmin + Vd) / Vmin. Energi eksplisit (U = m cv T): kerja kompresi, entalpi masuk / keluar, kalor ke dinding
+  (h 100 W/m²K, dipilih). Tekanan karter bekerja di bawah piston (kerja pompa karter ada di torsi).
+- **Reed valve**: pegas-massa-redaman (Dave dkk., SAE 2004-01-1455: memadai terhadap CFD — abstrak), mode pertama
+  150 Hz (Collins, MPhil Oxford Brookes 1994, mesin uji 125 cc: 120–183 Hz; petal glass-fibre mesin GP 125 Blair: 160 Hz,
+  dihitung dari E 21.5 GPa, ρ 1850 — cocok), gaya ∝ Δp × (15 − angkat mm)/15 (Collins: 1/3 pada 10 mm), stopper 10 mm
+  (dipilih), satu arah. Kekakuan statis (12 kPa untuk angkat penuh) dan redaman 0.3 **dikalibrasi**: angkat puncak
+  6.9 mm di 5500 rpm gas penuh versi 125 cc (Collins: 6.3–8.2 mm di 5000 rpm). Uji: kekakuan petal Blair (±5 kPa),
+  luas 2× atau redaman ½ hampir tidak mengubah delivery ratio — reed bukan pembatas.
+- **Scavenging: model Blair** (`sim/Scavenge.h`, sec. 3.3), menggantikan Benson–Brandham (BB tidak bisa meniru silinder
+  loop yang bagus: kemiringan ln(1−SE) vs SR terukur −1…−2, BB hanya 0…−1 — Blair Gbr. 3.14 / SAE 881265). Kurva
+  SE–SR terukur 10 silinder nyata dari rig scavenging QUB (Gbr. 3.16: ln(1−SEv) = K0 + K1 SRv + K2 SRv²); kemurnian gas
+  di port buang = kemiringan kurva (pers. 3.3.12); suhu udara / gas buang di silinder dari Ctemp = 0.65 Kse Kcp
+  (pers. 3.3.13–3.3.15, fit Blair); SE massa → volume (3.3.16), suhu keluar (3.3.18). Parameter `ts_scavenge` = silinder
+  (preset: YAM14, loop 5 port yang bagus). Telemetri per siklus: delivery ratio dan trapping efficiency **atas udara**
+  (definisi Blair / MIT), scavenging efficiency, charging efficiency (udara segar terperangkap / Vd pada densitas
+  ambien).
+- **Expansion chamber — desain empiris Blair** (`tunedPipeGeometry`, sec. 6.2.5): panjang tala port → tail pipe
+  LT = 83.3 a0 θep / rpm (a0 pada 500 °C enduro … 600 °C GP), L1…L7 = 0.1 / 0.275 / 0.183 / 0.092 / 0.11 / 0.24 / 0.24 LT,
+  d1 = k1 d0 (1.125 → 1.05), d4 = k2 d0 (2.125 → 3.25), tail pipe 0.7 / 0.65 / 0.6 d0, diffuser horn kh 1.5 (d2, d3 dari
+  rumus horn — diperiksa: contoh buku 56 / 89 mm, hasil 56.4 / 88.7). `ts_pipe_class` 0 enduro … 0.5 motocross … 1
+  road race: konstanta di antara ujung-ujung Blair diinterpolasi (dipilih). Tab Ports menampilkan semua dimensi.
+- **Dinamika gas 1D di pipa tala** (`sim/Duct.h`): gelombang di expansion chamber berukuran ±tekanan ambien (Blair Gbr.
+  5.34: pulsa ±2 atm, hisapan menarik silinder ke 0.7 atm, plugging menaikkan 1 → 2+ atm) — akustik kecil-sinyal
+  (waveguide) hanya memberi ±⅓ hisapan / plugging (linear: pulsa 0.4 ms memantul dari horn 0.46 m dengan ±−0.22 —
+  persis yang terukur di model lama; kecepatan gelombang tergantung amplitudo tidak menolong). Kini: persamaan Euler
+  kuasi-1D (luas berubah), volume hingga ±20 mm, MUSCL-Hancock + HLLC (Toro), dua skalar (bahan bakar, gas terbakar)
+  ikut aliran — muatan segar yang lolos ke pipa didorong kembali oleh plugging. Dinding: gesek Cf 0.005 dan kalor
+  analogi Reynolds (dipilih); suhu dinding mengikuti gas (dipilih agar ±350 °C asumsi Blair). Ujung port: orifice + karakteristik
+  dari pipa (diselesaikan implisit tiap langkah); ujung belakang: karakteristik keluar ↔ waveguide silencer (suara
+  tetap dari waveguide). Port 2-tak tanpa pipa tala: port langsung ke pipa akustik (tanpa volume port), sama implisit.
+- **Perbaikan lain yang ditemukan**: (1) muatan segar yang short-circuit dihitung sebagai afterfire yang terbakar di pipa
+  (+700 K) — pada 2-tak bersilinder-karter ia keluar tak terbakar (emisi HC tinggi); kini hanya muatan misfire;
+  (2) gesekan 2-tak kini Blair pers. 5.4.2 (bantalan gelinding, sepeda motor): fmep = 105 Lst N Pa — tanpa aksesori;
+  (3) DR / TE atas udara.
+- **Validasi — mesin balap 125 Blair** (sec. 5.5.2: 56 × 50.6, CR terperangkap 9, karter 1.35, EPO 81° / TPO 115°,
+  pipa tala 11 750 rpm; terukur Gbr. 5.29): TE 0.45 / 0.66 (terukur 0.50 / 0.69) di 8780 / 11 740 rpm — sesuai;
+  CE 0.36 / 0.58 (0.63 / 0.79); DR 0.81 / 0.89 (1.26 / 1.15). Sebelum paket pengisian: DR 0.66, TE 0.55, CE 0.37 di
+  11 740 dan tanpa puncak tala. Dengan pembakaran 50° (uji): pmax 80 bar (terukur ±87), bmep 6.8 bar (10.5).
+- **Pembakaran 2-tak — Blair** (sec. 4.3.6; `Engine::burnDuration`): tunda nyala lalu kurva Vibe
+  x = 1 − exp(−a (θ/b)^(m+1)) dengan a 5.25, m 1.25 (fit Blair untuk mesin GP 125 terukur, Cartwright). Data terukur:
+  GP 125 10 350 rpm SE 0.96 — tunda 12°, b 41°; LS400 3000 rpm WOT — tunda 10°, b 60°; Reid 3000 rpm gas 100 / 25 /
+  10 % (SE 0.80 / 0.75 / 0.65) — tunda 13 / 14 / 23°, b 49 / 43 / 45°; chainsaw 9600 rpm — b 64° (campuran "sedikit
+  berpengaruh"). Blair: b "jarang < 45° atau > 65°, tak tergantung putaran dan beban" → **b = parameter ruang bakar**
+  `ts_burn_deg` (squish), tanpa suku rpm / beban / campuran; preset 25: 41° (ruang balap seperti GP 125), default 50°.
+  Pengenceran dan tekanan rendah beban ringan masuk ke **tunda**: mengikuti faktor kernel api (∝ 1/S_L, Flame.h),
+  diskalakan agar GP 125 di rig-nya memberi 12° (faktor kernel 1.00 di 10 350 rpm — kalibrasi satu titik). Cek mesin
+  ukuran LS400 (85 × 70, CR terperangkap 6.6) 3000 rpm: tunda 10.3° gas penuh / 22.4° gas ringan (SE 0.66, DR 0.23)
+  vs Reid 13 / 23° (SR 0.24) dan Kee 10° — cocok. Hasil GP 125: 50 % terbakar 8.7° ATDC (terukur 9°), pmax 72 bar pada
+  CE 0.59 (terukur ±87 bar pada CE 0.79). Model durasi 4-tak (A4) tidak lagi dipakai untuk 2-tak. Batas: hanya satu
+  titik kalibrasi untuk tunda; data b tersebar 41–64° antar mesin (squish / bentuk ruang bakar belum dimodelkan).
+- **Start / idle**: karter awal berisi campuran λ 0.8 (sisa bahan bakar dari jalan terakhir, dipilih) — dekoder
+  trigger memotong percikan ±2 putaran pertama. Start hangat 0.44 s, idle ±1700 rpm (udara idle 1.0, four-stroking).
+- **Four-stroking**: muncul sendiri dari model misfire umpan balik residu (Daw/ORNL, sama dengan "brap" rotari): di
+  3000 rpm gas 4.5 % ±46–55 % siklus misfire (2 %: 81 %), hampir semua karena residu; batasnya bergeser karena scavenging Blair
+  menyisakan lebih sedikit residu — SAE 830091 (Tsuchiya dkk., Yamaha; abstrak), Lu & Lee SAE 960746 (abstrak).
+  Gas penuh: 0 % misfire.
+- **Preset 25 "1-cyl 250 two-stroke (MX-style)"**: bore × stroke dan CR dari Honda CR250R 2002 (factbook Honda:
+  66.4 × 72, 8.5:1 — diambil sebagai CR terperangkap → geometris 16), buang 82° / transfer 116° ATDC, lebar 0.70 / 1.10
+  × bore, karter 1.40:1, reed 20 cm², karburator 38 mm, YAM14, expansion chamber motocross tala 8000 rpm. Timing port /
+  lebar MX **tidak terverifikasi** (sumber: Yamaha MT-110 EPO 104°, TPO 128° — Zhang 1995; Piaggio 50 EPO 105°,
+  TPO 123° — snippet). Pengapian 14° idle naik ke 22° pada 6000 rpm: terbaik di rig dengan pembakaran Blair (seperti
+  20° mesin GP terukur; sebelumnya butuh 32–38° karena pembakaran lambat).
+- **UI**: Engine › tipe mesin "Two-stroke"; tab Ports: port, karter, reed, silinder scavenging (Blair), DR / TE / SE /
+  tekanan karter / bukaan reed langsung, expansion chamber (tala rpm, desain enduro…road race, dimensi L1–L7 / d0–d7).
+- **Tes** (`twostroke_test`): geometri port; karter dipompa, reed tertutup saat tekanan karter puncak, angkat reed vs
+  Collins; kemurnian keluar Blair (gas buang dulu, segar kemudian), YAM14 > YAM12 (TE, SE); validasi 125 Blair (TE ±0.08
+  dari terukur di dua putaran, tala menaikkan TE / CE, CE > 0.5); pembakaran (tunda GP 125 ±1.5° dari 12°, 50 %
+  terbakar 5–11° ATDC, tunda bertambah > 6° di beban ringan seperti Reid); pipa tala > pipa biasa, puncak torsi pindah
+  dengan tala; four-stroking di gas 4.5 %; start dan idle.
+- **Batas (penting)**: preset 25 kini ±26 N·m di 8000 rpm, puncak ±30 N·m di 9000 (awal paket: ±12–15) vs CR250R
+  51 N·m @ 8000 (spesifikasi Honda) / YZ250 41.5 N·m (dyno MXA). Sisa: (a) **delivery ratio** ±0.9 vs 1.15 terukur
+  (125 Blair; CE 0.59 vs 0.79): saluran transfer (inersia) dan sistem intake belum gas-dinamika 1D; (b) pipa tala
+  sedikit terlalu "tinggi" (tala 8000 → puncak 9000); (c) b per mesin (squish) dipilih dari data Blair, tidak
+  dihitung dari geometri ruang bakar. Biaya CPU: ±0.5 detik per detik simulasi untuk pipa tala (1 silinder, 96 kHz;
+  total mesin ±0.7); preset 25 (karburator) tidak memakai base map. Belum: oli campur (premix), port intake piston / rotary valve, power
+  valve, tampilan 3D 2-tak.
 
 ---
 

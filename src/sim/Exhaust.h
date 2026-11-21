@@ -1,9 +1,17 @@
 #pragma once
 #include "sim/EngineParams.h"
 #include "sim/Waveguide.h"
+#include "sim/Duct.h"
 #include <vector>
 
 namespace es {
+
+// Two-stroke expansion chamber dimensions from Blair's empirical design (Design and Simulation of Two-Stroke Engines,
+// SAE 1996, sec. 6.2.5, Fig. 5.7 nomenclature): segment 0 the first pipe from the port (L1, d1), 1-3 the diffuser
+// cones (L2-L4, ending at d2, d3, d4), 4 the belly (L5, d4), 5 the rear cone (L6, ending at d7), 6 the tail pipe
+// (L7, d7). Metres. d0: the diameter of the exhaust port's full area; lt: tuned length, port to tail-pipe entry.
+struct TunedPipeGeom { double d0 = 0, lt = 0, texcC = 0, len[7] = {}, dia[7] = {}; };
+TunedPipeGeom tunedPipeGeometry(const EngineParams& p);
 
 // Builds the exhaust waveguide network (headers, collectors, crossover, cat, resonator,
 // muffler, tailpipe) from the parameters and owns the exhaust port nodes.
@@ -18,6 +26,25 @@ public:
     void setGasTemp(double egtK);
 
     GasNode& port(int i) { return ports_[i]; }
+    // two-stroke: the port window feeds its pipe directly (no lumped port volume - it soaked up and smoothed the
+    // blowdown pulse the tuned pipe works with). Each step: arrive(), then the cylinder solves its port flow against
+    // the wave arriving at the pipe (portWave) and sets it (setPortFlow), then step(). port(i) mirrors the pipe end.
+    struct PortWave { double in, Z, rho, T, ff, bf; };
+    bool directPorts() const { return direct_; }
+    void arrive() { net.arrive(); }
+    PortWave portWave(int i) const;
+    void setPortFlow(int i, double mdot, double ff, double bf) { FlowEnd& f = net.flowEnds[i]; f.mdot = mdot; f.ff = ff; f.bf = bf; }
+    void addPortMass(int i, double kg) {
+        if (ductPorts()) ducts_[i].inject(kg, ports_[i].T); else net.flowEnds[i].extraKg += kg;
+    }
+    // two-stroke with a tuned pipe: the pipe from the port to the end of the tail pipe is 1D gas dynamics (Duct.h);
+    // the silencer after it stays acoustic. The cylinder solves its port against duct(i) instead of portWave.
+    bool ductPorts() const { return !ducts_.empty(); }
+    // area of the pipe the port opens into (two-stroke: the discharge coefficient depends on port / pipe area)
+    double portPipeArea(int i) const { return ductPorts() ? ducts_[i].portArea() : net.pipes[portPipe_[i]].area; }
+    void setAmbient(double k) { ambK_ = k; }
+    Duct& duct(int i) { return ducts_[i]; }
+    const Duct& duct(int i) const { return ducts_[i]; }
     bool hasTurbine() const { return hasTurbine_; }
     GasNode& turbineIn() { return tin_; }     // exhaust manifold / turbine housing
     GasNode& turbineOut() { return tout_; }   // turbine exit / downpipe start
@@ -45,6 +72,13 @@ private:
     std::vector<GasNode> helm_;   // Helmholtz resonator volumes (one per exhaust path; reserved - pointers stay valid)
     // expansion chamber of length L (m) and area ratio ar; extended inlet / outlet tubes (L/2, L/4) when asked
     PipeEnd chamber(PipeEnd from, double ar, double L, double fc, double loss, bool extTubes);
+    PipeEnd expansionChamber(PipeEnd from);   // two-stroke tuned pipe after its first pipe (Package 5)
+    TunedPipeGeom tp_;                        // (two-stroke with a tuned pipe: its dimensions, set in build)
+    bool tsPipe_ = false;
+    bool direct_ = false;                     // two-stroke: ports are flow ends (index = port)
+    std::vector<int> portPipe_;
+    std::vector<Duct> ducts_;                 // two-stroke tuned pipes (one per cylinder; flow end i feeds its silencer)
+    double ambK_ = 293.0;
     double helmholtzHz() const;
     GasNode burned_;   // composition of gas flowing back from the pipes (pure products)
     GasNode tin_, tout_;

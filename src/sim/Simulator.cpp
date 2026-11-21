@@ -232,6 +232,11 @@ void Simulator::render(float* out, int frames) {
     t.glowTipC = (float)e.glowTipC(); t.glowOn = e.ecu.cmd.glow; t.glowLight = e.ecu.glowLight;
     t.egrPos = (float)e.egrPos(); t.egrGs = (float)(e.egrFlow() * 1000.0);
     t.egrRate = (float)e.egrRate();
+    if (e.twoStroke() && e.cylinders() > 0) {
+        const Cylinder& c0 = e.cyl(0);
+        t.tsDelivery = (float)c0.dr; t.tsTrapping = (float)c0.te; t.tsScavenging = (float)c0.se;
+        t.tsCrankcaseKPa = (float)(e.crankcaseP(0) * 1e-3); t.tsReed = (float)e.reedOpen(0);
+    }
     t.vgtOpen = e.params().vgt ? (float)e.boost.wastegate : 1.0f;
     t.stress = (float)e.stress; t.floatIn = (float)e.floatIn; t.floatEx = (float)e.floatEx;
     t.sparkMargin = (float)e.sparkMargin; t.sparkAvail = (float)e.sparkAvail; t.oilBar = (float)e.oilBar;

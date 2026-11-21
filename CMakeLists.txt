@@ -49,6 +49,7 @@ endif()
 add_library(enginesim_core STATIC
   src/sim/Presets.cpp
   src/sim/Waveguide.cpp
+  src/sim/Duct.cpp
   src/sim/Fuel.cpp
   src/sim/Thermo.cpp
   src/sim/Exhaust.cpp
@@ -229,6 +230,12 @@ add_executable(diesel_test tests/diesel_test.cpp)
 target_link_libraries(diesel_test PRIVATE enginesim_core)
 if(MSVC)
   target_link_options(diesel_test PRIVATE /STACK:16777216)
+endif()
+
+add_executable(twostroke_test tests/twostroke_test.cpp)
+target_link_libraries(twostroke_test PRIVATE enginesim_core)
+if(MSVC)
+  target_link_options(twostroke_test PRIVATE /STACK:16777216)
 endif()
 
 add_executable(fuel_test tests/fuel_test.cpp)

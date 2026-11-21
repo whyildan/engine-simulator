@@ -114,7 +114,7 @@ double Vehicle::step(double dt, double we, const EngineParams& p, double& pedal)
     if (cap <= 1.0) { clutchLocked = false; T = 0; }
     clutchTorque = T;
     {   // boxcar over exactly one working cycle (crank angle based, like the engine's own torque average)
-        const int nb = isRotary(p) ? 1080 : 720;
+        const int nb = (int)cycleDeg(p);
         const double dDeg = we * dt * 180.0 / kPi;
         avgPhase_ = std::fmod(avgPhase_ + dDeg, (double)nb);
         const int bin = clampv((int)avgPhase_, 0, nb - 1);

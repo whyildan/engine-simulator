@@ -45,6 +45,12 @@ public:
     double displacement() const { return geom_.Vd * nPorts_; }
     double cycle() const { return cycle_; }          // 720 piston, 1080 rotary
     bool rotary() const { return geom_.rotary; }
+    bool twoStroke() const { return twoStroke_; }
+    // two-stroke crankcase of a cylinder (pressure Pa, temperature K, reed petal opening 0..1)
+    double crankcaseP(int i) const { return twoStroke_ && i < (int)cc_.size() ? cc_[i].g.p() : kPatm; }
+    double crankcaseT(int i) const { return twoStroke_ && i < (int)cc_.size() ? cc_[i].g.T : ambT_; }
+    double reedOpen(int i) const { return twoStroke_ && i < (int)cc_.size() ? cc_[i].reed : 0.0; }
+    const GasNode* crankcaseGas(int i) const { return twoStroke_ && i < (int)cc_.size() ? &cc_[i].g : nullptr; }
     int ports() const { return nPorts_; }            // cylinders or rotors
     bool running() const { return running_; }
     bool limiterActive() const { return ecu.cmd.limiter; }
@@ -161,6 +167,15 @@ private:
     void updateValves();
     void setupChambers();
     void apexLeakage(double dt);
+    // two-stroke (Package 5): the crankcase under each piston - pumped by the piston's underside, filled through the
+    // reed valve, emptied through the transfer ports. Energy kept explicitly (U = m cv T).
+    struct Crankcase { GasNode g; double U = 0; double reed = 0, reedV = 0; };   // reed: petal tip lift / its stop, and its rate (1/s)
+    std::vector<Crankcase> cc_;
+    bool twoStroke_ = false;
+    double ccVmin_ = 1e-4;        // crankcase volume with the piston at BDC
+    void crankcaseInit();
+    void crankcaseStep(Crankcase& k, GasNode& ip, double vCyl, double dt);
+    static void ccSync(Crankcase& k) { k.g.T = clampv(k.U / (std::max(1e-12, k.g.m) * kCv), 150.0, 2500.0); }
     // diesel (Package 4): injection, ignition delay and the burn of one cylinder for this step
     void dieselStep(Cylinder& c, double dt, double phiPrev, double phi, double rpm, bool exOpen, bool fuelCut,
                     double& dm, double& dmf, double& dmb, double& dmbNew, double& dU);

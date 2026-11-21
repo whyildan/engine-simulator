@@ -24,7 +24,7 @@ enum class Limiter : int32_t { IgnitionCut = 0, FuelCut = 1 };
 enum class ListenerPos : int32_t { Tailpipe = 0, EngineBay = 1, Cabin = 2 };
 enum class DynoMode : int32_t { Off = 0, Hold = 1, Sweep = 2, Step = 3 };
 enum class Environment : int32_t { OpenRoad = 0, Garage = 1, DynoCell = 2, Tunnel = 3 };
-enum class EngineType : int32_t { Piston = 0, Rotary = 1 };
+enum class EngineType : int32_t { Piston = 0, Rotary = 1, TwoStroke = 2 };   // TwoStroke: Package 5
 enum class Induction : int32_t { Natural = 0, Turbo = 1, Supercharger = 2 };
 enum class Supercharger : int32_t { Roots = 0, TwinScrew = 1, Centrifugal = 2 };
 enum class TransMode : int32_t { Manual = 0, ManualAutoClutch = 1, Automatic = 2 };
@@ -165,6 +165,22 @@ struct EngineParams {
     float rExhaustArea_cm2;   // exhaust port area per rotor
     float apexLeak;           // 0 = perfect apex seals, 1 = worn out
 
+    // ---------------------------------------------------------- two-stroke (Package 5)
+    // Crankcase scavenged, loop scavenged: the piston uncovers the exhaust and transfer ports in the cylinder wall;
+    // the charge comes in through a reed valve into the crankcase, which the underside of the piston pumps up into
+    // the cylinder through the transfer ports. One working cycle per crank revolution; no valvetrain.
+    float tsExhaustOpen;      // deg ATDC the piston crown uncovers the exhaust port (it closes as far before TDC)
+    float tsTransferOpen;     // deg ATDC ... the transfer ports
+    float tsExhaustWidth;     // exhaust port width (all its openings), share of the bore
+    float tsTransferWidth;    // transfer ports, total width, share of the bore
+    float tsCrankcaseCR;      // primary (crankcase) compression ratio: crankcase volume with the piston at TDC / at BDC
+    float tsReedArea_cm2;     // reed valve flow area with the petals fully open
+    int32_t tsScavenge;       // scavenging: which of Blair's measured cylinders (kScavCylinders, sim/Scavenge.h)
+    int32_t tsPipe;           // exhaust: 0 = the ordinary header / pipes, 1 = an expansion chamber (tuned pipe) per cylinder
+    float tsPipeRpm;          // ... the speed the expansion chamber is tuned for (sets its length)
+    float tsPipeClass;        // ... its design (Blair): 0 = broad enduro pipe, 0.5 = motocross, 1 = road racing
+    float tsBurnDeg;          // combustion: burn period (Vibe, deg) - the combustion chamber's (squish) speed
+
     // ---------------------------------------------------------- forced induction
     Induction induction;
     Supercharger scType;
@@ -285,15 +301,18 @@ inline double n2oFullFlowKgs(const EngineParams& p) { return std::max(0.0f, p.n2
 
 inline bool isRotary(const EngineParams& p) { return p.engineType == EngineType::Rotary; }
 inline bool isDiesel(const EngineParams& p) { return p.fuelSystem == FuelSystem::DieselDI; }
+inline bool isTwoStroke(const EngineParams& p) { return p.engineType == EngineType::TwoStroke; }
 // length of one working cycle of a chamber in crank / eccentric-shaft degrees
-inline double cycleDeg(const EngineParams& p) { return isRotary(p) ? 1080.0 : 720.0; }
+inline double cycleDeg(const EngineParams& p) { return isRotary(p) ? 1080.0 : isTwoStroke(p) ? 360.0 : 720.0; }
+// shaft revolutions between two firings of the same cylinder / rotor (four-stroke 2; a rotor and a two-stroke 1)
+inline double revsPerFiring(const EngineParams& p) { return isRotary(p) || isTwoStroke(p) ? 1.0 : 2.0; }
 // rated displacement in litres (rotary: Mazda convention = one face per rotor)
 inline double ratedDisplacementL(const EngineParams& p) {
     if (isRotary(p)) return p.cylinders * 5.196152 * p.rotorRadius_mm * p.eccentricity_mm * p.rotorWidth_mm * 1e-6;
     return p.cylinders * 3.14159265 * 0.25 * p.bore_mm * p.bore_mm * p.stroke_mm * 1e-6;
 }
 // litres swept per two shaft revolutions (what a 4-stroke of that size would breathe)
-inline double equivalentDisplacementL(const EngineParams& p) { return ratedDisplacementL(p) * (isRotary(p) ? 2.0 : 1.0); }
+inline double equivalentDisplacementL(const EngineParams& p) { return ratedDisplacementL(p) * (2.0 / revsPerFiring(p)); }
 
 // Fields whose change requires rebuilding the engine object (with an audio crossfade).
 struct StructuralKey {
@@ -304,6 +323,8 @@ struct StructuralKey {
     int32_t evenFire; int32_t firingOrder[kMaxCyl]; // affects tri-Y pairing
     EngineType engineType;
     Induction induction; Supercharger scType;
+    int32_t tsPipe; float tsPipeRpm;   // (the expansion chamber's geometry is built with the exhaust:
+    float tsPipeGeo[5];                //  its design and what it is proportioned from - the exhaust port and the stroke)
 
     static StructuralKey of(const EngineParams& p) {
         StructuralKey k;
@@ -316,6 +337,11 @@ struct StructuralKey {
         k.resonatorHz = p.resonatorHz; k.mufflerExtTubes = p.mufflerExtTubes;
         k.engineType = p.engineType;
         k.induction = p.induction; k.scType = p.scType;
+        k.tsPipe = isTwoStroke(p) ? p.tsPipe : 0; k.tsPipeRpm = isTwoStroke(p) && p.tsPipe ? p.tsPipeRpm : 0.0f;
+        if (isTwoStroke(p) && p.tsPipe) {
+            k.tsPipeGeo[0] = p.tsPipeClass; k.tsPipeGeo[1] = p.tsExhaustOpen; k.tsPipeGeo[2] = p.tsExhaustWidth;
+            k.tsPipeGeo[3] = p.bore_mm; k.tsPipeGeo[4] = p.stroke_mm;
+        }
         return k;
     }
     bool operator==(const StructuralKey& o) const { return std::memcmp(this, &o, sizeof(*this)) == 0; }

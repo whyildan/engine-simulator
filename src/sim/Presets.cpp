@@ -8,14 +8,15 @@ namespace es {
 void computePhases(const EngineParams& p, float out[kMaxCyl]) {
     int n = clampv(p.cylinders, 1, kMaxCyl);
     // rotary: every rotor fires once per shaft revolution -> rotors spaced 360/N apart
-    const double spacing = isRotary(p) ? 360.0 : 720.0;
+    // two-stroke: every cylinder fires once per revolution, too
+    const double spacing = 360.0 * revsPerFiring(p);
     if (p.evenFire || isRotary(p)) {
         for (int k = 0; k < n; ++k) {
             int c = clampv(p.firingOrder[k], 0, n - 1);
             out[c] = (float)(spacing * k / n);
         }
     } else {
-        for (int i = 0; i < n; ++i) out[i] = (float)wrapPos(p.phase[i], 720.0);
+        for (int i = 0; i < n; ++i) out[i] = (float)wrapPos(p.phase[i], spacing);
     }
     for (int i = n; i < kMaxCyl; ++i) out[i] = 0;
 }
@@ -95,6 +96,11 @@ static EngineParams base() {
     p.rotorRadius_mm = 105; p.eccentricity_mm = 15; p.rotorWidth_mm = 80;
     applyRotaryPorting(p, 0);
     p.apexLeak = 0.05f;
+    // two-stroke ports and scavenging (two-stroke presets only)
+    p.tsExhaustOpen = 82; p.tsTransferOpen = 116; p.tsExhaustWidth = 0.70f; p.tsTransferWidth = 1.10f;
+    p.tsCrankcaseCR = 1.40f; p.tsReedArea_cm2 = 20; p.tsScavenge = 9;   // (YAM14: a good 5-port loop cylinder)
+    p.tsPipe = 0; p.tsPipeRpm = 8000; p.tsPipeClass = 0.5f;
+    p.tsBurnDeg = 50;   // (Blair's measured 41-64 deg: a middle value)
 
     p.induction = Induction::Natural; p.scType = Supercharger::Roots;
     p.compFlow_gs = 220; p.turbineAR = 0.64f; p.turboInertia = 0.15f; p.wastegateBar = 1.0f;
@@ -258,6 +264,7 @@ static const char* kNames[] = {
     "Flat-6 3.6 EFI (boxer six)",
     "Rotary 2-rotor 1.3L bridge port (brap idle)",
     "I4 1.9 turbo diesel (TDI-style)",
+    "1-cyl 250 two-stroke (MX-style)",
 };
 
 int presetCount() { return (int)(sizeof(kNames) / sizeof(kNames[0])); }
@@ -548,6 +555,32 @@ EngineParams makePreset(int idx) {
         p.vgt = 1; p.vgtMinArea = 0.12f; p.turbineAR = 0.8f; p.egrValveDia_mm = 25;
         p.limiter = Limiter::FuelCut; p.muffler = Muffler::Chambered;
         p.sweepStartRpm = 1000; p.sweepEndRpm = 4700;
+        break;
+    case 25: // two-stroke single (Package 5): 250 cc, 66.4 x 72 mm, crankcase scavenged through a reed valve, loop
+             // scavenged; one carburettor; CDI ignition. Port timings / widths, primary compression and the reed
+             // area are typical values for this class (ECU_PLAN, package 5). Bore x stroke and compression from the
+             // 2002 Honda CR250R (Honda factbook: 66.4 x 72 mm, 8.5:1 - taken as the trapped ratio, the way
+             // two-stroke makers quote it): geometric 16 gives 8.5 from the exhaust closing.
+        p = base();
+        p.engineType = EngineType::TwoStroke;
+        p.cylinders = 1; p.layout = Layout::Inline; applyLayoutDefaults(p);
+        p.bore_mm = 66.4f; p.stroke_mm = 72; p.rod_mm = 130; p.compression = 16.0f;
+        p.fuelSystem = FuelSystem::Carburetor; p.carbBarrels = 1; p.venturi_mm = 36; p.throttleBore_mm = 38;
+        p.idleScrew = 1.0f; p.accelPump = 1.0f; p.idleTargetRpm = 1600;
+        p.plenum_L = 0.2f; p.runnerLen_mm = 120; p.runnerDia_mm = 38; p.airFilter = 0.3f;
+        // ignition: 14 deg at idle rising to 22 deg by 6000 rpm - best torque on the rig with Blair's burn (12 deg
+        // delay + 41 deg), like the 20 deg of his measured GP engine
+        p.baseAdvance = 14; p.mechAdvance = 8; p.mechAdvanceRpm = 6000; p.vacuumAdvance = 0;
+        p.header = HeaderType::Collector; p.primaryLen_mm[0] = 900; p.primaryDia_mm = 42; p.collectorDia_mm = 45;
+        p.collectorLen_mm = 100; p.pipeDia_mm = 45; p.midpipeLen_mm = 200; p.cat = 0; p.resonator = 0;
+        p.muffler = Muffler::StraightThrough; p.tailpipeLen_mm = 250;
+        p.revLimit = 9500; p.flywheel = 0.02f; p.limiter = Limiter::IgnitionCut;
+        p.tsExhaustOpen = 82; p.tsTransferOpen = 116; p.tsExhaustWidth = 0.70f; p.tsTransferWidth = 1.10f;
+        p.tsCrankcaseCR = 1.40f; p.tsReedArea_cm2 = 20; p.tsScavenge = 9;
+        p.tsBurnDeg = 41;   // a racing chamber with a squish band: Blair's measured 125 GP engine
+        // expansion chamber tuned for 8000 rpm after a 150 mm header; straight-through silencer
+        p.tsPipe = 1; p.tsPipeRpm = 8000; p.primaryLen_mm[0] = 150;
+        p.sweepStartRpm = 3000; p.sweepEndRpm = 9500;
         break;
     case 20: // centrifugal supercharged V6
         p = makePreset(3);

@@ -1,6 +1,8 @@
 #include "ecu/BaseMap.h"
 #include "sim/Engine.h"
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <map>
 #include <mutex>
 #include <vector>
@@ -31,8 +33,11 @@ double interp(const std::vector<std::pair<double, double>>& xy, double x) {
 }
 } // namespace
 
+static std::atomic<int> g_bmThreads{0};
+void setBaseMapThreads(int n) { g_bmThreads = std::max(0, n); }
+
 bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* prog, double fs) {
-    if (isDiesel(pIn)) return false;   // (see makeCalibratedPreset)
+    if (!baseMapApplies(pIn)) return false;   // (diesel / carburettor: see BaseMap.h)
     EngineParams p = pIn;
     p.vehicle = 0; p.dynoMode = DynoMode::Off; p.ignition = 1; p.starter = 0; p.coldStart = 0;
     p.clutchPedal = 0; p.n2oArm = 0; p.transbrake = 0; p.rollingAlsButton = 0;   // no launch limiter / nitrous on the rig
@@ -68,15 +73,23 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
     std::vector<double> rpms(nR);
     for (int i = 0; i < nR; ++i) rpms[i] = ax.x[std::min(pick[i], (int)ax.nx - 1)];
     std::vector<std::vector<Pt>> pts(nR);
-    Engine e(p, fs);
-    e.ecu.holdIac = true;
-    for (int ri = 0; ri < nR; ++ri) {
+    // every rpm column on its own engine, the columns spread over worker threads (each engine keeps its state - and
+    // its ambient pressure, kPatm, is per thread - so the columns do not interact); the throttle points of a column
+    // run in order on one engine, each settling from the one before
+    std::atomic<int> nextCol{0}, donePts{0};
+    std::atomic<bool> cancelled{false};
+    auto column = [&](int ri) {
+        Engine e(p, fs);
+        e.ecu.holdIac = true;
         const double omega = rpms[ri] * 2.0 * kPi / 60.0;
+        // warm up at full throttle first - as the engine was when the columns ran one after the other (each began
+        // from the last one's full-throttle point): the exhaust, its pipes and the walls hot
+        for (double t = 0; t < 1.0 && !(prog && prog->cancel.load()); t += dt) { e.setCrank(omega, e.theta()); e.step(dt, 1.0, 0.0); }
         for (int ti = 0; ti < nT; ++ti) {
             if (prog) {
-                prog->fraction.store((float)(ri * nT + ti) / (nR * nT));
-                if (prog->cancel.load()) return false;
+                if (prog->cancel.load()) { cancelled = true; return; }
             }
+            if (cancelled.load()) return;
           double est = 0, ve = 0, map = 0, veAtm = 0;
           bool fired = false;
           const double tp = thr[ti];
@@ -134,8 +147,18 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
           e.ecu.veOverride = 0;
             veAtm = ve * map / kPatm / (ecuT / ambT);
             pts[ri].push_back({map / 1000.0, tp * 100.0, ve * 100.0, veAtm * (ecuT / ambT) * 100.0, fired});
+            const int done = ++donePts;
+            if (prog) prog->fraction.store((float)done / (nR * nT));
         }
-    }
+    };
+    // threads: leave a core for the simulation / audio and one for the UI
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    const int nThreads = clampv(g_bmThreads.load() > 0 ? g_bmThreads.load() : (int)hw - 2, 1, nR);
+    std::vector<std::thread> pool;
+    for (int k = 0; k < nThreads; ++k)
+        pool.emplace_back([&] { for (int ri; (ri = nextCol++) < nR;) column(ri); });
+    for (std::thread& t : pool) t.join();
+    if (cancelled.load()) return false;
     // resample onto the table axes: rows by MAP (or TPS), columns by rpm
     for (int which = 0; which < 2; ++which) {
         Table2D& t = which == 0 ? out.veMap : out.veTps;
@@ -170,7 +193,7 @@ bool measureBaseMap(const EngineParams& pIn, Calibration& out, BaseMapProgress* 
 // ------------------------------------------------------------------ on-disk cache
 // Keyed by everything that defines the engine (driver inputs, sound, dyno, vehicle and the VE maps
 // themselves are left out). Bump kBaseMapVersion when the physics changes.
-static constexpr uint32_t kBaseMapVersion = 33;   // 33: back to the v30 physics (31 / 32 had pocket pops / partial burns)   // 30: exhaust acoustics (open end, resonators), dilution misfire threshold   // 29: burn duration from the laminar burning velocity (A4)   // 28: full Woschni, Livengood-Wu knock (A2, A3)   // 27: temperature-dependent gas properties, rich-burn CO / H2 (A1)   // 26: knock needs end-gas pressure (no part-load knock)   // 25: fuels (heating value 43.5 MJ/kg, charge cooling by evaporation)   // 24: energy-neutral pipe / volume coupling (no self-excited ringing)   // 23: mass-weighted exhaust temperature (pipe wave speed)   // 22: reversion through the throttle keeps its fuel   // 21: trigger sync, dwell-limited spark (Phase 7)   // 20: valvetrain dynamics, turbo maps, intercooler core, cell fan (Phase 6)   // 17: VTEC crossover columns, afterfire needs oxygen   // 16: afterfire heat in the exhaust (Phase 5)   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
+static constexpr uint32_t kBaseMapVersion = 34;   // 34: rpm columns measured in parallel, each on its own engine   // 33: back to the v30 physics (31 / 32 had pocket pops / partial burns)   // 30: exhaust acoustics (open end, resonators), dilution misfire threshold   // 29: burn duration from the laminar burning velocity (A4)   // 28: full Woschni, Livengood-Wu knock (A2, A3)   // 27: temperature-dependent gas properties, rich-burn CO / H2 (A1)   // 26: knock needs end-gas pressure (no part-load knock)   // 25: fuels (heating value 43.5 MJ/kg, charge cooling by evaporation)   // 24: energy-neutral pipe / volume coupling (no self-excited ringing)   // 23: mass-weighted exhaust temperature (pipe wave speed)   // 22: reversion through the throttle keeps its fuel   // 21: trigger sync, dwell-limited spark (Phase 7)   // 20: valvetrain dynamics, turbo maps, intercooler core, cell fan (Phase 6)   // 17: VTEC crossover columns, afterfire needs oxygen   // 16: afterfire heat in the exhaust (Phase 5)   // 9: faster low-load burn, 10: idle-valve test points   // 2: burn-start jitter fix, 5: iterate VE to the target mixture + settle until steady, 6: drop non-firing points, 7: Phase 3
 static std::string g_cacheDir;
 void setBaseMapCacheDir(const std::string& dir) { g_cacheDir = dir; }
 
@@ -242,7 +265,7 @@ EngineParams makeCalibratedPreset(int idx) {
         auto it = cache.find(idx);
         if (it != cache.end()) { p.cal.veMap = it->second.veMap; p.cal.veTps = it->second.veTps; return p; }
     }
-    if (isDiesel(p)) return p;   // a diesel fuels by quantity and limits on its air flow meter: no VE rig run
+    if (!baseMapApplies(p)) return p;   // a diesel fuels by quantity, a carburettor by its venturi: no VE rig run
     Calibration c = p.cal;
     if (!loadCachedBaseMap(p, c)) {
         measureBaseMap(p, c);

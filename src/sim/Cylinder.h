@@ -7,6 +7,8 @@ namespace es {
 
 struct CylGeom {
     bool rotary = false;
+    bool twoStroke = false;
+    double sEx = 0, sTr = 0, wEx = 0, wTr = 0;     // two-stroke ports: top edges (m below TDC of the crown), widths (m)
     double bore, stroke, rod, cr;
     double r, A, Vd, Vc;            // Vd / Vc per chamber
     double R = 0.105, ecc = 0.015, width = 0.08;   // Wankel geometry
@@ -30,6 +32,23 @@ struct CylGeom {
         rod = std::max((double)p.rod_mm * 1e-3, stroke * 0.55 + 1e-3);
         r = stroke * 0.5; A = kPi * bore * bore * 0.25; Vd = A * stroke; Vc = Vd / (cr - 1.0);
         strokeEq = stroke; boreEq = bore;
+        twoStroke = isTwoStroke(p);
+        if (twoStroke) {
+            // a port's top edge sits where the crown is at its opening angle; it is fully open at BDC
+            double s, ds;
+            const double eo = clampv((double)p.tsExhaustOpen, 45.0, 150.0);
+            const double to = clampv((double)p.tsTransferOpen, eo + 2.0, 170.0);
+            kin(eo * kDeg, s, ds); sEx = s;
+            kin(to * kDeg, s, ds); sTr = s;
+            wEx = clampv((double)p.tsExhaustWidth, 0.1, 1.5) * bore;
+            wTr = clampv((double)p.tsTransferWidth, 0.1, 2.5) * bore;
+        }
+    }
+    // two-stroke: geometric area of a port the crown has uncovered at a crank angle (deg, 0 = TDC)
+    double portArea(double phiDeg, double sTop, double w) const {
+        double s, ds;
+        kin(wrapPos(phiDeg, 360.0) * kDeg, s, ds);
+        return w * clampv(s - sTop, 0.0, stroke - sTop);
     }
     // piston distance from TDC (m) and its derivative per radian
     void kin(double thetaRad, double& s, double& dsdth) const {
@@ -141,10 +160,15 @@ struct Cylinder {
     double socPhi = 0, soiPhi = 0;        // deg: start of combustion / of injection
     double dPre = 0, dDiff = 0, dTail = 0, dBurned = 0, dPhi = 0.5;   // kg per phase, kg burned, overall phi
     double idDeg = 0;                     // last ignition delay, deg CA (diagnostics)
+    double sparkDelay = 0;                // two-stroke: deg from the spark to the start of heat release (Blair)
     double ringA = 0, ringPh = 0;         // combustion chamber pressure ringing: amplitude Pa, phase rad
     double ringKickA = 0;                 // amplitude the last burn excited (diagnostics), Pa
     double dpStep = 0;                    // highest pressure rise rate since the start of combustion, Pa / deg
     double ringKickPeak = 0;              // pressure rise rate (Pa / deg) that last excited the ringing this cycle
+    // two-stroke (Package 5): scavenging of this cycle (the gas that leaves: sim/Scavenge.h)
+    double scDelivered = 0, scFreshEvo = 0;         // kg this cycle: fresh air delivered through the transfers; fresh air
+                                                    // in the cylinder when the exhaust opened
+    double dr = 0, te = 0, se = 0, ce = 0;          // last cycle: delivery ratio, trapping, scavenging and charging efficiency
     bool misfired = false;
     double dilution = 0;                  // burned gas share of the charge at the spark (residual + reverted exhaust)
     double burnEta = 1;                   // 1 fired, 0 misfired (diagnostics)

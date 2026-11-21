@@ -22,6 +22,12 @@ void App::startBaseMap(bool force) {
         bmKeyApplied_ = airPathKey(p_); bmVeApplied_ = p_.cal.veMap; bmTpsApplied_ = p_.cal.veTps; bmStale_ = false;
         return;
     }
+    if (!baseMapApplies(p_)) {
+        // a carburettor meters the fuel itself from the air through its venturi: the VE maps do not fuel it
+        baseMapInfo_ = "carburettor: no base map needed (the carburettor meters the fuel; the VE maps are not used to fuel)";
+        bmKeyApplied_ = airPathKey(p_); bmVeApplied_ = p_.cal.veMap; bmTpsApplied_ = p_.cal.veTps; bmStale_ = false;
+        return;
+    }
     if (!force) {
         Calibration c = p_.cal;
         if (loadCachedBaseMap(p_, c)) {

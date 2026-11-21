@@ -10,7 +10,7 @@ void IntakeSystem::build(const EngineParams& p, double fs, double displacement) 
     fs_ = fs;
     const int n = p.cylinders;
     vdCyl_ = displacement / n;
-    revsPerEvent_ = isRotary(p) ? 1.0 : 2.0;
+    revsPerEvent_ = revsPerFiring(p);
     ambT_ = 273.15 + p.ambientTemp_C;
 
     boosted_ = isBoosted(p);
@@ -29,7 +29,9 @@ void IntakeSystem::build(const EngineParams& p, double fs, double displacement) 
     }
     ports_.assign(n, GasNode());
     for (GasNode& g : ports_) {
-        g.V = isRotary(p) ? 30e-6 * std::max(0.5, p.rIntakeArea_cm2 / 4.0)
+        // (two-stroke: the reed block in front of the crankcase - about 15 % of the cylinder's displacement, chosen)
+        g.V = isTwoStroke(p) ? std::max(10e-6, 0.15 * vdCyl_)
+            : isRotary(p) ? 30e-6 * std::max(0.5, p.rIntakeArea_cm2 / 4.0)
                           : 45e-6 * std::max(0.5, p.intakeValves * p.intakeValveDia_mm * p.intakeValveDia_mm / (2.0 * 34.0 * 34.0));
         g.T = ambT_ + 15;
         g.setPressure(kPatm);

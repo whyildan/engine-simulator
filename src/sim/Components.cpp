@@ -50,6 +50,7 @@ double accelPerRpm2(double lift_mm, double dur) {
 void ComponentModel::build(const EngineParams& p) {
     const ComponentSet& c = p.comp;
     piston = !isRotary(p);
+    valves = piston && !isTwoStroke(p);
     pistonArea = kPi * 0.25 * p.bore_mm * p.bore_mm * 1e-6;
     crankRadius = p.stroke_mm * 0.5e-3;
     rodLen = std::max(p.rod_mm * 1e-3, crankRadius * 2.2);
@@ -74,6 +75,7 @@ void ComponentModel::build(const EngineParams& p) {
         partSafeRpm[i] = rpm;
         if (rpm < safeRpm) { safeRpm = rpm; weakest = i; }
     }
+    if (!valves) { floatRpmIn = floatRpmEx = 1e9; return; }   // (two-stroke: ports, no valves to float)
     // valve float: spring force at full lift vs mass * cam deceleration
     const int lt = clampv((int)c.lifter, 0, 3);
     valveFrictionK = kLifterFriction[lt];
@@ -101,6 +103,8 @@ double ComponentModel::extraFmep(const EngineParams& p, double rpm, double Sp, d
     if (piston) {
         // piston rings: tension drags on the bore, more with piston speed
         fmep += (clampv((double)c.ringTension, 0.3, 2.0) - 1.0) * 22e3 * (1.0 + Sp / 25.0);
+    }
+    if (valves) {
         // valvetrain: proportional to the total spring load, minus what the base model contains
         int nv = p.cylinders * (std::max(1, (int)p.intakeValves) + std::max(1, (int)p.exhaustValves));
         double sum = nv * 0.5 * (c.springSeat_N + c.springOpen_N);
@@ -124,9 +128,9 @@ double ComponentModel::extraFmep(const EngineParams& p, double rpm, double Sp, d
 double ComponentModel::coilInterval(const EngineParams& p, double rpm) {
     const double rev = 60.0 / std::max(30.0, rpm);
     switch (p.comp.coilType) {
-    case CoilType::Distributor: return (isRotary(p) ? rev : 2.0 * rev) / std::max(1, (int)p.cylinders);
+    case CoilType::Distributor: return revsPerFiring(p) * rev / std::max(1, (int)p.cylinders);
     case CoilType::WastedSpark: return rev;
-    case CoilType::CoilOnPlug: default: return isRotary(p) ? rev : 2.0 * rev;
+    case CoilType::CoilOnPlug: default: return revsPerFiring(p) * rev;
     }
 }
 
@@ -208,7 +212,7 @@ void applyComponentDefaults(EngineParams& p) {
     }
     // springs: control the valves comfortably past the target rpm
     double need = 0;
-    if (!isRotary(p)) {
+    if (!isRotary(p) && !isTwoStroke(p)) {
         const int lt = (int)c.lifter;
         double mi = valveMass(p.intakeValveDia_mm) + kLifterMass[lt], me = valveMass(p.exhaustValveDia_mm) + kLifterMass[lt];
         need = std::max(mi * accelPerRpm2(p.intakeLift_mm, p.intakeDuration), me * accelPerRpm2(p.exhaustLift_mm, p.exhaustDuration)) *

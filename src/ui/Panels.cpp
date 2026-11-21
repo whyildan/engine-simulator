@@ -1,6 +1,7 @@
 // All ImGui panels. Every widget edits App::p_ directly; App::frame() pushes the changed
 // parameters to the simulation thread, so every change is heard immediately.
 #include "sim/Fuel.h"
+#include "sim/Scavenge.h"
 #include "ui/App.h"
 #include "ui/Widgets.h"
 #include "imgui.h"
@@ -183,17 +184,22 @@ void App::panelEngine() {
     engineFileUi();
     {
         int et = (int)p_.engineType;
-        if (ImGui::Combo("Engine type", &et, "Piston (reciprocating)\0Rotary (Wankel)\0")) {
+        if (ImGui::Combo("Engine type", &et, "Piston (reciprocating)\0Rotary (Wankel)\0Two-stroke (crankcase scavenged)\0")) {
             p_.engineType = (EngineType)et;
             if (isRotary(p_)) { p_.cylinders = clampv((int)p_.cylinders, 1, 4); if (p_.cylinders > 2) p_.cylinders = 2; }
+            else if (isTwoStroke(p_)) { p_.cylinders = clampv((int)p_.cylinders, 1, 4); if (isDiesel(p_)) p_.fuelSystem = FuelSystem::Carburetor; }
             else if (p_.cylinders < 1) p_.cylinders = 4;
             applyLayoutDefaults(p_);
             if (isRotary(p_)) { p_.idleTargetRpm = std::max(p_.idleTargetRpm, 950.0f); p_.flywheel = std::max(p_.flywheel, 0.14f); }
+            if (isTwoStroke(p_)) { p_.idleTargetRpm = std::max(p_.idleTargetRpm, 1400.0f); p_.evenFire = 1; }
             if (equalPrimaries_) for (int i = 1; i < kMaxCyl; ++i) p_.primaryLen_mm[i] = p_.primaryLen_mm[0];
         }
         Help("Rotary (Wankel): triangular rotors orbit an eccentric shaft. Every rotor has 3 chambers;\n"
              "each chamber does intake-compression-power-exhaust during one rotor turn (= 3 shaft turns),\n"
-             "so every rotor fires once per shaft revolution. No valves: the rotor flanks open the ports.");
+             "so every rotor fires once per shaft revolution. No valves: the rotor flanks open the ports.\n"
+             "Two-stroke: one power stroke every revolution. The piston uncovers the exhaust and transfer ports in\n"
+             "the cylinder wall; the crankcase under it pumps the fresh charge (in through a reed valve) up through the\n"
+             "transfer ports, and the expansion chamber's pressure waves help fill the cylinder. (Ports: the Ports tab.)");
     }
     if (isRotary(p_)) { panelRotary(); ImGui::PopItemWidth(); return; }
     ImGui::SeparatorText("Layout");
@@ -354,8 +360,75 @@ void App::panelPorts() {
 }
 
 // ======================================================================= valvetrain
+// two-stroke (Package 5): port timing / widths, crankcase, reed, scavenging and the expansion chamber
+void App::panelTwoStroke() {
+    ImGui::PushItemWidth(-170);
+    ImGui::SeparatorText("Cylinder ports");
+    SliderF("Exhaust port opens", &p_.tsExhaustOpen, 60, 120, "%.0f deg ATDC", "The piston crown uncovers the exhaust port: earlier = longer exhaust\n"
+            "duration, more top-end power (with a pipe tuned for it), less low-end.");
+    SliderF("Transfer ports open", &p_.tsTransferOpen, std::min(170.0f, p_.tsExhaustOpen + 4.0f), 140, "%.0f deg ATDC",
+            "After the exhaust: the time between the two (blowdown) lets the cylinder pressure fall below the\n"
+            "crankcase's before the fresh charge comes in.");
+    SliderF("Exhaust port width", &p_.tsExhaustWidth, 0.3f, 1.2f, "%.2f x bore");
+    SliderF("Transfer ports width", &p_.tsTransferWidth, 0.3f, 2.0f, "%.2f x bore", "All transfer ports together.");
+    {
+        const double eo = p_.tsExhaustOpen, to = std::max((double)p_.tsTransferOpen, eo + 2.0);
+        ImGui::Text("Exhaust duration %.0f deg   transfer duration %.0f deg   blowdown %.0f deg", 360.0 - 2.0 * eo, 360.0 - 2.0 * to, to - eo);
+    }
+    ImGui::SeparatorText("Crankcase and reed valve");
+    SliderF("Crankcase compression", &p_.tsCrankcaseCR, 1.15f, 1.8f, "%.2f : 1", "Primary compression: crankcase volume with the piston at TDC over BDC.\n"
+            "Higher = the crankcase pumps harder (more low-end), but holds less charge.");
+    SliderF("Reed valve area", &p_.tsReedArea_cm2, 4, 60, "%.0f cm2", "Flow area with the petals fully lifted (a spring-mass petal, 150 Hz).");
+    ImGui::SeparatorText("Scavenging");
+    {
+        const int cur = clampv((int)p_.tsScavenge, 0, 9);
+        char lbl[96];
+        std::snprintf(lbl, sizeof(lbl), "%s - %s", kScavCylinders[cur].name, kScavCylinders[cur].type);
+        if (ImGui::BeginCombo("Cylinder scavenging", lbl)) {
+            for (int k = 0; k < 10; ++k) {
+                std::snprintf(lbl, sizeof(lbl), "%s - %s", kScavCylinders[k].name, kScavCylinders[k].type);
+                if (ImGui::Selectable(lbl, k == cur)) p_.tsScavenge = k;
+            }
+            ImGui::EndCombo();
+        }
+        Help("How well this cylinder's transfer ports sweep the burned gas out: cylinders measured on Blair's QUB\n"
+             "single-cycle scavenging rig (Design and Simulation of Two-Stroke Engines, Fig. 3.16). YAM14 is a good\n"
+             "5-port loop cylinder, YAM12 a poor one: at the same delivery a poor cylinder loses more fresh charge out\n"
+             "of the exhaust and keeps more burned gas.");
+    }
+    ImGui::Text("Last cycle: delivery ratio %.2f   trapping eff. %.0f %%   scavenging eff. %.0f %%", tel_.tsDelivery,
+                tel_.tsTrapping * 100.0f, tel_.tsScavenging * 100.0f);
+    ImGui::Text("Crankcase %.0f kPa   reed petals %.0f %% open", tel_.tsCrankcaseKPa, tel_.tsReed * 100.0f);
+    ImGui::SeparatorText("Combustion");
+    SliderF("Burn period", &p_.tsBurnDeg, 30, 75, "%.0f deg", "How fast the combustion chamber burns the charge once it has lit (Vibe burn period). Set by\n"
+            "the chamber and its squish, not by load or speed. Measured (Blair): 41 deg for a 125 cc Grand Prix\n"
+            "engine, 49-60 deg for 400 cc research engines, 64 deg for a chainsaw. Before it comes an ignition\n"
+            "delay of ~10-14 deg, longer with more burned gas left in the cylinder (up to ~23 deg at light load).");
+    ImGui::SeparatorText("Expansion chamber");
+    Check("Expansion chamber (tuned pipe)", &p_.tsPipe);
+    Help("Header, diverging cone, belly, converging cone, stinger. The blowdown pulse reflects off the diverging cone\n"
+         "as suction (it pulls the burned gas out and the fresh charge up) and off the converging cone as a pressure\n"
+         "wave that pushes the charge that ran into the header back into the cylinder just before the port closes.\n"
+         "Off: an ordinary header / pipe (Exhaust tab).");
+    if (p_.tsPipe) {
+        SliderF("Tuned for", &p_.tsPipeRpm, 4000, 14000, "%.0f rpm", "Sets the pipe length: the wave's round trip takes the time the port is open.");
+        SliderF("Pipe design", &p_.tsPipeClass, 0, 1, p_.tsPipeClass < 0.25f ? "%.2f enduro" : p_.tsPipeClass < 0.75f ? "%.2f motocross" : "%.2f road race",
+                "Blair's empirical expansion chamber: broad enduro pipe (0) .. motocross (0.5) .. road racing (1).\n"
+                "Racing: a first pipe barely wider than the port, a fatter belly and a narrower tail pipe -\n"
+                "stronger suction and plugging, over a narrower speed range.");
+        const TunedPipeGeom g = tunedPipeGeometry(p_);
+        ImGui::Text("Tuned length %.0f mm (port to tail pipe, waves at %.0f C)", g.lt * 1000.0, g.texcC);
+        ImGui::Text("Lengths   %.0f / %.0f / %.0f / %.0f / %.0f / %.0f / %.0f mm", g.len[0] * 1e3, g.len[1] * 1e3, g.len[2] * 1e3,
+                    g.len[3] * 1e3, g.len[4] * 1e3, g.len[5] * 1e3, g.len[6] * 1e3);
+        ImGui::Text("Diameters %.0f (port) / %.0f / %.0f / %.0f / %.0f / %.0f / %.0f mm", g.d0 * 1e3, g.dia[0] * 1e3, g.dia[1] * 1e3,
+                    g.dia[2] * 1e3, g.dia[3] * 1e3, g.dia[5] * 1e3, g.dia[6] * 1e3);
+    }
+    ImGui::PopItemWidth();
+}
+
 void App::panelValvetrain() {
     if (isRotary(p_)) { panelPorts(); return; }
+    if (isTwoStroke(p_)) { panelTwoStroke(); return; }
     ImGui::PushItemWidth(-170);
     ImGui::SeparatorText("Intake");
     SliderI("Intake valves / cyl", &p_.intakeValves, 1, 3);
@@ -636,7 +709,7 @@ void App::panelExhaust() {
          "Helmholtz: a neck into a closed volume beside the pipe, sized for one frequency - it cancels the pipe's wave\n"
          "there (the cruise \"drone\"). Auto tunes it to the firing frequency at 2000 rpm.");
     if (p_.resonator == 2) {
-        const double perRev = isRotary(p_) ? (double)p_.cylinders : 0.5 * p_.cylinders;
+        const double perRev = p_.cylinders / revsPerFiring(p_);
         char lb[48];
         std::snprintf(lb, sizeof(lb), p_.resonatorHz > 1 ? "%.0f Hz" : "auto (%.0f Hz)", p_.resonatorHz > 1 ? p_.resonatorHz : perRev * 2000.0 / 60.0);
         ImGui::SliderFloat("Resonator tuning", &p_.resonatorHz, 0, 400, lb);
@@ -1323,7 +1396,7 @@ void App::panelScope() {
             fftMag_[i] = std::max(db, fftMag_[i] - 1.5f);  // peak hold with decay
             fy[i] = fftMag_[i];
         }
-        float fire = tel_.rpm / (isRotary(p_) ? 60.0f : 120.0f) * p_.cylinders;
+        float fire = tel_.rpm / (60.0f * (float)revsPerFiring(p_)) * p_.cylinders;
         if (ImPlot::BeginPlot("##fft", ImVec2(-1, -1))) {
             ImPlot::SetupAxes("Hz", "dB");
             ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Log10);
@@ -1643,7 +1716,7 @@ void App::panelComponents() {
         int ex = -1;
         const char* exNow = p_.header == HeaderType::Log ? "cast log manifold" : p_.header == HeaderType::TriY ? "tri-Y / 4-2-1 header"
                             : p_.primaryLen_mm[0] >= 600 ? "long-tube header" : "shorty header";
-        if (!isRotary(p_) && ImGui::BeginCombo("Exhaust manifold", exNow)) {
+        if (!isRotary(p_) && !(isTwoStroke(p_) && p_.tsPipe) && ImGui::BeginCombo("Exhaust manifold", exNow)) {
             if (ImGui::Selectable("Cast log manifold")) ex = 0;
             if (ImGui::Selectable("Shorty header")) ex = 1;
             if (ImGui::Selectable("Long-tube header")) ex = 2;

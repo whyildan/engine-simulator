@@ -49,6 +49,15 @@ struct NodeEnd {
     double massFlowIntoPipe = 0;           // kg/s (last step)
 };
 
+// a pipe end fed by a mass flow that its owner solves each step (a two-stroke's exhaust port: the cylinder's flow
+// through the port window against the wave arriving at the pipe - see Engine::stepCylinder). Set mdot after arrive()
+// and before step(); positive into the pipe, carrying the fuel / burned fractions ff / bf.
+struct FlowEnd {
+    PipeEnd e;
+    double mdot = 0, ff = 0, bf = 1;
+    double extraKg = 0;    // burned gas added to the flow once (an afterfire pop)
+};
+
 struct OpenEnd {
     PipeEnd e;
     double prevU = 0;
@@ -79,9 +88,14 @@ public:
     int addNodeEnd(PipeEnd e, GasNode* node, const GasNode* inflowSource = nullptr);
     int addOpenEnd(PipeEnd e, float pan);
     void addClosedEnd(PipeEnd e);
+    int addFlowEnd(PipeEnd e);
     void reset(double burnedFrac = 0); // allocate buffers, snap delays, fill content
 
     void step(double dt);  // one sample
+    // the first part of step() on its own: the waves arriving at the pipe ends this sample (for FlowEnd owners, who
+    // need them to solve their flow); step() then skips it
+    void arrive();
+    double arriving(PipeEnd e) const { const Pipe& p = pipes[e.pipe]; return e.end == 0 ? p.in0 : p.in1; }
 
     // gas temperature: pipes with a zone get T = cold + (hot - cold) * zone (sound speed and
     // impedance follow, so resonances move with load and warm-up)
@@ -100,6 +114,7 @@ public:
     std::vector<NodeEnd> nodeEnds;
     std::vector<OpenEnd> openEnds;
     std::vector<PipeEnd> closedEnds;
+    std::vector<FlowEnd> flowEnds;
 
     // tone controls (set by the exhaust builder)
     void setTone(const EngineParams& p);
@@ -110,6 +125,7 @@ public:
 
 private:
     void updateGas(Pipe& p) const;
+    template <class InOf, class SetOut> void scatter(double dt, InOf inOf, SetOut setOut);
     double fs_ = 96000, c_ = 343, rho0_ = 1.2, p0_ = kPatm, T0_ = 293;
     double hotT_ = 0, coldT_ = 0, nl_ = 0;
     double glide_ = 0.0004;
@@ -119,6 +135,7 @@ private:
     double pmix_ = 0.85, smoothHz_ = 1900;
     int mask_ = 8191;
     int w_ = 0;
+    bool arrived_ = false;
 };
 
 } // namespace es

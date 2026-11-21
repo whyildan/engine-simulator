@@ -59,6 +59,7 @@ void applyComponentDefaults(EngineParams& p);
 // quantities derived from the configuration (cheap; recomputed on every parameter change)
 struct ComponentModel {
     bool piston = true;              // false for rotary engines (no pistons / rods / valves)
+    bool valves = true;              // false for rotaries and two-strokes (ports, no valvetrain)
     double recipMass = 0;            // kg per cylinder (piston + 1/3 rod)
     double rotMass = 0;              // kg per cylinder (2/3 rod)
     double crankRadius = 0.04, rodLen = 0.14, pistonArea = 5e-3;

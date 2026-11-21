@@ -16,6 +16,7 @@ int main(int argc, char** argv) {
     if (!std::getenv("BASEMAP_CACHE")) { std::printf("set BASEMAP_CACHE to the cache folder first\n"); return 1; }
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
     const int threads = argc > 1 ? std::max(1, std::atoi(argv[1])) : (int)std::max(1u, hw > 2 ? hw - 1 : hw);
+    setBaseMapThreads(1);   // (the presets run in parallel here: one thread each)
     std::atomic<int> next{0};
     std::mutex out;
     const auto t0 = std::chrono::steady_clock::now();

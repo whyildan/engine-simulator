@@ -184,7 +184,7 @@ void generateCalibration(EngineParams& p) {
     // valve overlap (base cam position): the more overlap, the more burned gas the cylinder keeps at light load
     // and at low speed - a small-overlap cam (e.g. a VTEC low cam) traps clearly more air there
     double overlapF = 1.0;
-    if (!isRotary(p)) {
+    if (!isRotary(p) && !isTwoStroke(p)) {
         const double ivo = 360.0 + p.intakeCenterline - p.intakeCamAdvance - 0.5 * p.intakeDuration;
         const double evc = 360.0 - p.exhaustCenterline - p.exhaustCamAdvance + 0.5 * p.exhaustDuration;
         overlapF = clampv(std::max(0.0, evc - ivo) / 28.0, 0.15, 2.0);   // 1 = the generic 28 deg cam

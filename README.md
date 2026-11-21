@@ -31,6 +31,7 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🌀 **The rotary "brap"** | A bridge-ported 13B idles lumpy because exhaust floods back through the port overlap and the diluted charges misfire — modelled, not faked. |
 | 🔧 **ECU tuning platform** | Table editor with live operating point and 3D view, speed density / alpha-N / MAF / hybrid load, enrichments, STFT / LTFT, per-cylinder knock control, ECU boost control; trigger wheels (60-2, 36-1, 36-2-2-2 …) with crank / cam sync, sequential / semi-sequential / batch injection, coil dwell table. |
 | 🛢️ **Diesel** | Compression ignition with direct injection: Assanis ignition delay, pilot + main injection, premixed / diffusion burn, no throttle (the load is the fuel quantity), smoke limiter, idle and max-speed governors, glow plugs with pre- and post-heat, variable geometry turbo and EGR — and the diesel clatter from the chamber ringing through the engine structure. |
+| 🏍️ **Two-stroke** | One power stroke per revolution: piston-controlled exhaust and transfer ports, the crankcase pumping the charge in through a spring-mass reed valve, scavenging from cylinders measured on Blair's QUB rig, and an expansion chamber (Blair's empirical design) simulated as 1D unsteady gas dynamics, whose suction and plugging waves push the escaped charge back and move the power band with its tuning; Blair-style ignition delay and Vibe burn — checked against Blair's measured 125 cc racing engine. Light load four-strokes on its own residual. |
 | ⛽ **Fuels and flex fuel** | Regular / premium / race gasoline, E10, E20, E85, E100 and methanol, each with its own stoichiometric AFR, heating value, octane (knock), charge cooling, flame speed and cold start; a tank you can refuel with a blend, and a flex fuel sensor the ECU uses to adapt its fuelling, spark and cold enrichment. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
 | 🌬️ **Forced induction** | Turbos with lag, wastegate, BOV flutter and anti-lag; compressor / turbine maps (built in or loaded from CSV) with efficiency islands, surge and choke; intercooler heat soak; Roots, twin-screw and centrifugal superchargers. |
@@ -99,6 +100,7 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 | 10 | Single 0.5 thumper carb | 22 | Flat-6 3.6 boxer |
 | 11 | I4 1.6 ITB race | 23 | **Rotary 13B bridge port (brap idle)** |
 |  |  | 24 | **I4 1.9 turbo diesel (VGT, EGR, glow plugs)** |
+|  |  | 25 | **250 two-stroke single (reed valve, expansion chamber)** |
 
 ## Building from source
 
@@ -297,6 +299,7 @@ build/Release/flow_test.exe          # flow map: the gas-path flows add up, reve
 ```bash
 build/Release/sound_test.exe         # exhaust acoustics vs theory: open-end reflection (Levine & Schwinger), chamber / side-branch / Helmholtz transmission loss
 build/Release/diesel_test.exe        # diesel: ignition delay vs hand calculation, governors, smoke limit, cetane, clatter, pilot injection, glow plugs / cold start, VGT, EGR
+build/Release/twostroke_test.exe     # two-stroke: ports, crankcase / reed, scavenging, Blair 125 validation, ignition delay / burn, expansion chamber tuning, four-stroking, start / idle
 ```
 
 ```bash
@@ -390,7 +393,7 @@ python tools/analyze_wav.py brap.wav 0 8 900       # level + spectral peaks (eng
 - [x] Package 2 — exhaust sensors: wideband reading the pipe gas, EMAP and drive pressure, EGT per cylinder / after the turbine
 - [x] Package 3 — flow map of the gas path and the engine health panel
 - [x] Package 4 — diesel (compression ignition, direct injection, VGT + EGR, smoke limit, glow plugs, diesel clatter)
-- [ ] Package 5 — two-stroke engines (crankcase scavenging, piston-controlled ports, expansion chamber)
+- [x] Package 5 — two-stroke engines (crankcase scavenging through a reed valve, piston-controlled ports, measured-cylinder scavenging, 1D gas-dynamic expansion chamber, four-stroking)
 
 ## Acknowledgements
 

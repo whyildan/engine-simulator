@@ -53,6 +53,12 @@ int WaveNetwork::addOpenEnd(PipeEnd e, float pan) {
 
 void WaveNetwork::addClosedEnd(PipeEnd e) { closedEnds.push_back(e); }
 
+int WaveNetwork::addFlowEnd(PipeEnd e) {
+    FlowEnd f; f.e = e;
+    flowEnds.push_back(f);
+    return (int)flowEnds.size() - 1;
+}
+
 void WaveNetwork::setTone(const EngineParams& p) {
     rasp_ = p.exhaustRasp; punch_ = p.exhaustPunch;
     style_ = p.soundStyle;
@@ -104,6 +110,15 @@ static inline double readFrac(const std::vector<float>& b, int w, double d, int 
 }
 
 void WaveNetwork::step(double dt) {
+    if (!arrived_) arrive();
+    arrived_ = false;
+    auto inOf = [&](const PipeEnd& e) -> double { const Pipe& p = pipes[e.pipe]; return e.end == 0 ? p.in0 : p.in1; };
+    auto setOut = [&](const PipeEnd& e, double v) { Pipe& p = pipes[e.pipe]; if (e.end == 0) p.out0 = v; else p.out1 = v; };
+    scatter(dt, inOf, setOut);
+}
+
+void WaveNetwork::arrive() {
+    arrived_ = true;
     const double maxDelay = (double)kBufLen - 4;
     // 1) arriving waves (with loss filters)
     for (Pipe& p : pipes) {
@@ -140,8 +155,10 @@ void WaveNetwork::step(double dt) {
         p.in1 = p.dcF + (p.lpF - p.dcF) * g;
         p.in0 = p.dcB + (p.lpB - p.dcB) * g;
     }
-    auto inOf = [&](const PipeEnd& e) -> double { const Pipe& p = pipes[e.pipe]; return e.end == 0 ? p.in0 : p.in1; };
-    auto setOut = [&](const PipeEnd& e, double v) { Pipe& p = pipes[e.pipe]; if (e.end == 0) p.out0 = v; else p.out1 = v; };
+}
+
+template <class InOf, class SetOut>
+void WaveNetwork::scatter(double dt, InOf inOf, SetOut setOut) {
 
     // 2) junction scattering (admittance A / (rho c): hot and cold pipes differ)
     for (const Junction& j : junctions) {
@@ -185,6 +202,21 @@ void WaveNetwork::step(double dt) {
         }
         if (g.mf < 0) g.mf = 0;
         if (g.mb < 0) g.mb = 0;
+    }
+    // 3b) flow ends: the owner's mass flow enters the pipe as a wave (u = out - in over Z)
+    for (FlowEnd& f : flowEnds) {
+        Pipe& pp = pipes[f.e.pipe];
+        const double in = inOf(f.e);
+        const double mdot = f.mdot + f.extraKg / dt;
+        const double bf = f.extraKg > 0 && mdot > 0 ? (f.mdot * f.bf + f.extraKg / dt) / mdot : f.bf;
+        f.extraKg = 0;
+        setOut(f.e, in + pp.Z * mdot / pp.rho);
+        const double dm = mdot * dt;
+        if (dm > 0) { pp.cm += dm; pp.cmf += dm * f.ff; pp.cmb += dm * bf; }
+        else if (dm < 0 && pp.cm > 1e-12) {
+            const double q = std::min(-dm, 0.5 * pp.cm), s = 1.0 - q / pp.cm;
+            pp.cm -= q; pp.cmf *= s; pp.cmb *= s;
+        }
     }
     // keep pipe content at its nominal mass (net flow leaves through the far end / junction)
     for (Pipe& p : pipes) {

@@ -41,11 +41,17 @@ inline double laminarFlameSpeed(const FuelProps& f, double phi, double TuK, doub
 // reference state (see above; S_L with the inputs held in range: 117.8 x (700 / 752)^2.06 = 101.7 cm/s)
 constexpr double kFlameRefCmS = 101.7, kFlameRefK = 752.0, kFlameRefPa = 18.3e5;
 
+// the two parts of the burn, relative to the reference state: the kernel (laminar, ~ 1 / S_L) and the developed
+// turbulent flame (~ S_L^-1/2 alpha^1/4)
+inline double flameKernelFactor(double sl) { return kFlameRefCmS / std::max(1.0, sl); }
+inline double flameTurbulentFactor(double sl, double TuK, double pPa) {
+    const double alphaRatio = std::pow(std::max(250.0, TuK) / kFlameRefK, 1.75) * kFlameRefPa / std::max(1e4, pPa);
+    return std::sqrt(flameKernelFactor(sl)) * std::pow(alphaRatio, 0.25);
+}
+
 // burn duration multiplier for the laminar burning velocity S_L (cm/s) of unburned gas at TuK, pPa
 inline double flameDurationFactor(double sl, double TuK, double pPa) {
-    const double r = kFlameRefCmS / std::max(1.0, sl);
-    const double alphaRatio = std::pow(std::max(250.0, TuK) / kFlameRefK, 1.75) * kFlameRefPa / std::max(1e4, pPa);
-    return 0.28 * r + 0.72 * std::sqrt(r) * std::pow(alphaRatio, 0.25);
+    return 0.28 * flameKernelFactor(sl) + 0.72 * flameTurbulentFactor(sl, TuK, pPa);
 }
 
 } // namespace es
