@@ -239,6 +239,30 @@ int main() {
         CHECK(rpm > 1000 && rpm < 2500, "it idles on its own");
     }
 
+    // ---------------- at rest: no sound (the tuned pipe's gas dynamics must not ring by themselves)
+    {
+        std::printf("[rest] output at 0 rpm: never started, and after the ignition is switched off\n");
+        auto rms = [](Simulator& sim, double secs) {
+            std::vector<float> buf(480 * 2);
+            double s = 0; long n = 0;
+            for (double t = 0; t < secs; t += 0.01) {
+                sim.render(buf.data(), 480);
+                if (t > secs - 0.5) for (int i = 0; i < 480; ++i) { s += (double)buf[2 * i] * buf[2 * i]; ++n; }
+            }
+            return std::sqrt(s / std::max(1L, n));
+        };
+        EngineParams q = makeCalibratedPreset(25);
+        Simulator cold(q);
+        const double r0 = rms(cold, 2.0);
+        Simulator sim(q);
+        q.ignition = 1; q.starter = 1; sim.setParams(q);
+        run(sim, 1.5); q.starter = 0; sim.setParams(q); run(sim, 2.0);
+        q.ignition = 0; sim.setParams(q);
+        const double r1 = rms(sim, 6.0);
+        std::printf("  never started: rms %.5f | 6 s after switching off: rms %.5f\n", r0, r1);
+        CHECK(r0 < 1e-3 && r1 < 1e-3, "silent at rest");
+    }
+
     std::printf(failures ? "%d FAILED\n" : "ALL PASSED\n", failures);
     return failures ? 1 : 0;
 }

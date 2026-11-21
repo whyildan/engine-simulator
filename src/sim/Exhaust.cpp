@@ -411,6 +411,7 @@ void ExhaustSystem::step(double dt) {
         Duct& d = ducts_[i];
         const Pipe& sp = net.pipes[portPipe_[i]];
         d.setOutlet(sp.in0, sp.Z, sp.rho, sp.T, sp.cm > 1e-12 ? sp.cmf / sp.cm : 0.0, sp.cm > 1e-12 ? sp.cmb / sp.cm : 1.0);
+        d.solveOutlet(dt);
         d.step(dt, ambK_);
         setPortFlow((int)i, d.outflow(), d.outFuelFrac(), d.outBurnedFrac());
     }

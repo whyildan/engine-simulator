@@ -190,15 +190,41 @@ void Duct::backGas(double& ff, double& bf, double& t0) const {
     ff = w.yf; bf = w.yb; t0 = portT0_;
 }
 
+// Far end, every call (not only when the duct steps): the outgoing characteristic u + 2a/(g-1) of the last cell meets
+// the waveguide's p = p0 + 2 in + Z u. (Solved only when the duct stepped, the flow handed to the waveguide was held
+// for two of its steps - a delay in the loop that pumped energy in: at rest the pipe rang by itself at ~500 Hz.)
+void Duct::solveOutlet(double dtCaller) {
+    const int n = (int)m_.size();
+    const Prim w = prim(n - 1);
+    const double aN = std::sqrt(g * w.p / w.r), A = af_[n];
+    auto st = [&](double u, double& pb, double& rb, double& tb) {
+        const double ab = std::max(0.02 * aN, aN - 0.5 * gm1 * (u - w.u));
+        pb = w.p * std::pow(ab / aN, 2.0 * g / gm1);
+        if (u >= 0) { tb = w.p / (kR * w.r) * (ab / aN) * (ab / aN); rb = pb / (kR * tb); }
+        else { tb = tW_; rb = pb / (kR * tW_); }
+    };
+    auto f = [&](double u) {
+        double pb, rb, tb; st(u, pb, rb, tb);
+        return pb - (p0_ + 2.0 * inW_ + zW_ * rb * u * A / rhoW_);
+    };
+    const double lo = -1.5 * aN, hi = w.u + 2.0 * aN / gm1 * 0.95;
+    const double ub = warmRoot(f, lo, hi, clampv(ubOut_, lo, hi), 0.03 * aN + 1.0, 0.05);
+    ubOut_ = ub;
+    double pb, rb, tb; st(ub, pb, rb, tb);
+    const double md = rb * ub * A;
+    const double ff = ub >= 0 ? w.yf : ffW_, bf = ub >= 0 ? w.yb : bfW_;
+    mOut_ = md; ffOut_ = clampv(ff, 0.0, 1.0); bfOut_ = clampv(bf, 0.0, 1.0);
+    oAccM_ += md * dtCaller; oAccMu_ += (md * ub + pb * A) * dtCaller; oAccE_ += md * (kCp * tb + 0.5 * ub * ub) * dtCaller;
+    oAccF_ += md * ff * dtCaller; oAccB_ += md * bf * dtCaller;
+}
+
 void Duct::step(double dtCaller, double ambientK) {
-    // the duct steps at its own pace: as long a step as the Courant limit allows (~0.75 with the last step's wave
-    // speeds), at least every div_ calls' worth - the port flow of the calls in between is averaged (mass, momentum
-    // and energy into the duct conserved); its outflow is held
+    // the duct steps once every div_ calls (~48 kHz): the port and outlet flows of the calls in between are averaged
+    // (mass, momentum and energy conserved). A fixed rhythm: letting it wait as long as the Courant limit allowed
+    // (up to 4 calls with the slow waves at rest) lagged the boundaries enough for the pipe to ring by itself at rest
     accT_ += dtCaller; accM_ += pfM_ * dtCaller; accMu_ += pfMu_ * dtCaller; accE_ += pfE_ * dtCaller;
     accF_ += pfF_ * dtCaller; accB_ += pfB_ * dtCaller;
-    ++cnt_;
-    const double dtMax = 0.75 * dxMin_ / (1.15 * smax_);
-    if (cnt_ < div_ || accT_ + dtCaller <= dtMax) return;
+    if (++cnt_ < div_) return;
     const double dt = accT_;
     pfM_ = accM_ / dt; pfMu_ = accMu_ / dt; pfE_ = accE_ / dt; pfF_ = accF_ / dt; pfB_ = accB_ / dt;
     cnt_ = 0; accT_ = accM_ = accMu_ = accE_ = accF_ = accB_ = 0;
@@ -206,7 +232,6 @@ void Duct::step(double dtCaller, double ambientK) {
     // sub-steps: Courant number <= 0.8 (wave speeds of the last step: they change little in one)
     const int sub = std::max(1, (int)std::ceil(1.15 * smax_ * dt / (0.8 * dxMin_)));
     const double h = dt / sub;
-    double mOutSum = 0, fOutSum = 0, bOutSum = 0;
     std::vector<Prim>& W = W_;
     std::vector<Prim>& D = D_;
     double smax = 1.0, tm = 0;
@@ -248,30 +273,8 @@ void Duct::step(double dtCaller, double ambientK) {
         }
         for (int f = 1; f < n; ++f) hllc(wl_[f], wr_[f], fm_[f], fmu_[f], fe_[f], ff_[f], fb_[f]);
 
-        // far end: the outgoing characteristic u + 2a/(g-1) meets the waveguide's p = p0 + 2 in + Z u
-        double oM, oMu, oE, oF, oB;
-        {
-            const Prim w = W[n - 1];
-            const double aN = std::sqrt(g * w.p / w.r), A = af_[n];
-            auto st = [&](double u, double& pb, double& rb, double& tb) {
-                const double ab = std::max(0.02 * aN, aN - 0.5 * gm1 * (u - w.u));
-                pb = w.p * std::pow(ab / aN, 2.0 * g / gm1);
-                if (u >= 0) { tb = w.p / (kR * w.r) * (ab / aN) * (ab / aN); rb = pb / (kR * tb); }
-                else { tb = tW_; rb = pb / (kR * tW_); }
-            };
-            auto f = [&](double u) {
-                double pb, rb, tb; st(u, pb, rb, tb);
-                return pb - (p0_ + 2.0 * inW_ + zW_ * rb * u * A / rhoW_);
-            };
-            const double lo = -1.5 * aN, hi = w.u + 2.0 * aN / gm1 * 0.95;
-            const double ub = warmRoot(f, lo, hi, clampv(ubOut_, lo, hi), 0.03 * aN + 1.0, 0.05);
-            ubOut_ = ub;
-            double pb, rb, tb; st(ub, pb, rb, tb);
-            const double md = rb * ub * A;
-            oM = md; oMu = md * ub + pb * A; oE = md * (kCp * tb + 0.5 * ub * ub);
-            oF = md * (ub >= 0 ? w.yf : ffW_); oB = md * (ub >= 0 ? w.yb : bfW_);
-        }
-        mOutSum += oM; fOutSum += oF; bOutSum += oB;
+        // far end: the outlet fluxes solved on every call (solveOutlet), averaged over this step
+        const double oM = oAccM_ / dt, oMu = oAccMu_ / dt, oE = oAccE_ / dt, oF = oAccF_ / dt, oB = oAccB_ / dt;
 
         // update: fluxes through the faces, wall pressure on the changing area, wall friction and heat
         for (int i = 0; i < n; ++i) {
@@ -298,9 +301,7 @@ void Duct::step(double dtCaller, double ambientK) {
             if (e_[i] - ek < kPMin / gm1 * vol_[i]) e_[i] = ek + kPMin / gm1 * vol_[i];
         }
     }
-    mOut_ = mOutSum / sub;
-    ffOut_ = mOutSum != 0 ? clampv(fOutSum / mOutSum, 0.0, 1.0) : 0.0;
-    bfOut_ = mOutSum != 0 ? clampv(bOutSum / mOutSum, 0.0, 1.0) : 1.0;
+    oAccM_ = oAccMu_ = oAccE_ = oAccF_ = oAccB_ = 0;
     smax_ = smax;
     // wall temperature: follows the mean gas temperature slowly
     double mm = 0;

@@ -51,6 +51,9 @@ public:
     double outFuelFrac() const { return ffOut_; }
     double outBurnedFrac() const { return bfOut_; }
 
+    // every call: the outlet against the waveguide's wave (sets outflow()), then step() - which advances the duct when
+    // its own step is due
+    void solveOutlet(double dt);
     void step(double dt, double ambientK);
 
     int cells() const { return (int)m_.size(); }
@@ -87,6 +90,7 @@ private:
     double ubPort_ = 0, ubOut_ = 0;              // last boundary velocities: the solves start next to them
     int div_ = 1, cnt_ = 0;                      // steps once every div_ calls
     double accT_ = 0, accM_ = 0, accMu_ = 0, accE_ = 0, accF_ = 0, accB_ = 0;   // port flux summed over those calls
+    double oAccM_ = 0, oAccMu_ = 0, oAccE_ = 0, oAccF_ = 0, oAccB_ = 0;        // ... and the outlet flux
 };
 
 } // namespace es

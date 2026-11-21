@@ -1280,6 +1280,9 @@ gambar halaman; angka dari grafik ±3–5 %).
   (commit 2732411) → 31–33 / 54–55 / 75–90 % (diukur berulang; app idle preset 25: 27 %). Caranya: limiter MC (lebih tajam dari minmod: 40 mm ≈ minmod 20 mm), sel ±40 mm,
   duct melangkah ±48 kHz (aliran port dirata-rata antar langkah — massa / energi tetap kekal), geometri dihitung sekali,
   solver batas mulai dari solusi sebelumnya, loop digabung. Harga: CE 125 Blair 0.65 vs 0.67 pada sel 20–30 mm (−3 %).
+  Bug yang ditemukan sesudahnya: langkah duct adaptif (menunggu sampai batas Courant, di 0 rpm sampai 4 langkah mesin)
+  membuat kopling batas terlambat → pipa berdengung sendiri ±530 Hz saat mesin diam. Kini ritme tetap ±48 kHz dan ujung
+  keluar diselesaikan tiap langkah mesin; tes `[rest]` di twostroke_test (rms < 1e-3 saat diam / sesudah dimatikan).
 - **Pembakaran 2-tak — Blair** (sec. 4.3.6; `Engine::burnDuration`): tunda nyala lalu kurva Vibe
   x = 1 − exp(−a (θ/b)^(m+1)) dengan a 5.25, m 1.25 (fit Blair untuk mesin GP 125 terukur, Cartwright). Data terukur:
   GP 125 10 350 rpm SE 0.96 — tunda 12°, b 41°; LS400 3000 rpm WOT — tunda 10°, b 60°; Reid 3000 rpm gas 100 / 25 /
