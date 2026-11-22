@@ -118,6 +118,7 @@ static EngineParams base() {
     p.induction = Induction::Natural; p.scType = Supercharger::Roots;
     p.compFlow_gs = 220; p.turbineAR = 0.64f; p.turboInertia = 0.15f; p.wastegateBar = 1.0f;
     p.intercooler = 1; p.icEfficiency = 0.75f; p.chargeVolume_L = 3.0f; p.bov = 1; p.antiLag = 0;
+    p.bovType = 0; p.bovSpringBar = 0.25f; p.compBlades = 12;   // (6 full + 6 splitter blades: a common automotive wheel)
     p.boostRetard = 4.0f; p.afrBoost = 11.6f;
     p.scDisplacement_L = 1.9f; p.scRatio = 1.6f; p.scBypass = 1;
 

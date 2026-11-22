@@ -53,6 +53,9 @@ int main(int argc, char** argv) {
         else if (k == "smooth") p.smoothHz = (float)v;
         else if (k == "listener") p.listener = (ListenerPos)(int)v;
         else if (k == "porting") { applyRotaryPorting(p, (int)v); }
+        else if (k == "bov") p.bov = (int)v;
+        else if (k == "bovtype") p.bovType = (int)v;
+        else if (k == "bovspring") p.bovSpringBar = (float)v;
         argv[i] = (char*)"";
     }
     if (argc > 3 && *argv[3]) p.listener = (ListenerPos)std::atoi(argv[3]);

@@ -232,6 +232,9 @@ struct EngineParams {
     float icEfficiency;       // 0..1
     float chargeVolume_L;     // compressor -> throttle piping + intercooler volume
     int32_t bov;              // blow-off valve (else: compressor surge flutter)
+    int32_t bovType;          // ... 0 vents to the air (loud), 1 recirculates into the compressor inlet (quiet)
+    float bovSpringBar;       // ... pressure across the piston (charge over manifold) that cracks it open
+    int32_t compBlades;       // compressor wheel blades at the exducer (full + splitter): blade-pass frequency
     int32_t antiLag;          // retard + throttle crack on lift-off to keep the turbo spooled
     float boostRetard;        // ignition retard per bar of boost (deg)
     float afrBoost;           // ECU target AFR at 1 bar boost

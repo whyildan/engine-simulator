@@ -257,6 +257,7 @@ void Simulator::render(float* out, int frames) {
         t.tsBurnDeg = (float)e.burnDeg2T();
     }
     t.vgtOpen = e.params().vgt ? (float)e.boost.wastegate : 1.0f;
+    t.bovLift = (float)e.boost.bovLift;
     t.stress = (float)e.stress; t.floatIn = (float)e.floatIn; t.floatEx = (float)e.floatEx;
     t.sparkMargin = (float)e.sparkMargin; t.sparkAvail = (float)e.sparkAvail; t.oilBar = (float)e.oilBar;
     t.plugTempC = (float)e.plugTempC; t.fouling = (float)e.fouling; t.damage = (float)e.damage; t.failure = e.failure;

@@ -8,6 +8,24 @@ static constexpr double kTurboMaxRpm = 190000; // turbo wheel speed at "100 %"
 static constexpr double kImpellerMaxRpm = 60000;
 static constexpr double kCpAir = 1005, kCpExh = 1150;
 
+// Compression system dynamics (Greitzer, "Surge and rotating stall in axial flow compressors", J. Eng. Power 98, 1976;
+// the lumped model Galindo et al. use for small automotive turbo compressors, Exp. Therm. Fluid Sci. 32, 2008): the
+// air in the compressor and its duct has inertia, dm/dt = (A_c / L_c) (dp_compressor(m) - dp_plenum), and the charge
+// pipes / intercooler are the plenum (the charge node). Left of the peak of a speed line the pressure rise falls with
+// falling flow - the operating point there is unstable, and with a big enough plenum (Greitzer's B) the flow swings
+// into reverse and back: deep surge, the "flutter" of a turbo whose throttle shuts on boost. Its frequency comes out of
+// the plenum volume and the duct, not a set rate.
+// The speed line left of its peak (Moore & Greitzer's cubic shape, as a smoothstep): the shut-off pressure rise at zero
+// flow is kShut of the peak's (chosen), reverse flow is resisted quadratically, kBack x the peak rise at -peak flow
+// (chosen). Duct: L_c 0.5 m (compressor + outlet duct to the charge pipes, chosen), area the inducer's (0.7 x the
+// exducer diameter, typical), friction loss kDuctK dynamic heads (chosen).
+static constexpr double kShut = 0.80, kBack = 1.0, kDuctL = 0.5, kDuctK = 0.5;
+static constexpr double kSurgeFlowShare = 0.25;   // generic map: the surge point at a quarter of the line's pumping flow
+
+// tip radius of the compressor wheel (exducer): a 500 m/s tip speed at the top speed (chosen - the same as the VGT
+// turbine's assumption), so the acoustics have the wheel's real tip Mach number
+static double tipRadius(double nMaxRpm) { return 500.0 / (std::max(1000.0, nMaxRpm) * 2.0 * kPi / 60.0); }
+
 void ForcedInduction::refreshMaps() {
     const bool turbo = p_.induction == Induction::Turbo;
     const bool centrifugal = turbo || p_.scType == Supercharger::Centrifugal;
@@ -21,6 +39,52 @@ void ForcedInduction::refreshMaps() {
     mapT_ = use && turbo && tm_.valid();
     nMaxC_ = mapC_ ? cm_.maxSpeed() : (turbo ? kTurboMaxRpm : kImpellerMaxRpm);
     sizeKgs_ = mapC_ ? cm_.maxFlow() : std::max(1e-4, p_.compFlow_gs * 1e-3);
+    tipR_ = tipRadius(nMaxC_);
+    const double rInd = 0.7 * tipR_;
+    ductA_ = kPi * rInd * rInd;
+    lineN_ = -1;   // (rebuild the speed line)
+}
+
+// The speed line at this speed as pressure ratio over flow (kg/s at the inlet state): the right branch from the map
+// (generic: its closed form) as a table, the peak (surge point) and the left / reverse branch from the shape above.
+// Rebuilt when the speed has moved by 0.2 % (a map: tens of evaluations once in a while, not per step).
+void ForcedInduction::buildLine(double n, double rpmCorr, double corrM) {
+    lineN_ = n;
+    if (mapC_) {
+        const CompPoint top = cm_.eval(rpmCorr, 99.0);   // (left of everything: the line's surge point)
+        lineS_ = top.surgeFlow * corrM; linePrS_ = std::max(1.0, top.surgePr);
+        for (int k = 0; k < kLineN; ++k) {
+            const double prk = linePrS_ - (linePrS_ - 1.0) * k / (kLineN - 1.0);
+            lineM_[k] = std::max(cm_.eval(rpmCorr, prk).flow * corrM, k ? lineM_[k - 1] + 1e-6 : lineS_);
+            linePr_[k] = prk;
+        }
+    } else {
+        const double mP = std::max(1e-4, p_.compFlow_gs * 1e-3) * (0.12 * smoothstep(0.0, 0.12, n) + 0.88 * n);
+        const double pr0 = prAtZeroFlow(n);
+        lineS_ = kSurgeFlowShare * mP;
+        for (int k = 0; k < kLineN; ++k) {
+            const double mk = lineS_ + (mP - lineS_) * k / (kLineN - 1.0);
+            lineM_[k] = mk; linePr_[k] = 1.0 + (pr0 - 1.0) * (1.0 - (mk / mP) * (mk / mP));
+        }
+        linePrS_ = linePr_[0];
+    }
+}
+
+double ForcedInduction::linePr(double m) const {
+    if (m >= lineS_) {
+        for (int k = 1; k < kLineN; ++k)
+            if (m <= lineM_[k]) {
+                const double t = (m - lineM_[k - 1]) / std::max(1e-9, lineM_[k] - lineM_[k - 1]);
+                return linePr_[k - 1] + (linePr_[k] - linePr_[k - 1]) * t;
+            }
+        // past the choke end: the pressure rise collapses
+        const double mL = lineM_[kLineN - 1];
+        return linePr_[kLineN - 1] - 4.0 * (m - mL) / std::max(1e-4, mL);
+    }
+    const double prShut = 1.0 + kShut * (linePrS_ - 1.0);
+    const double u = m / std::max(1e-6, lineS_);
+    if (u >= 0) return prShut + (linePrS_ - prShut) * u * u * (3.0 - 2.0 * u);
+    return prShut + kBack * (linePrS_ - 1.0) * u * u;
 }
 
 void ForcedInduction::init(const EngineParams& p, double fs) {
@@ -31,11 +95,12 @@ void ForcedInduction::init(const EngineParams& p, double fs) {
     icCoreT = ambT_;
     refreshMaps();
     omegaT_ = 0;
-    whooshBp_.bandpass(2200, 1.1, fs);
+    whooshBp_.bandpass(2500, 0.6, fs);   // (1-4 kHz)
+    tcnBp_.bandpass(8000, 6.0, fs);
+    flutLp_.lowpass(2500, fs);          // (the inlet pulse through the air box)
     bovHiss_.bandpass(4800, 0.9, fs);
     bovBody_.bandpass(1300, 1.6, fs);
-    surgeBp_.bandpass(950, 2.2, fs);
-    surgeLow_.bandpass(320, 1.4, fs);
+    surgeBp_.bandpass(1400, 0.9, fs);   // (stall noise of the reverse flow)
     scHiss_.bandpass(3500, 1.0, fs);
     whineLp_.lowpass(11000, fs);
     ampSmooth_.lowpass(30, fs);
@@ -86,36 +151,39 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         speedFrac = clampv(rpm / nMaxC_, 0.0, 1.3);
         shaftRpm = rpm;
         double chokeNow;
+        const double sq = std::sqrt(kMapTref / ambT_), corrM = pIn / kMapPref * sq;
         if (mapC_) {
-            // table map: corrected speed and flow (inlet at ambient pressure and temperature)
-            const double sq = std::sqrt(kMapTref / ambT_);
-            const double corrM = pIn / kMapPref * sq;
+            // table map: corrected speed and flow (inlet at ambient pressure and temperature) - the efficiency and the
+            // surge margin at this pressure ratio
             const CompPoint cp = cm_.eval(rpm * sq, pr);
             chokeNow = cp.chokeFlow * corrM;
             eta = cp.eff;
-            if (speedFrac < 0.02) { m = 0; eta = 0.4; }
-            else if (cp.surge) m = speedFrac < 0.15 ? 0.0 : -0.35 * cp.surgeFlow * corrM * std::sqrt(std::min(1.0, (pr - cp.surgePr) / cp.surgePr));
-            else m = cp.flow * corrM;
             surgeMargin = cp.surgePr > 1.0 ? 1.0 - (pr - 1.0) / (cp.surgePr - 1.0) : 1.0;
         } else {
-            m = compressor(speedFrac, pr, eta);
+            compressor(speedFrac, pr, eta);
             chokeNow = chokeFlow(speedFrac);
             const double pr0 = prAtZeroFlow(speedFrac);
             surgeMargin = pr0 > 1.0 ? 1.0 - (pr - 1.0) / (pr0 - 1.0) : 1.0;
         }
-        // surge: the throttle is shut, so the compressor can only push a trickle against high
-        // pressure (left of the surge line). The flow then stalls and reverses in bursts.
-        bool leftOfSurgeLine = speedFrac > 0.15 && pr > 1.2 && throttle < 0.08 &&
-                               std::max(0.0, m) < 0.25 * chokeNow + 1e-4;
-        surging = leftOfSurgeLine || (m < 0 && pr > 1.05);
-        if (surging) {
-            double rate = 7.0 + 26.0 * speedFrac;                 // stall cycles per second
-            flutterPh_ += dt * rate;
-            if (flutterPh_ >= 1) flutterPh_ -= 1;
-            // short reverse-flow burst each cycle, then the wheel re-pressurises
-            double back = 0.45 * chokeNow * clampv((pr - 1.0) / 0.8, 0.0, 1.5);
-            m = flutterPh_ < 0.28 ? -back : std::max(m, 0.0) * 0.4;
+        (void)chokeNow;
+        // the flow is a state with inertia (Greitzer): accelerated by the line's pressure rise against the charge
+        // pressure, less the duct's friction
+        if (lineN_ < 0 || std::fabs(speedFrac - lineN_) > 0.002) buildLine(speedFrac, rpm * sq, corrM);
+        if (speedFrac < 0.06) {
+            mDuct_ *= std::exp(-dt / 0.01);   // (barely turning: the passive path below carries the flow)
+        } else {
+            const double dpLine = pIn * (linePr(mDuct_) - 1.0);
+            const double dpLoss = kDuctK * mDuct_ * std::fabs(mDuct_) / (2.0 * rhoIn * ductA_ * ductA_);
+            const double accel = ductA_ / kDuctL * (dpLine - (charge.p() - pIn) - dpLoss);
+            mDuct_ += accel * dt;
+            mDuct_ = clampv(mDuct_, -2.0 * sizeKgs_, 2.0 * sizeKgs_);
         }
+        dmDuct_ = (mDuct_ - mPrev_) / dt;
+        mPrev_ = mDuct_;
+        m = mDuct_;
+        lineS = lineS_;
+        // left of the line's peak the operating point is unstable: surge (deep when the flow reverses)
+        surging = speedFrac > 0.15 && mDuct_ < lineS_;
     } else {
         // positive displacement blower: pumps a fixed volume per revolution, minus leakage
         double nsc = engineRpm * std::max(0.1f, p_.scRatio);
@@ -188,10 +256,28 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     bovOpen = false;
     double vent = 0;
     ventFlow = turbFlow = wgFlow = 0;
-    if (p_.induction == Induction::Turbo && p_.bov && throttle < 0.08 && boostBar > 0.05 && charge.p() - in.map() > 0.25e5) bovOpen = true;
-    if (p_.induction == Induction::Supercharger && p_.scBypass && throttle < 0.15) bovOpen = true;
+    // turbo blow-off valve: a spring-loaded piston with the charge pressure under it and the manifold pressure on top
+    // (its reference line) - it lifts when the throttle shuts on boost. A spring-mass-damper (chosen: ~45 Hz, light
+    // damping 0.08, full lift 0.15 bar past the cracking pressure); it bounces off its seat and its stop. Venting drops
+    // the charge pressure, so a spring too stiff for the boost leaves it hunting half open - the fluttery valve sound.
+    double bovArea = 0;
+    if (p_.induction == Induction::Turbo && p_.bov) {
+        const double dpBar = (charge.p() - in.map()) / 1e5;
+        const double drive = (dpBar - clampv((double)p_.bovSpringBar, 0.05, 1.0)) / 0.15;
+        const double w = 2.0 * kPi * 45.0, z = 0.08;
+        bovV_ += (w * w * (drive - bovX_) - 2.0 * z * w * bovV_) * dt;
+        bovX_ += bovV_ * dt;
+        if (bovX_ < 0) { bovX_ = 0; bovV_ = -0.3 * std::min(0.0, bovV_); }
+        if (bovX_ > 1) {   // hits its stop: the "thump"
+            if (bovV_ > 0) thumpEnv_ = std::max(thumpEnv_, clampv(bovV_ / (0.4 * w), 0.0, 1.5));
+            bovX_ = 1; bovV_ = -0.3 * std::max(0.0, bovV_);
+        }
+        bovLift = bovX_;
+        if (bovX_ > 0.01) { bovOpen = true; bovArea = bovX_ * 3.5e-4; }
+    } else { bovX_ = bovV_ = 0; bovLift = 0; }
+    if (p_.induction == Induction::Supercharger && p_.scBypass && throttle < 0.15) { bovOpen = true; bovArea = 1.5e-3; }
     if (bovOpen) {
-        double area = p_.induction == Induction::Turbo ? 3.5e-4 : 1.5e-3;
+        double area = bovArea;
         vent = limitedFlow(area, charge.p(), charge.T, charge.V, kPatm, ambT_, 1e3, dt, 0.4);
         if (vent > 0) {
             double qv = std::min(vent * dt, charge.m * 0.3);
@@ -306,29 +392,63 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         wastegate = 0;
     }
 
-    // ---- sound (Pa @ 1 m). Synthesised from the physical state: shaft speed, flow, pressure
-    // ratio, vent flow and surge cycles - so it only appears when the hardware is working.
+    // ---- sound (Pa @ 1 m), from the physical state: shaft speed, flow, pressure ratio, the surge cycles, vent flow
     double snd = 0;
     const double flowFrac = clampv(std::max(0.0, m) / std::max(1e-4, sizeKgs_), 0.0, 1.2);
     const double prLoad = clampv((pr - 1.0) / 1.2, 0.0, 1.5);
     const double noise = rng_.bipolar();
     if (centrifugal) {
+        // Centrifugal compressor noise sources (Raitor & Neise, JSV 2008; the review in MDPI Machines 13:948, 2025):
+        //  - blade-pass tone at blades x shaft frequency: tens of kHz at full speed (12 x 2.9 kHz) - audible only while
+        //    spooling, so it fades out above ~15 kHz
+        //  - shaft order 1 (the synchronous tone: residual imbalance - a force growing with speed^2 - and blade-to-blade
+        //    differences, SAE 2017-01-1051): the audible "turbo whistle", 1-3 kHz
+        //  - buzz-saw: shaft orders together once the inducer tip is near / above sonic (shock waves at the blade tips)
+        //  - tip-clearance noise: a narrow band about half the blade-pass frequency
+        //  - whoosh: broadband 1-4 kHz near the surge line, on tip-in and on throttle closure (SAE 2009-01-2053,
+        //    2005-01-2485, 2020-01-5090)
+        //  - surge: each flow reversal pushes a pressure pulse out of the compressor inlet (a monopole, p = (dm/dt) /
+        //    4 pi r) with stall noise as the flow churns back through the wheel - the "stu-tu-tu"
+        // Levels are chosen (the old whine's scale); what sets pitch and rhythm is the physics.
         const bool turbo = p_.induction == Induction::Turbo;
-        // spool whistle: pitch follows wheel speed (190k rpm -> ~5 kHz), loudness follows how
-        // hard the compressor works (flow x pressure ratio)
-        double f1 = shaftRpm / 60.0 * (turbo ? 1.6 : 4.0) * (turbo ? kTurboMaxRpm : kImpellerMaxRpm) / nMaxC_;
-        double wob = 1.0 + 0.004 * wobble_.lp(noise * 40.0);
-        phase_ += 2 * kPi * std::min(f1 * wob, 12000.0) * dt;
-        phase2_ += 2 * kPi * std::min(f1 * 1.503 * wob, 16000.0) * dt;
-        phase3_ += 2 * kPi * std::min(f1 * 0.997, 12000.0) * dt;     // slight beating
-        double work = speedFrac * speedFrac * (0.15 + 0.85 * std::sqrt(flowFrac)) * (0.35 + 0.65 * prLoad);
-        double aw = ampSmooth_.lp((turbo ? 2.4 : 7.0) * work);
-        snd += whineLp_.lp(aw * (0.6 * std::sin(phase_) + 0.35 * std::sin(phase3_) + 0.18 * std::sin(phase2_)));
-        // aerodynamic whoosh of the air rushing into the inducer
-        whooshBp_.bandpass(1400 + 3200 * clampv(speedFrac, 0.0, 1.0), 1.0, fs_);
-        snd += whooshBp_.tick(noise) * 2.4 * flowFrac * (0.3 + prLoad) * speedFrac;
-    } else {
-        // Roots / twin-screw: the classic blower whine is the rotor lobe-pass tone (Roots: 2 rotors x
+        const double fSh = shaftRpm / 60.0;
+        const double aIn = std::sqrt(1.4 * kR * ambT_);
+        const double mRel = 0.7 * tipR_ * shaftRpm * 2.0 * kPi / 60.0 / aIn;   // inducer tip Mach (tangential part)
+        const double fwd = smoothstep(-0.2, 0.8, mDuct_ / std::max(1e-5, lineS_));   // tones break up in reverse flow
+        const double work = speedFrac * speedFrac * (0.15 + 0.85 * std::sqrt(flowFrac)) * (0.35 + 0.65 * prLoad);
+        const double aw = ampSmooth_.lp((turbo ? 2.4 : 7.0) * work * fwd);
+        const double Z = clampv((double)p_.compBlades, 4.0, 24.0);
+        const double wob = 1.0 + 0.003 * wobble_.lp(noise * 40.0);
+        double tone = 0;
+        ph1_ = std::fmod(ph1_ + 2 * kPi * fSh * wob * dt, 2 * kPi);
+        tone += (0.55 * aw + 0.25 * speedFrac * speedFrac * (turbo ? 1.0 : 2.0)) * std::sin(ph1_);   // shaft order 1
+        tone += 0.12 * aw * std::sin(2.0 * ph1_ + 0.7);                                            // and its 2nd
+        const double fBpf = Z * fSh;
+        phB_ = std::fmod(phB_ + 2 * kPi * std::min(fBpf, 20000.0) * dt, 2 * kPi);
+        tone += 0.45 * aw * (1.0 - smoothstep(13000.0, 17000.0, fBpf)) * std::sin(phB_);              // blade pass
+        const double buzz = smoothstep(0.85, 1.05, mRel);
+        if (buzz > 1e-3) {   // shaft orders 2..Z under the Nyquist / 14 kHz, uneven like a real wheel's
+            static const double kW[24] = {0.0, 0.0, 0.62, 0.48, 0.71, 0.33, 0.55, 0.29, 0.41, 0.36, 0.22, 0.30, 0.18, 0.26, 0.15,
+                                          0.21, 0.12, 0.17, 0.10, 0.14, 0.09, 0.11, 0.08, 0.07};
+            double b2 = 0;
+            for (int k = 2; k <= (int)Z && k * fSh < 14000.0; ++k) b2 += kW[k] * std::sin(k * ph1_ + 0.37 * k * k);
+            tone += 1.2 * aw * buzz * b2;
+        }
+        snd += whineLp_.lp(tone);
+        const double fTcn = 0.5 * fBpf;
+        if (fTcn > 200.0 && fTcn < 16000.0) {
+            tcnBp_.bandpass(fTcn, 6.0, fs_);
+            snd += 1.0 * aw * tcnBp_.tick(noise);
+        } else tcnBp_.tick(0);
+        // whoosh: near the surge line (margin < ~0.35) with pressure ratio
+        const double nearSurge = smoothstep(0.35, -0.05, surgeMargin);
+        snd += whooshBp_.tick(noise) * (2.4 * flowFrac * (0.3 + prLoad) * speedFrac + 3.0 * nearSurge * (pr - 1.0) * speedFrac);
+        // surge: the inlet pulse and the stall noise of the reverse flow
+        const double pulse = flutLp_.lp(dmDuct_ / (4.0 * kPi));
+        const double rev = clampv(-mDuct_ / std::max(1e-5, lineS_), 0.0, 1.5);
+        const double stall = surgeBp_.tick(noise) * 3.5 * rev * (0.3 + prLoad) * std::max(0.2, speedFrac);
+        snd += surging ? pulse + stall : 0.3 * pulse + stall;
+    } else {        // Roots / twin-screw: the classic blower whine is the rotor lobe-pass tone (Roots: 2 rotors x
         // 3 lobes = 6 pulses per turn; screw: 5 lobes, rounder) plus the high timing-gear mesh
         // whine. Both rise with blower speed and get louder (harsher) with boost.
         const bool roots = p_.scType == Supercharger::Roots;
@@ -350,39 +470,31 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         snd += scHiss_.tick(noise) * 2.0 * sp * prLoad;
     }
 
-    // blow-off valve: valve pops open ("thump"), then the vented charge rushes out ("pssshh")
-    if (bovOpen && !prevBov_ && p_.induction == Induction::Turbo && boostBar > 0.2) { thumpEnv_ = 1; thumpPh_ = 0; }
+    // blow-off valve: the vented charge as a jet ("pssshh"). Jet noise peaks near a Strouhal number of 0.2 on the jet
+    // speed and the opening's size (f = 0.2 U / D: a smaller opening or a faster jet hisses higher); the jet speed from
+    // the pressure ratio (isentropic, sonic past ~1.9). A recirculating valve sends it back into the compressor inlet,
+    // inside the ducting: little of it is heard (x 0.08, chosen). The thump: the valve hitting its stop (above).
     prevBov_ = bovOpen;
     double ventFlow = std::max(0.0, vent);
-    // a supercharger bypass just recirculates quietly; only real boost being dumped is loud
-    double target = clampv(ventFlow / 0.06, 0.0, 2.0) * smoothstep(0.04, 0.3, boostBar + (bovEnv_ > 0.05 ? 0.3 : 0.0));
-    bovEnv_ += (target - bovEnv_) * std::min(1.0, dt / (target > bovEnv_ ? 0.004 : 0.06));
+    const bool recirc = p_.induction == Induction::Turbo && p_.bovType == 1;
+    double target = clampv(ventFlow / 0.06, 0.0, 2.0) * smoothstep(0.04, 0.3, boostBar + (bovEnv_ > 0.05 ? 0.3 : 0.0)) *
+                    (recirc ? 0.08 : (p_.induction == Induction::Supercharger ? 0.4 : 1.0));
+    bovEnv_ += (target - bovEnv_) * std::min(1.0, dt / (target > bovEnv_ ? 0.002 : 0.03));
     if (bovEnv_ > 1e-4) {
-        double hiss = bovHiss_.tick(noise), body = bovBody_.tick(noise);
-        // brighter at high pressure, duller as it empties
-        double bright = clampv(boostBar / 1.0, 0.2, 1.2);
-        snd += bovEnv_ * (2.8 * bright * hiss + 1.6 * body);
+        const double prv = std::max(1.0, charge.p() / kPatm);
+        const double uj = prv > 1.89 ? std::sqrt(2.0 * 1.4 / 2.4 * kR * chargeT)
+                                     : std::sqrt(2.0 * kCpAir * chargeT * std::max(0.0, 1.0 - std::pow(prv, -0.2857)));
+        const double dv = std::sqrt(4.0 * std::max(1e-6, bovArea) / kPi);
+        bovHiss_.bandpass(clampv(0.2 * uj / dv, 900.0, 9000.0), 0.8, fs_);
+        const double hiss = bovHiss_.tick(noise), body = bovBody_.tick(noise);
+        const double bright = clampv(uj / 300.0, 0.2, 1.2);
+        snd += bovEnv_ * (2.8 * bright * hiss + 1.2 * body);
     } else { bovHiss_.tick(0); bovBody_.tick(0); }
-    if (thumpEnv_ > 1e-3) {
+    if (thumpEnv_ > 1e-3) {   // (the valve's thump: a damped knock of the valve body, ~70 Hz)
         thumpPh_ += 2 * kPi * 70.0 * dt;
         snd += 1.8 * thumpEnv_ * std::sin(thumpPh_);
         thumpEnv_ *= std::exp(-dt / 0.03);
     }
-
-    // compressor surge flutter ("stu-tu-tu"): one sharp chirp per stall cycle, pitch falling
-    // as the wheel slows; louder at higher boost
-    if (surging && centrifugal) {
-        if (flutterPh_ < prevSurgePh_) { surgeEnv_ = 1.0; surgePitch_ = 1.0; }   // new stall cycle
-        prevSurgePh_ = flutterPh_;
-    }
-    if (surgeEnv_ > 1e-3) {
-        surgeBp_.bandpass(650 + 900 * clampv(speedFrac, 0.0, 1.0) * surgePitch_, 2.0, fs_);
-        double chirp = surgeBp_.tick(noise) * 3.5 + surgeLow_.tick(noise) * 2.0;
-        double lvl = clampv(0.35 + std::max(0.0, boostBar), 0.0, 2.0);
-        snd += surgeEnv_ * lvl * chirp;
-        surgeEnv_ *= std::exp(-dt / 0.014);
-        surgePitch_ *= std::exp(-dt / 0.05);
-    } else { surgeBp_.tick(0); surgeLow_.tick(0); }
 
     if (phase_ > 2 * kPi) phase_ = std::fmod(phase_, 2 * kPi);
     if (phase2_ > 2 * kPi) phase2_ = std::fmod(phase2_, 2 * kPi);

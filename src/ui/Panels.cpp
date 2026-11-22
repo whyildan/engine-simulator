@@ -898,10 +898,25 @@ void App::panelBoost() {
         } else
         SliderF("Wastegate (boost)", &p_.wastegateBar, 0.2f, 2.5f, "%.2f bar", "Boost target: the wastegate opens and bypasses the turbine above this.");
         Check("Blow-off valve", &p_.bov);
-        Help("Vents boost when you lift: 'pssshh'.\nWithout it the compressor surges against the closed throttle: 'stu-tu-tu' flutter.");
+        Help("Vents boost when you lift: 'pssshh'.\nWithout it the compressor surges against the closed throttle: 'stu-tu-tu' flutter -\n"
+             "the air in the boost pipes pushes back through the wheel and refills, ~15-30 times a second\n"
+             "(a smaller charge volume flutters faster).");
         ImGui::SameLine();
         Check("Anti-lag (ALS)", &p_.antiLag);
         Help("Rally anti-lag: on lift-off the ECU cracks the throttle and fires very late so the burn\ncontinues into the exhaust manifold - the turbo stays spooled, bangs and pops.");
+        if (p_.bov) {
+            Combo("Blow-off valve type", &p_.bovType, "Vent to atmosphere (loud)\0Recirculating / diverter (quiet)\0");
+            SliderF("Opens at", &p_.bovSpringBar, 0.05f, 0.8f, "%.2f bar", "Pressure across the valve (charge over manifold) that cracks it open. A spring too\n"
+                    "stiff for the boost leaves it fluttering half open; too soft and it leaks at part throttle.");
+            ImGui::Text("Valve lift %.0f %%", tel_.bovLift * 100.0f);
+        }
+        {
+            int nb = p_.compBlades;
+            if (ImGui::SliderInt("Compressor blades", &nb, 6, 16)) p_.compBlades = nb;
+            Help("Blades at the wheel's exit (full + splitter, e.g. 6 + 6). The blade-pass tone is blades x shaft speed -\n"
+                 "above hearing at full speed, audible while spooling; the whistle you hear up top is the shaft order, the\n"
+                 "buzz-saw of a near-supersonic tip and the tip-clearance noise.");
+        }
     } else {
         ImGui::SeparatorText("Supercharger");
         int t = (int)p_.scType;

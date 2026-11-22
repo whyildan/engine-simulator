@@ -1511,6 +1511,35 @@ Engines* (SAE 1996); probe: `tests/ts_probe.cpp` (mode 0–8), tes: `twostroke_t
   Blair vs λ 0.88 kita, gesek); gas pipa +55…70 K; panjang saluran intake dan transfer dipilih; periode bakar dari squish
   hanya panduan.
 
+### Suara turbo: surge Greitzer, sumber bunyi kompresor, BOV ✅ (2026-11-22)
+Atas permintaan ("sounding turbonya kurang realistis, flutter gak dapet"). Diukur dulu (`tests/turbo_sound_probe.cpp`,
+preset 16, 4500 rpm, gas penuh lalu dilepas tanpa BOV): flutter ±30× lebih pelan dari whine dan tanpa irama (status
+surge berkedip ±29 000× dalam 1,8 s — aturan on/off "throttle < 8 % dan aliran kecil" yang mengubah alirannya sendiri),
+energi < 200 Hz hanya 1,4 %; whine = satu sinus pada 1,6× putaran poros (angka pilihan).
+- **Surge dari fisika (Greitzer 1976; model yang dipakai Galindo dkk. untuk kompresor turbo mobil, Exp. Therm. Fluid
+  Sci. 32, 2008)**: aliran kompresor kini *state* dengan inersia, dm/dt = (A_c / L_c)(Δp_kompresor(m) − Δp_plenum −
+  rugi saluran); plenum = node charge (pipa boost + intercooler). Garis kecepatan: cabang kanan dari peta (atau bentuk
+  generik) sebagai tabel 24 titik yang dibangun ulang saat kecepatan berubah 0,2 %; kiri puncak bentuk kubik
+  Moore–Greitzer (smoothstep), shut-off 0,80 × kenaikan puncak, aliran balik ditahan kuadratik (1,0 × kenaikan puncak
+  pada −aliran puncak) — dipilih. Saluran: L_c 0,5 m, luas inducer (0,7 × diameter exducer; ujung 500 m/s pada putaran
+  puncak), rugi 0,5 tekanan dinamis — dipilih. Generik: titik surge pada 0,25 × aliran pompa garis itu.
+  Hasil (turbo_test): gas penuh tetap (boost 1,13–1,15 bar, tanpa surge); dilepas tanpa BOV → aliran berbalik, irama
+  ±22 Hz pada volume 3 L, ±39 Hz pada 1,2 L (literatur: deep surge 3–10 Hz di rig berplenum besar, periode memendek
+  dengan plenum kecil). Flutter kini ±3 dB dari whine gas penuh, energi didominasi 20–40 Hz.
+- **Sumber bunyi kompresor** (Raitor & Neise, JSV 2008; ulasan MDPI Machines 13:948, 2025; SAE 2009-01-2053,
+  2005-01-2485, 2020-01-5090, 2017-01-1051): orde poros 1× (siulan turbo: ketidakseimbangan ∝ putaran² + gaya sudu
+  — 2,98 kHz pada 179 000 rpm), orde 2×, blade-pass (jumlah sudu × putaran; memudar di atas ±15 kHz — hanya terdengar
+  saat spool), buzz-saw (orde poros 2..Z bersama saat Mach ujung inducer 0,85–1,05), tip-clearance noise (pita sempit
+  ±½ blade-pass), whoosh 1–4 kHz dekat garis surge, dan pada surge: denyut monopol dari inlet p = (dm/dt)/(4πr) plus
+  bising stall aliran balik. Level-level = pilihan (skala whine lama); nada dan irama dari fisika. Parameter baru
+  `comp_blades` (12 = 6 + 6).
+- **BOV**: piston pegas-massa-redaman (±45 Hz, ζ 0,08, angkat penuh 0,15 bar di atas tekanan buka — dipilih) antara
+  tekanan charge dan manifold, memantul di dudukan dan stopper (bunyi "thump" dari kecepatan tumbukan). Desis = jet:
+  puncak Strouhal 0,2 U/D (U isentropik / sonik dari rasio tekanan, D dari bukaan). `bov_type` 0 buang ke udara,
+  1 resirkulasi (×0,08, dipilih); `bov_spring_bar` (0,25 = ambang lama).
+- **Batas**: konstanta saluran / bentuk garis kiri dipilih; level relatif antar sumber dipilih; paper Loughborough
+  (Walsh, ICSV22 — surge mesin bensin) tidak bisa diunduh otomatis; sisi turbin (siulan turbin, wastegate) belum.
+
 ## 5. Keputusan (sudah disepakati)
 
 1. **Urutan fase:** sesuai daftar di atas (1 Fondasi → 2 Kalibrasi → 3 Kontrol → 4 Monitoring → 5 Motorsport → 6 Lanjutan).

@@ -694,7 +694,7 @@ const EngineField kEngineFields[] = {
     // forced induction
     EI("induction", induction), EI("sc_type", scType), EF("comp_flow_gs", compFlow_gs), EF("turbine_ar", turbineAR),
     EF("turbo_inertia", turboInertia), EF("wastegate_bar", wastegateBar), EI("intercooler", intercooler),
-    EF("ic_efficiency", icEfficiency), EF("charge_volume_l", chargeVolume_L), EI("bov", bov), EI("anti_lag", antiLag),
+    EF("ic_efficiency", icEfficiency), EF("charge_volume_l", chargeVolume_L), EI("bov", bov), EI("bov_type", bovType), EF("bov_spring_bar", bovSpringBar), EI("comp_blades", compBlades), EI("anti_lag", antiLag),
     EF("boost_retard", boostRetard), EF("afr_boost", afrBoost), EF("sc_displacement_l", scDisplacement_L),
     EF("sc_ratio", scRatio), EI("sc_bypass", scBypass),
     // vehicle
@@ -876,6 +876,7 @@ bool engineFromJson(const std::string& text, EngineParams& p, EngineMeta& m, std
     n.cylinders = clampv((int)n.cylinders, 1, isRotary(n) ? 4 : kMaxCyl);
     n.tsCrankcaseCR = clampv(n.tsCrankcaseCR, 1.1f, 3.0f); n.tsReedArea_cm2 = clampv(n.tsReedArea_cm2, 0.0f, 200.0f);
     n.tsPipeClass = clampv(n.tsPipeClass, 0.0f, 1.0f); n.tsBurnDeg = clampv(n.tsBurnDeg, 25.0f, 90.0f); n.tsTransferLen = clampv(n.tsTransferLen, 0.05f, 4.0f); n.tsScavenge = clampv(n.tsScavenge, 0, 9);
+    n.bovType = clampv(n.bovType, 0, 1); n.bovSpringBar = clampv(n.bovSpringBar, 0.05f, 1.0f); n.compBlades = clampv(n.compBlades, 4, 24);
     n.tsPowerValve = clampv(n.tsPowerValve, 0, 1); n.tsPvLowOpen = clampv(n.tsPvLowOpen, 45.0f, 150.0f);
     n.tsPvRpmLow = clampv(n.tsPvRpmLow, 1000.0f, 20000.0f); n.tsPvRpmHigh = clampv(n.tsPvRpmHigh, n.tsPvRpmLow, 20000.0f);
     n.tsInlet = clampv(n.tsInlet, 0, 2); n.tsInletOpen = clampv(n.tsInletOpen, 30.0f, 180.0f); n.tsInletClose = clampv(n.tsInletClose, 0.0f, 150.0f);

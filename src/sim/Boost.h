@@ -55,6 +55,9 @@ public:
     // flow map: compressor outlet temperature (before the intercooler, K) and this step's flows (kg/s, signed)
     double compOutT = 300, ventFlow = 0, turbFlow = 0, wgFlow = 0;
     bool surging = false, bovOpen = false;
+    double lineS = 0;           // the speed line's surge (peak) flow now, kg/s
+    double bovLift = 0;         // blow-off valve lift 0..1 (its own spring-mass dynamics)
+    double dmDuct() const { return dmDuct_; }
 
 private:
     void refreshMaps();
@@ -69,6 +72,13 @@ private:
     double coolAir_ = 0;
     double wgDuty_ = -1;
     double compressor(double n, double prc, double& eta) const;  // centrifugal map -> kg/s
+    // compression system dynamics (Greitzer): the duct's flow state and the current speed line
+    static constexpr int kLineN = 24;
+    double mDuct_ = 0, mPrev_ = 0, dmDuct_ = 0;   // kg/s through the compressor, its rate (kg/s^2)
+    double tipR_ = 0.025, ductA_ = 1e-3;          // wheel tip radius (m), inducer / duct area (m2)
+    double lineN_ = -1, lineS_ = 0.01, linePrS_ = 1, lineM_[kLineN] = {}, linePr_[kLineN] = {};
+    void buildLine(double n, double rpmCorr, double corrM);
+    double linePr(double m) const;
 
     EngineParams p_{};
     double fs_ = 96000;
@@ -76,13 +86,14 @@ private:
     double omegaT_ = 0;         // turbo shaft rad/s
     double wgPos_ = 0, wgTrim_ = 0, prevBoost_ = 0, boostRate_ = 0;
     double vanePos_ = 1;       // VGT vane opening 0 (closed) .. 1 (open)
-    double sound_ = 0, phase_ = 0, phase2_ = 0, phase3_ = 0, flutterPh_ = 0;
+    double sound_ = 0, phase_ = 0, phase2_ = 0, phase3_ = 0;
     // sound shaping
-    Biquad whooshBp_, bovHiss_, bovBody_, surgeBp_, surgeLow_, scHiss_;
-    OnePole whineLp_, ampSmooth_, wobble_;
-    double bovEnv_ = 0, thumpEnv_ = 0, thumpPh_ = 0, surgeEnv_ = 0, surgePitch_ = 0;
+    Biquad whooshBp_, bovHiss_, bovBody_, surgeBp_, scHiss_, tcnBp_;
+    OnePole whineLp_, ampSmooth_, wobble_, flutLp_;
+    double ph1_ = 0, phB_ = 0;                    // shaft order / blade-pass phases
+    double bovX_ = 0, bovV_ = 0;                  // blow-off valve lift (0..1) and its rate
+    double bovEnv_ = 0, thumpEnv_ = 0, thumpPh_ = 0;
     bool prevBov_ = false;
-    double prevSurgePh_ = 0;
     Rng rng_{4242};
 };
 
