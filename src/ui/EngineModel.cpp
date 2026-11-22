@@ -252,12 +252,82 @@ Data finsMesh(float ri, float ro, float y0, float y1, float pitchY, float t) {
 }
 
 // closed path around a set of pulleys (circle centre x, y, radius): the belt / chain line
-std::vector<V3> beltPath(const std::vector<std::tuple<float, float, float>>& pulleys, float z) {
-    Poly all;
-    for (const auto& c : pulleys) for (const auto& q : mesh::circleOutline(std::get<2>(c), 40, std::get<0>(c), std::get<1>(c))) all.push_back(q);
-    const Poly h = hull2(all);
+// A serpentine belt / chain round pulleys (x, y, r) in the plane z. The pulleys on the outside (their circle reaches the
+// convex hull) are wrapped on their outside, in hull order; a pulley inside the hull (a boxer's crank sprocket between
+// the cams) is put into the loop on the stretch it is nearest to and wrapped on its back - the belt bends round it
+// (the plain hull used to pass it by without touching). Tangents between circles with the centres on the chosen
+// sides, arcs round each pulley.
+std::vector<V3> beltPath(const std::vector<std::tuple<float, float, float>>& pulleys, float z, const std::vector<int>* force = nullptr,
+                         bool preferLow = false) {
+    struct C { float x, y, r; int s; };   // s: +1 outside (centre left of the travel), -1 back side
+    const int n = (int)pulleys.size();
+    auto forced = [&](int k) { return force && k < (int)force->size() ? (*force)[k] : 0; };
     std::vector<V3> out;
-    for (const auto& q : h) out.push_back(v3(q.first, q.second, z));
+    if (n < 2) return out;
+    Poly all;
+    std::vector<int> owner;
+    for (int k = 0; k < n; ++k) {
+        if (forced(k) < 0) continue;   // (idlers / tensioners pressing on the back of the belt: not part of the outline)
+        for (const auto& q : mesh::circleOutline(std::get<2>(pulleys[k]), 40, std::get<0>(pulleys[k]), std::get<1>(pulleys[k]))) { all.push_back(q); owner.push_back(k); }
+    }
+    const Poly h = hull2(all);
+    // hull order (counter-clockwise) of the outside pulleys
+    std::vector<int> ring;
+    for (const auto& q : h) {
+        int k = -1;
+        for (size_t j = 0; j < all.size(); ++j) if (all[j] == q) { k = owner[j]; break; }
+        if (k >= 0 && (ring.empty() || ring.back() != k) && (ring.size() < 2 || ring.front() != k)) ring.push_back(k);
+    }
+    std::vector<C> loop;
+    for (int k : ring) loop.push_back({std::get<0>(pulleys[k]), std::get<1>(pulleys[k]), std::get<2>(pulleys[k]), 1});
+    // inside pulleys: into the stretch whose line passes nearest
+    for (int k = 0; k < n; ++k) {
+        if (std::find(ring.begin(), ring.end(), k) != ring.end()) continue;
+        const float px = std::get<0>(pulleys[k]), py = std::get<1>(pulleys[k]);
+        int best = 0; float bd = 1e18f;
+        for (size_t a = 0; a < loop.size(); ++a) {
+            const C& A = loop[a]; const C& Bc = loop[(a + 1) % loop.size()];
+            const float dx = Bc.x - A.x, dy = Bc.y - A.y, L2 = std::max(1e-6f, dx * dx + dy * dy);
+            const float t = clampv(((px - A.x) * dx + (py - A.y) * dy) / L2, 0.0f, 1.0f);
+            const float ex = A.x + t * dx - px, ey = A.y + t * dy - py;
+            // (preferLow: a stretch below the pulley wins a near tie - a boxer's crank is wrapped from underneath)
+            const float d = (ex * ex + ey * ey) * ((preferLow && 0.5f * (A.y + Bc.y) > py) ? 2.0f : 1.0f);
+            if (d < bd) { bd = d; best = (int)a; }
+        }
+        loop.insert(loop.begin() + best + 1, {px, py, std::get<2>(pulleys[k]), forced(k) > 0 ? 1 : -1});
+    }
+    const int m = (int)loop.size();
+    if (m < 2) return out;
+    // tangent from circle A to circle B (centre of each on its side s): points pa, pb
+    auto tangent = [](const C& A, const C& Bc, float& pax, float& pay, float& pbx, float& pby) {
+        const float Dx = Bc.x - A.x, Dy = Bc.y - A.y, D2 = Dx * Dx + Dy * Dy;
+        const float k = Bc.s * Bc.r - A.s * A.r;
+        const float t = std::sqrt(std::max(1e-6f, D2 - k * k));
+        // d = D (t - i k) / (t^2 + k^2), L = i d (the left normal)
+        const float dx = (Dx * t + Dy * k) / D2, dy = (Dy * t - Dx * k) / D2;
+        const float lx = -dy, ly = dx;
+        pax = A.x - A.s * A.r * lx; pay = A.y - A.s * A.r * ly;
+        pbx = Bc.x - Bc.s * Bc.r * lx; pby = Bc.y - Bc.s * Bc.r * ly;
+    };
+    std::vector<float> inX(m), inY(m), outX(m), outY(m);
+    for (int a = 0; a < m; ++a) {
+        const int b = (a + 1) % m;
+        tangent(loop[a], loop[b], outX[a], outY[a], inX[b], inY[b]);
+    }
+    for (int a = 0; a < m; ++a) {
+        const C& c = loop[a];
+        // arc round the pulley from where the belt arrives to where it leaves: counter-clockwise on an outside
+        // pulley, clockwise on the back of an inside one
+        float a0 = std::atan2(inY[a] - c.y, inX[a] - c.x), a1 = std::atan2(outY[a] - c.y, outX[a] - c.x);
+        float sweep = a1 - a0;
+        if (c.s > 0) { while (sweep < 0) sweep += 2 * kPiF; }
+        else { while (sweep > 0) sweep -= 2 * kPiF; }
+        const int steps = std::max(2, (int)(std::fabs(sweep) / (2 * kPiF) * 40));
+        for (int j = 0; j <= steps; ++j) {
+            const float an = a0 + sweep * j / steps;
+            out.push_back(v3(c.x + c.r * std::cos(an), c.y + c.r * std::sin(an), z));
+        }
+    }
     return out;
 }
 
@@ -345,7 +415,11 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
     const bool air = p.cooling == Cooling::Air;
     const Material finM = glassMat(std::min(0.85f, 0.22f + glassA * 1.6f), 0.74f, 0.76f, 0.80f);
     // OHV: one cam in the block - in the V's valley above the crank, under the crank of a boxer, beside an inline's
-    V3 ohvCam = v3(0, 1.30f * r + 0.30f * B, 0), ohvCamXY = v3(0, 0, 0);
+    // OHV pushrods run parallel to the bore, just outside it on the intake (valley) side, at kPushX from the bore axis;
+    // a V's one cam sits where that line meets for both banks: kPushX / sin(half the V angle) above the crank
+    const float kPushX = 0.5f * B + wall + 0.06f * B;
+    const float halfV = std::max(5.0f, 0.5f * std::fabs(p.bankAngle)) * kDegF;
+    V3 ohvCam = v3(0, std::min(3.0f * B, kPushX / std::sin(halfV)), 0), ohvCamXY = v3(0, 0, 0);
     if (boxer) ohvCam.y = -(1.30f * r + 0.30f * B);
     bool ohvCamSet = false;
     std::vector<CamLine> camLines;
@@ -431,10 +505,15 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
         for (const Side& s : sides) {
             // DOHC: splayed valves under their own cams; SOHC: one cam between them, rockers; OHV: nearly upright
             // valves in a row, rockers worked by pushrods from the cam in the block
-            const float tilt = s.sgn * (ohv ? 4.0f : sohc ? 10.0f : 13.0f) * kDegF;
+            // (OHV: the valves stand upright in one row along the crank - intake then exhaust - as in a small-block V8 or
+            //  a 6BT: every rocker then reaches across to its pushrod on the valley side, none crossing another)
+            const int nIn = sides[0].count, nAll = sides[0].count + sides[1].count;
+            const float rowSp = nAll > 1 ? std::min(0.44f * B, 0.88f * B / (float)nAll) : 0.0f;
+            const float tilt = ohv ? 0.0f : s.sgn * (sohc ? 10.0f : 13.0f) * kDegF;
             const V3 ax = v3(std::sin(tilt), std::cos(tilt), 0);   // up the valve, towards its cam / rocker
-            const float seatX = s.sgn * (ohv ? 0.17f : 0.23f) * B;
-            const Cached& mValve = meshOf(key("valve", {B, s.dia}), [&] { return valveMesh(B, s.dia); });
+            const float seatX = ohv ? (s.intake ? sIn : -sIn) * 0.05f * B : s.sgn * 0.23f * B;
+            const float diaDraw = ohv && nAll > 1 ? std::min(s.dia, rowSp - 0.03f * B) : s.dia;
+            const Cached& mValve = meshOf(key("valve", {B, diaDraw}), [&] { return valveMesh(B, diaDraw); });
             const Cached& mTurn = meshOf(key("springturn", {B}), [&] { return springTurnMesh(B); });
             const Cached& mRet = meshOf(key("retainer", {B}), [&] { return mesh::lathe({{0.03f * B, 0}, {0.10f * B, 0.01f * B}, {0.10f * B, 0.025f * B}, {0.03f * B, 0.03f * B}}, 24); });
             const float rn = Rb * (0.36f + 0.0011f * (float)s.dur);
@@ -443,7 +522,8 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
             const double rot = wrapSym(phi - s.center, 720.0) * 0.5 * kDeg;
             const Material lobeM = open ? emissive(kSteel, 0.05f, 0.05f, 0.05f) : kSteel;
             for (int k = 0; k < s.count; ++k) {
-                const float zoff = s.count == 1 ? 0.0f : (s.count == 2 ? (k ? 0.21f : -0.21f) * B : (k - 1) * 0.27f * B);
+                const float zoff = ohv ? ((s.intake ? k : nIn + k) - 0.5f * (nAll - 1)) * rowSp
+                                       : s.count == 1 ? 0.0f : (s.count == 2 ? (k ? 0.21f : -0.21f) * B : (k - 1) * 0.27f * B);
                 const V3 seat = v3(seatX, deck, zoff);
                 const V3 face = seat - ax * lift;
                 const M4 vf = cf * translate(face) * rotZ(-tilt);   // valve frame: +y up the stem
@@ -491,23 +571,27 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
                     for (const CamLine& c : camLines) if (c.bank == cg.bank && c.sgn == s.sgn && c.shaft) have = true;
                     if (!have) camLines.push_back({P.x, P.y, cg.axDeg, s.sgn, cg.bank, true});
                 } else {
-                    // OHV: rocker on a stud; the pushrod end (intake side) goes up as the lifter rides the block cam's lobe
+                    // OHV: rocker on a stud between the valve and its pushrod (1.5:1, the valve side longer); the pushrod
+                    // stands parallel to the bore just outside it, on the valley side, and rises lift / 1.5 as the lifter
+                    // rides the block cam's lobe
                     const V3 T0 = v3(tip0.x, tip0.y, zoff);
-                    const V3 P = T0 + v3(sIn * 0.15f * B, 0.06f * B, 0);
-                    const V3 vT = T0 - P, vC = v3(sIn * 0.15f * B, -0.06f * B, 0);
-                    const Cached& mRock = meshOf(key("rockerO", {B, sIn}), [&] { return rockerMesh(vC, vT, B); });
+                    const float xc = sIn * kPushX;
+                    const V3 P = v3(T0.x + 0.6f * (xc - T0.x), T0.y + 0.06f * B, zoff);
+                    const V3 vT = T0 - P, vC = v3(xc - P.x, -0.06f * B, 0);
+                    const float ratio = std::fabs(vC.x / vT.x);
+                    const Cached& mRock = meshOf(key("rockerO", {B, vC.x, vT.x}), [&] { return rockerMesh(vC, vT, B); });
                     sc.put(mRock, cf * translate(P) * rotZ(-lift / vT.x), kSilver);
                     const V3 topW = xform(cf, P + vC - v3(0, 0.02f * B, 0));
-                    V3 camW = ohvCam;
-                    if (!vee && !boxer) camW = xform(cf, v3(sIn * 0.72f * B, 1.30f * r + 0.30f * B, 0));
+                    V3 camW = (vee && !boxer) ? ohvCam : xform(cf, v3(xc, 1.30f * r + 0.30f * B, 0));
                     camW.z = topW.z;
                     const V3 dir = norm(topW - camW);
+                    const float pl = lift * ratio;   // pushrod / lifter lift
                     const float Lp = std::max(0.2f * B, len(topW - camW) - Rb - lifterH);
                     const Cached& mLifter = meshOf(key("lifter", {B}), [&] { return mesh::lathe({{0, 0}, {0.065f * B, 0}, {0.065f * B, lifterH}, {0, lifterH}}, 20); });
-                    sc.put(mLifter, alongY(camW + dir * (Rb + lift), dir), kSteelDark);
+                    sc.put(mLifter, alongY(camW + dir * (Rb + pl), dir), kSteelDark);
                     const Cached& mPush = meshOf(key("pushrod", {B, Lp}), [&] { return mesh::tube({v3(0, 0, 0), v3(0, Lp, 0)}, {0.022f * B, 0.022f * B}, 10); });
-                    sc.put(mPush, alongY(camW + dir * (Rb + lifterH + lift), dir), kSteel);
-                    const float nd = Rb + (float)s.maxLift - rn;
+                    sc.put(mPush, alongY(camW + dir * (Rb + lifterH + pl), dir), kSteel);
+                    const float nd = Rb + (float)s.maxLift * ratio - rn;
                     const Cached& mLobe = meshOf(key("lobe", {Rb, rn, nd, B}), [&] { return lobeMesh(Rb, rn, nd, 0.09f * B); });
                     sc.put(mLobe, translate(camW) * rotZ(std::atan2(dir.y, dir.x) - (float)rot), lobeM);
                     cylTop = std::max(cylTop, P.y + 0.08f * B);
@@ -575,6 +659,7 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
         sc.label(xform(cf, v3(0, valveTop + 0.35f * B, 0)), std::to_string(i + 1));
     }
 
+    eb.headTop = valveTop + 0.08f * B;
     // ---- per bank: glass head (a liquid-cooled engine's: one box over the bank), camshafts / rocker shafts with gold
     //      bearing caps, cam sprockets; the timing drive (belt, chain or gears) at the front
     std::vector<std::tuple<float, float, float>> pulleys;   // (x, y, r) in the front plane
@@ -584,6 +669,7 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
     // crank speed) - 0.48 bore, or smaller where two cams sit closer than that (DOHC: ~0.85 bore apart): they keep a
     // gap for the belt / chain between them (gears: just clear), and the crank sprocket shrinks with them
     std::vector<std::pair<V3, float>> sprCentres;            // centre (front plane), size relative to a cam sprocket
+    std::vector<int> sprBank;                                // its bank (-1: the block cam, a pump)
     for (int b = 0; b < ((vee || boxer) ? 2 : 1) && !two; ++b) {
         float ax = 0;
         bool any = false;
@@ -614,18 +700,21 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
             for (int i = 0; i < n; ++i) if (cyl[i].bank == b) sc.put(mCap, at * translate(v3(0, 0.02f * B, cyl[i].z + 0.5f * pitch * 0.85f)), kGold);
             const V3 w = xform(bf, v3(c.x, c.y, 0));
             sprCentres.push_back({v3(w.x, w.y, zFront), 1.0f});
+            sprBank.push_back(b);
         }
     }
     if (ohv && ohvCamSet) {   // the block cam: one shaft along the engine
         const Cached& mShaft = meshOf(key("blockcam", {B, zFront, zRear}), [&] { return rodZ(0.05f * B, zFront, zRear - 0.2f * B, 16); });
         sc.put(mShaft, translate(v3(ohvCamXY.x, ohvCamXY.y, 0)) * rotZ(crankRad * 0.5f), kSteel);
         sprCentres.push_back({v3(ohvCamXY.x, ohvCamXY.y, zFront), 1.0f});
+        sprBank.push_back(-1);
     }
     // diesel: the distributor injection pump on the intake side, driven at cam speed by the same belt / chain
     if (diesel && !two) {
         const float sideX = (vee || boxer) ? 0.0f : -1.0f;   // inline: the intake side (-x)
         const V3 pc = v3(sideX * 1.05f * B, (vee || boxer) ? valveTop + 0.4f * B : 0.52f * deck, zFront);
         sprCentres.push_back({pc, 0.85f});
+        sprBank.push_back(-1);
         eb.pump = pc; eb.hasPump = true;
     }
     float camSprR = 0.48f * B;
@@ -644,15 +733,26 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
         camSprR = std::max(camSprR, 0.30f * B);   // (the crank sprocket, half of it, stays well over the 0.11 bore snout)
     }
     const float crankSprR = 0.5f * camSprR;
+    // A chain-driven V or boxer has a chain per bank (Ford 4.6 Modular: two primary chains off one wide crank sprocket;
+    // Subaru FA20: bank 1 and bank 2 chains, each with its tensioner and guides; Nissan VQ35DE: a primary chain to both
+    // banks plus a short chain per bank) - here one chain per bank, in two planes just apart, from a two-track crank
+    // sprocket. A belt-driven V / boxer keeps its one belt round both banks with idlers (Toyota 1UZ-FE, Honda J35,
+    // Subaru EJ).
+    const bool chainPerBank = !two && (vee || boxer) && p.camDrive == CamDrive::Chain &&
+                              std::count(sprBank.begin(), sprBank.end(), 0) > 0 && std::count(sprBank.begin(), sprBank.end(), 1) > 0;
+    const float zBank[2] = {zFront - 0.065f * B, zFront + 0.065f * B};
     pulleys.push_back({0, 0, crankSprR});
-    for (const auto& sc2 : sprCentres) {
-        pulleys.push_back({sc2.first.x, sc2.first.y, camSprR * sc2.second});
-        sprocketsAt.push_back({sc2.first, camSprR * sc2.second});
+    for (size_t k = 0; k < sprCentres.size(); ++k) {
+        V3 c = sprCentres[k].first;
+        if (chainPerBank) c.z = zBank[sprBank[k] == 1 ? 1 : 0];
+        pulleys.push_back({c.x, c.y, camSprR * sprCentres[k].second});
+        sprocketsAt.push_back({c, camSprR * sprCentres[k].second});
     }
     {
         const CamDrive drive = two ? CamDrive::Belt : p.camDrive;
         const bool gears = drive == CamDrive::Gears;
-        const Cached& mCrankSpr = meshOf(key("crankspr", {crankSprR, B}), [&] { return gearMesh(crankSprR, 0.04f * B, 20, 0.12f * B, 0.12f * B); });
+        const float crankSprW = chainPerBank ? 0.26f * B : 0.12f * B;   // (two tracks for two chains)
+        const Cached& mCrankSpr = meshOf(key("crankspr", {crankSprR, crankSprW, B}), [&] { return gearMesh(crankSprR, 0.04f * B, 20, crankSprW, 0.12f * B); });
         if (!two) sc.put(mCrankSpr, translate(v3(0, 0, zFront)) * rotZ(crankRad), kSteel);
         if (!two && p.induction != Induction::Supercharger) {
             // the accessory belt pulley / harmonic balancer: a ribbed rim, a rubber ring, the hub
@@ -715,11 +815,37 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
                 }
             }
         }
-        const std::vector<V3> path = beltPath(pulleys, zFront);
-        if (path.size() > 3 && !two && !gears) {
-            const bool chain = drive == CamDrive::Chain;
+        // idlers and the tensioner, after the engines these layouts come from:
+        //  - V: an idler between the banks under the intake's throttle body - the run across the top dips under it
+        //    instead of cutting through the throttle (Toyota 1UZ-FE: crank, No.1 and No.2 idlers, cam pulleys, tensioner)
+        //  - boxer: idlers either side of the crank, the belt round the crank's underside (Subaru EJ DOHC: an automatic
+        //    tensioner and three idlers)
+        //  - a belt: a tensioner pulley on an arm pressing on its longest run; a chain: a pivoting tensioner arm and a
+        //    fixed guide on its two long runs (Honda K20: tensioner arm, upper / lower guides)
+        const bool chainDrive = drive == CamDrive::Chain;
+        struct Run { V3 a, b; };
+        auto runsOf = [&](const std::vector<V3>& pth) {   // the long straight runs (between the arcs), longest first
+            std::vector<Run> rr;
+            for (size_t k = 0; k < pth.size(); ++k) {
+                const V3 a0 = pth[k], bq = pth[(k + 1) % pth.size()];
+                if (len(bq - a0) > 0.35f * B) rr.push_back({a0, bq});
+            }
+            std::sort(rr.begin(), rr.end(), [](const Run& x, const Run& y) { return len(x.b - x.a) > len(y.b - y.a); });
+            return rr;
+        };
+        auto centroidOf = [&](const std::vector<V3>& pth) {
+            V3 c = v3(0, 0, 0);
+            for (const V3& q : pth) c = c + q * (1.0f / std::max<size_t>(1, pth.size()));
+            return c;
+        };
+        auto outwardOf = [&](const Run& rn, V3 cen) {   // unit normal of a run, pointing out of the loop
+            const V3 d = norm(rn.b - rn.a), nrm = v3(-d.y, d.x, 0), mid = (rn.a + rn.b) * 0.5f;
+            return (nrm.x * (mid.x - cen.x) + nrm.y * (mid.y - cen.y)) > 0 ? nrm : nrm * -1.0f;
+        };
+        // the belt / chain itself, with its teeth or rollers moving at the crank sprocket's surface speed
+        auto drawLoop = [&](const std::vector<V3>& path, bool chain, int salt) {
             std::vector<float> rad(path.size(), chain ? 0.012f * B : 0.022f * B);
-            const Cached& mBelt = meshOf(key(chain ? "chain" : "belt", {B, (float)path.size(), path[0].x, path[0].y, path[1].x, (float)pulleys.size()}), [&] {
+            const Cached& mBelt = meshOf(key(chain ? "chain" : "belt", {B, (float)path.size(), path[0].x, path[0].y, path[1].x, path[0].z, (float)salt}), [&] {
                 if (!chain) return mesh::tube(path, rad, 10, true, false);
                 Data d;   // a chain: two side plates' lines
                 for (int sd = -1; sd <= 1; sd += 2) {
@@ -729,7 +855,6 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
                 }
                 return d; });
             sc.put(mBelt, M4{}, chain ? kSteelDark : kRubber);
-            // teeth (belt) or rollers (chain) along it, moving with the crank sprocket's surface speed
             std::vector<float> acc(path.size() + 1, 0.0f);
             for (size_t k = 0; k < path.size(); ++k) acc[k + 1] = acc[k] + len(path[(k + 1) % path.size()] - path[k]);
             const float total = acc.back(), step = chain ? 0.07f * B : 0.10f * B;
@@ -739,9 +864,105 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
             for (float sd = shift; sd < total; sd += step) {
                 size_t k = 0;
                 while (k + 1 < acc.size() && acc[k + 1] < sd) ++k;
-                const V3 a = path[k % path.size()], bpt = path[(k + 1) % path.size()];
+                const V3 a0 = path[k % path.size()], bpt = path[(k + 1) % path.size()];
                 const float t = (sd - acc[k]) / std::max(1e-6f, acc[k + 1] - acc[k]);
-                sc.put(mTooth, translate(lerp(a, bpt, t)), chain ? kSteel : kRubber);
+                sc.put(mTooth, translate(lerp(a0, bpt, t)), chain ? kSteel : kRubber);
+            }
+        };
+        // a chain's tensioner arm (a shoe with its hydraulic plunger) on its longest run, a fixed guide on the next
+        auto drawShoes = [&](const std::vector<V3>& path) {
+            const std::vector<Run> rr = runsOf(path);
+            const V3 cen = centroidOf(path);
+            for (size_t k = 0; k < rr.size() && k < 2; ++k) {
+                const Run& rn = rr[k];
+                const float L = len(rn.b - rn.a) * 0.72f;
+                const V3 mid = (rn.a + rn.b) * 0.5f, nrm = outwardOf(rn, cen);
+                const float ang = std::atan2(rn.b.y - rn.a.y, rn.b.x - rn.a.x);
+                const Cached& mShoe = meshOf(key("chainshoe", {L, B}), [&] { return mesh::box(0.5f * L, 0.025f * B, 0.06f * B); });
+                sc.put(mShoe, translate(mid + nrm * (0.045f * B)) * rotZ(ang), kSteelDark);
+                if (k == 0) {
+                    const V3 endp = lerp(rn.a, rn.b, 0.82f) + nrm * (0.07f * B);
+                    const Cached& mPl = meshOf(key("tensplunger", {B}), [&] { return mesh::tube({v3(0, 0, 0), v3(0, 0.22f * B, 0)}, {0.045f * B, 0.045f * B}, 14); });
+                    sc.put(mPl, alongY(endp, nrm), kAlu);
+                }
+            }
+        };
+        if (chainPerBank && !gears) {
+            for (int bk = 0; bk < 2; ++bk) {
+                std::vector<std::tuple<float, float, float>> pb = {{0.0f, 0.0f, crankSprR}};
+                for (size_t k = 0; k < sprocketsAt.size(); ++k)
+                    if ((sprBank[k] == 1 ? 1 : 0) == bk) pb.push_back({sprocketsAt[k].first.x, sprocketsAt[k].first.y, sprocketsAt[k].second});
+                const std::vector<V3> pth = beltPath(pb, zBank[bk]);
+                if (pth.size() < 4) continue;
+                drawShoes(pth);
+                drawLoop(pth, true, 10 + bk);
+            }
+        } else if (!two && !gears) {
+            std::vector<int> force(pulleys.size(), 0);
+            struct Extra { V3 c; float r; int kind; V3 runDir; };   // kind 1 idler, 2 tensioner pulley
+            std::vector<Extra> extras;
+            auto addPulley = [&](float x, float y, float r, int s2, int kind) {
+                pulleys.push_back({x, y, r}); force.push_back(s2); extras.push_back({v3(x, y, zFront), r, kind, v3(0, 1, 0)});
+            };
+            if (vee && !eb.in.empty()) {
+                float py = 0;
+                for (const PortOut& q : eb.in) py += q.p.y;
+                py /= (float)eb.in.size();
+                const float thrY = py + 0.55f * B, rt = clampv(p.throttleBore_mm * 0.5f, 0.15f * B, 0.45f * B);
+                float top = -1e9f;
+                for (const auto& sp : sprocketsAt) top = std::max(top, sp.first.y + sp.second);
+                const float ri = 0.13f * B, yI = thrY - rt - 0.10f * B - ri;
+                if (top > thrY - rt - 0.05f * B && yI > 0.9f * B) addPulley(0, yI, ri, -1, 1);
+            }
+            if (boxer) {   // the belt dips up round the crank sprocket's underside between two idlers below it
+                force[0] = 1;
+                const float ri = 0.12f * B, yI = -crankSprR - ri + 0.10f * B;
+                addPulley(-0.60f * B, yI, ri, -1, 1);
+                addPulley(0.60f * B, yI, ri, -1, 2);
+                extras.back().runDir = v3(1, 0, 0);
+            }
+            std::vector<V3> path = beltPath(pulleys, zFront, &force, boxer);
+            V3 cen = centroidOf(path);
+            if (!chainDrive && !boxer && path.size() > 3) {   // the belt's tensioner on its longest run
+                const std::vector<Run> rr = runsOf(path);
+                if (!rr.empty()) {
+                    const Run& rn = rr[0];
+                    const V3 mid = (rn.a + rn.b) * 0.5f, nrm = outwardOf(rn, cen);
+                    const float rT = 0.12f * B;
+                    const V3 c = mid + nrm * (rT - 0.05f * B);
+                    addPulley(c.x, c.y, rT, -1, 2);
+                    extras.back().runDir = norm(rn.b - rn.a);
+                    path = beltPath(pulleys, zFront, &force, boxer);
+                    cen = centroidOf(path);
+                }
+            }
+            // idler / tensioner pulleys: a flanged pulley (a sprocket on a chain), the tensioner on an arm with its damper
+            for (const Extra& x : extras) {
+                if (chainDrive) {
+                    const Cached& mIs = meshOf(key("idlerspr", {x.r, B}), [&] { return gearMesh(x.r, 0.03f * B, std::max(10, (int)(x.r / (0.012f * B))), 0.10f * B, 0.05f * B); });
+                    sc.put(mIs, translate(x.c) * rotZ(crankRad * crankSprR / x.r), kSteel);
+                } else {
+                    const Cached& mIp = meshOf(key("idlerpul", {x.r, B}), [&] { return mesh::lathe({{0.04f * B, -0.07f * B}, {x.r + 0.02f * B, -0.07f * B}, {x.r + 0.02f * B, -0.055f * B},
+                                                                                                     {x.r, -0.05f * B}, {x.r, 0.05f * B}, {x.r + 0.02f * B, 0.055f * B},
+                                                                                                     {x.r + 0.02f * B, 0.07f * B}, {0.04f * B, 0.07f * B}}, 28); });
+                    sc.put(mIp, translate(x.c) * rotX(0.5f * kPiF), kSteel);
+                }
+                const Cached& mHub = meshOf(key("idlerhub", {B}), [&] { return rodZ(0.05f * B, -0.10f * B, 0.10f * B, 16); });
+                sc.put(mHub, translate(x.c), kSteelDark);
+                if (x.kind == 2) {   // the tensioner: an arm from the pulley's hub to its pivot, a damper pushing on it
+                    const V3 along = x.runDir, piv = x.c + along * (0.38f * B);
+                    const float ang = std::atan2(piv.y - x.c.y, piv.x - x.c.x);
+                    const Cached& mArm = meshOf(key("tensarm", {B}), [&] { return mesh::box(0.19f * B, 0.035f * B, 0.025f * B); });
+                    sc.put(mArm, translate((x.c + piv) * 0.5f + v3(0, 0, -0.08f * B)) * rotZ(ang), kSteelDark);
+                    const Cached& mDamp = meshOf(key("tensdamp", {B}), [&] { return mesh::tube({v3(0, 0, 0), v3(0, 0.26f * B, 0)}, {0.04f * B, 0.04f * B}, 14); });
+                    const V3 nrm = v3(-along.y, along.x, 0);
+                    const V3 dOut = (nrm.x * (x.c.x - cen.x) + nrm.y * (x.c.y - cen.y)) > 0 ? nrm : nrm * -1.0f;
+                    sc.put(mDamp, alongY(piv + dOut * (0.04f * B) + v3(0, 0, -0.08f * B), dOut), kAlu);
+                }
+            }
+            if (path.size() > 3) {
+                if (chainDrive) drawShoes(path);
+                drawLoop(path, chainDrive, (int)pulleys.size());
             }
         }
         // flywheel with its ring gear at the rear
@@ -782,5 +1003,12 @@ void buildEngineModel(const EngineParams& p, const float phases[kMaxCyl], float 
     if (isDiesel(p)) buildDiesel(sc, p, eb, live);
     if (isBoosted(p)) buildBoost(sc, p, eb, live, crankDeg, turbineIn, throttleIn, inletDir);
 }
+
+namespace model {
+// (the serpentine belt router for the parts file: blower drives with their idler / tensioner)
+std::vector<V3> serpentine(const std::vector<std::tuple<float, float, float>>& pulleys, float z, const std::vector<int>& force) {
+    return beltPath(pulleys, z, &force);
+}
+} // namespace model
 
 } // namespace es::ui

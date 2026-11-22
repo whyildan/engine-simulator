@@ -108,6 +108,87 @@ std::vector<V3> beltAround(V3 a, float ra, V3 b, float rb) {
     return out;
 }
 
+// A pipe along a polyline with rounded corners (bend radius up to `bend`, less where the legs are short): straight runs
+// and clean bends, as boost and exhaust tubing is made - a spline through the same points wanders and overshoots.
+std::vector<V3> routePipe(const std::vector<V3>& pts, float bend) {
+    if (pts.size() < 3) return pts;
+    std::vector<V3> out = {pts[0]};
+    for (size_t i = 1; i + 1 < pts.size(); ++i) {
+        const V3 a = pts[i - 1], c = pts[i], b = pts[i + 1];
+        const float la = len(c - a), lb = len(b - c);
+        if (la < 1e-4f || lb < 1e-4f) continue;
+        const float r = std::min(bend, 0.45f * std::min(la, lb));
+        const V3 p0 = c + (a - c) * (r / la), p1 = c + (b - c) * (r / lb);
+        for (int k = 0; k <= 8; ++k) {
+            const float t = k / 8.0f;
+            out.push_back(p0 * ((1 - t) * (1 - t)) + c * (2 * (1 - t) * t) + p1 * (t * t));
+        }
+    }
+    out.push_back(pts.back());
+    return out;
+}
+
+// A turbo / centrifugal compressor housing ("snail"), local frame: the shaft along +y (the outer face), the scroll in the
+// xz plane round a hub disc: the scroll tube grows from t0 to t1 over 0.9 of a turn and leaves tangentially for `ext` -
+// the inlet of a turbine housing, the outlet of a compressor housing (port E, pointing out along D).
+struct Snail { float R, w, t0, t1, ext; };
+static void snailCurve(const Snail& s, float u, V3& pt) {
+    const float t = s.t0 + (s.t1 - s.t0) * u, a = u * 1.8f * kPiF, rc = s.R + 0.55f * t;
+    pt = v3(rc * std::cos(a), 0, rc * std::sin(a));
+}
+static void snailPort(const Snail& s, V3& E, V3& D) {
+    V3 p1, p0;
+    snailCurve(s, 1.0f, p1); snailCurve(s, 0.99f, p0);
+    D = norm(p1 - p0);
+    E = p1 + D * s.ext;
+}
+static Data snailMesh(const Snail& s) {
+    std::vector<V3> path;
+    std::vector<float> rad;
+    for (int k = 0; k <= 40; ++k) { V3 q; snailCurve(s, k / 40.0f, q); path.push_back(q); rad.push_back(s.t0 + (s.t1 - s.t0) * k / 40.0f); }
+    V3 E, D;
+    snailPort(s, E, D);
+    for (int k = 1; k <= 4; ++k) { path.push_back(path.back() + D * (s.ext / 4.0f)); rad.push_back(s.t1); }
+    Data d = mesh::tube(path, rad, 18);
+    mesh::append(d, mesh::lathe({{0, -s.w}, {s.R * 0.85f, -s.w}, {s.R + 0.5f * s.t0, -0.55f * s.w}, {s.R + 0.6f * s.t0, 0},
+                                 {s.R + 0.5f * s.t0, 0.55f * s.w}, {s.R * 0.85f, s.w}, {0, s.w}}, 36), M4{});
+    return d;
+}
+// the frame for a snail whose shaft points along `axis`, turned about the shaft so its port points along `portDir`
+static M4 snailFrame(const Snail& s, V3 centre, V3 axis, V3 portDir) {
+    V3 E, D;
+    snailPort(s, E, D);
+    float best = -2, bestA = 0;
+    for (int k = 0; k < 360; ++k) {
+        const float a = k * kPiF / 180.0f;
+        const float d = dot(xdir(alongY(centre, axis) * rotY(a), D), portDir);
+        if (d > best) { best = d; bestA = a; }
+    }
+    return alongY(centre, axis) * rotY(bestA);
+}
+
+// a supercharger drive belt: crank pulley, blower pulley, and an idler (Roots 6-71 drive kits: upper and lower pulleys,
+// an idler pulley on its bracket) or a spring tensioner (ProCharger brackets) pushing into the run on `side` (+1 / -1
+// along the line's normal) - the belt is routed round all three
+void blowerBelt(Scene& sc, V3 cp, float rc, V3 pul, float rp, float side, bool tensioner, float B, float spin) {
+    const V3 d = norm(v3(pul.x - cp.x, pul.y - cp.y, 0)), nrm = v3(-d.y, d.x, 0) * side;
+    const float ri = 0.13f * B;
+    const V3 mid = (cp + pul) * 0.5f + nrm * (0.5f * (rc + rp) + ri - 0.06f * B);
+    const std::vector<V3> path = serpentine({{cp.x, cp.y, rc}, {pul.x, pul.y, rp}, {mid.x, mid.y, ri}}, cp.z, {1, 1, -1});
+    if (path.size() < 4) return;
+    sc.put(tubeOf("scbelt", path, 0.025f * B, 8), M4{}, kRubber);
+    const Cached& mIp = meshOf(key("scidler", {ri, B}), [&] { return mesh::lathe({{0.04f * B, -0.06f * B}, {ri + 0.02f * B, -0.06f * B}, {ri, -0.04f * B}, {ri, 0.04f * B},
+                                                                                {ri + 0.02f * B, 0.06f * B}, {0.04f * B, 0.06f * B}}, 28); });
+    sc.put(mIp, translate(v3(mid.x, mid.y, cp.z)) * rotZ(spin) * rotX(0.5f * kPiF), kSteel);
+    // its bracket back to the engine (an arm to a pivot for the tensioner, with the spring can)
+    const V3 piv = v3(mid.x, mid.y, cp.z) + nrm * (0.30f * B) + d * (tensioner ? 0.25f * B : 0.0f) + v3(0, 0, 0.10f * B);
+    sc.put(tubeOf("scbracket", {v3(mid.x, mid.y, cp.z + 0.08f * B), piv}, 0.03f * B, 10), M4{}, kSteelDark);
+    if (tensioner) {
+        const Cached& mCan = meshOf(key("sctens", {B}), [&] { return mesh::lathe({{0, 0}, {0.07f * B, 0}, {0.07f * B, 0.12f * B}, {0, 0.12f * B}}, 20); });
+        sc.put(mCan, translate(piv) * rotX(0.5f * kPiF), kAlu);
+    }
+}
+
 void tailWithFlame(Scene& sc, const std::vector<V3>& ctrl, float rt, const EngineViewLive& live, float egt, int salt, float canLen = 0) {
     const std::vector<V3> path = spline(ctrl, 8);
     sc.put(tubeOf("tail", path, rt), M4{}, hot(egt, 0.35f));
@@ -167,6 +248,7 @@ V3 buildIntake(Scene& sc, const EngineParams& p, EngineBits& eb, V3& inletDir) {
     const float hx = 0.42f * B, hy = 0.34f * B;
     const Cached& plen = meshOf(key("plenum", {hx, hy, L}), [&] { return mesh::extrude(mesh::roundedRect(hx, hy, 0.16f * B), -0.5f * L, 0.5f * L); });
     sc.put(plen, translate(C), kAlu);
+
     // throttle body at the front, or a carburettor on top
     const float rt = clampv(p.throttleBore_mm * 0.5f, 0.15f * B, 0.45f * B);
     const V3 tb0 = v3(C.x, C.y, C.z - 0.5f * L), tb1 = tb0 + v3(0, 0, -0.55f * B);
@@ -247,6 +329,44 @@ void buildExhaust(Scene& sc, const EngineParams& p, const EngineBits& eb, const 
                                E0 + v3(0, -0.35f * B, 6.2f * B)}, rt, live, egtMean, b, 1.8f * B);
             continue;
         }
+        if (turbo) {
+            // turbo manifold: the turbine sits beside the block below the ports, its shaft along the crank (compressor
+            // forward, as an RB / 2JZ); its inlet flange faces up. A 4-1 header comes down into it through a collector
+            // cone; a log manifold runs along the ports and drops into it from its side
+            const V3 side = norm(v3(avgD.x, 0, avgD.z));
+            const float zT = 0.5f * (z0 + z1) + 0.25f * B;
+            const V3 port = v3(avgP.x, avgP.y, zT) + side * (1.30f * B) + down * (0.85f * B);   // turbine inlet flange
+            const V3 up = v3(0, 1, 0);
+            if (p.header == HeaderType::Log && ports.size() > 1) {
+                const V3 L0 = v3(avgP.x, avgP.y, z0 - 0.15f * B) + side * (0.62f * B), L1 = v3(L0.x, L0.y, z1 + 0.15f * B);
+                sc.put(tubeOf("tlog", {L0, L1}, rt * 1.05f), M4{}, hot(egtMean, 0.8f));
+                for (const PortOut& q : ports)
+                    sc.put(tubeOf("stub", routePipe({q.p, q.p + q.d * (0.25f * B), v3(L0.x, L0.y, q.p.z)}, 0.15f * B), rp), M4{}, hot(egtOf(q.cyl)));
+                sc.put(tubeOf("tlogout", routePipe({v3(L0.x, L0.y, zT), v3(port.x, L0.y, zT), port}, 0.30f * B), rt), M4{}, hot(egtMean, 0.8f));
+            } else {
+                const int np = (int)ports.size();
+                const float ringMin = np > 1 ? rp * 1.08f / std::sin(kPiF / std::max(2, np)) : 0.0f;
+                const float cr = std::max({rt * 1.5f, rp * 2.2f, ringMin + rp * 1.05f}), cl = 0.55f * B;
+                const V3 C0 = port + up * cl;
+                std::vector<PortOut> byZ = ports;
+                std::sort(byZ.begin(), byZ.end(), [](const PortOut& a, const PortOut& b2) { return a.p.z < b2.p.z; });
+                for (int k = 0; k < np; ++k) {
+                    const PortOut& q = byZ[k];
+                    const float ang = 2.0f * kPiF * k / std::max(1, np) + 0.25f * kPiF;
+                    const float ringR = np > 1 ? std::max(0.5f * cr, ringMin) : 0.0f;
+                    const V3 entry = C0 + side * (ringR * std::cos(ang)) + v3(0, 0, ringR * std::sin(ang));
+                    std::vector<V3> ctrl = {q.p, q.p + q.d * (0.30f * B), q.p + q.d * (0.55f * B) + down * (0.10f * B)};
+                    if (std::fabs(entry.z - q.p.z) > 0.8f * B) ctrl.push_back(v3(entry.x, entry.y + 0.45f * B, q.p.z + 0.6f * (entry.z - q.p.z)));
+                    ctrl.push_back(entry + up * (0.30f * B));
+                    ctrl.push_back(entry);
+                    sc.put(tubeOf("tprimary", spline(ctrl, 8), rp), M4{}, hot(egtOf(q.cyl)));
+                }
+                const Cached& cone = meshOf(key("tcollcone", {cr, rt, cl}), [&] { return mesh::lathe({{0, 0}, {cr, 0}, {cr, 0.15f * cl}, {rt, cl}, {0, cl}}, 28); });
+                sc.put(cone, alongY(C0, v3(0, -1, 0)), hot(egtMean, 0.8f));
+            }
+            collectors.push_back(port);
+            continue;
+        }
         if (p.header == HeaderType::Log && ports.size() > 1) {
             // log manifold: one pipe along the head, short stubs into it
             const V3 L0 = v3(avgP.x, avgP.y, z0 - 0.2f * B) + avgD * (0.60f * B);
@@ -269,12 +389,18 @@ void buildExhaust(Scene& sc, const EngineParams& p, const EngineBits& eb, const 
         tailWithFlame(sc, {C, C + v3(0, -0.15f * B, 0.7f * B), C + v3(0, -0.30f * B, 2.0f * B), C + v3(0, -0.32f * B, 3.4f * B)}, rt, live, egtMean, b);
     }
     if (turbo && !collectors.empty()) {
-        turbineIn = collectors[0];
-        // the other bank (V / boxer) crosses over to the turbine
+        turbineIn = collectors[0];   // (the turbine inlet flange: the gas goes down into it)
+        // the other bank (V / boxer): its collector drops, runs back under the engine behind the flywheel and comes up
+        // the turbo side into the turbine's collector
+        const float rt = clampv(p.pipeDia_mm * 0.5f, 0.15f * B, 0.40f * B);
         for (size_t k = 1; k < collectors.size(); ++k) {
             const V3 a = collectors[k], t = collectors[0];
-            sc.put(tubeOf("crossover", spline({a, a + v3(0, -0.4f * B, 0.4f * B), lerp(a, t, 0.5f) + v3(0, -0.6f * B, 0.6f * B), t + v3(0, -0.3f * B, 0.4f * B), t}, 8), rt),
-                   M4{}, hot(live.egtGas, 0.6f));
+            const float yLow = std::min(a.y, t.y) - 0.9f * B, zX = eb.zRear + 0.75f * B;
+            const float tSide = t.x >= 0 ? 1.0f : -1.0f;
+            const V3 join = t + v3(0, 0.25f * B, 0) + v3(tSide * 0.0f, 0, 0);
+            sc.put(tubeOf("crossover", routePipe({a, v3(a.x, yLow, a.z), v3(a.x, yLow, zX), v3(t.x + tSide * 0.55f * B, yLow, zX),
+                                                  v3(t.x + tSide * 0.55f * B, join.y, zX), v3(t.x + tSide * 0.55f * B, join.y, join.z),
+                                                  join}, 0.40f * B), rt), M4{}, hot(live.egtGas, 0.6f));
         }
     }
 }
@@ -311,27 +437,58 @@ void buildDiesel(Scene& sc, const EngineParams& p, const EngineBits& eb, const E
                 sc.put(tubeOf("rail", {r0, r1}, 0.07f * B, 16), M4{}, kSteel);
                 for (const V3& t : bank)
                     sc.put(tubeOf("railline", spline({v3(t.x, mid.y, t.z) + off, v3(t.x, t.y + 0.18f * B, t.z) + off * 0.4f, t + v3(0, 0.04f * B, 0)}, 6), 0.018f * B, 8), M4{}, kSteel);
-                sc.put(tubeOf("pumpline", spline({head, head + v3(0, 0.1f * B, 0.25f * B), v3(r0.x, r0.y + 0.1f * B, r0.z - 0.3f * B), r0}, 10), 0.022f * B, 8), M4{}, kSteel);
+                {   // feed: from the pump up in front of the heads, over to the rail's front end (it used to cut through)
+                    const float zf = std::min(r0.z - 0.25f * B, head.z);
+                    const float yf = std::max(r0.y, eb.headTop) + 0.10f * B;
+                    sc.put(tubeOf("pumpline", spline({head, head + v3(0, 0.12f * B, -0.10f * B), v3(head.x, yf - 0.1f * B, zf),
+                                                      v3(0.5f * (head.x + r0.x), yf, zf), v3(r0.x, r0.y, r0.z - 0.12f * B), r0}, 10), 0.022f * B, 8), M4{}, kSteel);
+                }
                 if (std::fabs(lo.x - hi.x) < 1e-3f) break;
             }
         } else {
-            for (int i = 0; i < n; ++i) {
-                const float a = 2.0f * kPiF * i / std::max(1, n);
+            const bool inlinePump = std::fabs(eb.pump.x) > 0.3f * B;
+            // (lines in the order of the injectors along the engine: the nearest gets the innermost lane)
+            std::vector<int> ord(n);
+            for (int i = 0; i < n; ++i) ord[i] = i;
+            std::sort(ord.begin(), ord.end(), [&](int a, int b2) { return eb.injTop[a].z < eb.injTop[b2].z; });
+            for (int j = 0; j < n; ++j) {
+                const int i = ord[j];
+                const float a = 2.0f * kPiF * j / std::max(1, n);
                 const V3 out = head + v3(0.09f * B * std::cos(a), 0.09f * B * std::sin(a), 0);
                 const V3 t = eb.injTop[i];
-                const V3 up = v3(out.x * 0.5f + t.x * 0.5f, std::max(out.y, t.y) + 0.30f * B + 0.03f * B * i, out.z + 0.25f * B);
-                sc.put(tubeOf("hpline", spline({out, out + v3(0, 0.05f * B, 0.12f * B), up, v3(t.x, t.y + 0.30f * B, t.z), t + v3(0, 0.04f * B, 0)}, 10), 0.024f * B, 8),
-                       M4{}, kSteel);
+                const float yTop = std::max(eb.headTop, t.y) + 0.10f * B + 0.025f * B * j;
+                std::vector<V3> ctrl;
+                if (inlinePump) {
+                    const float sx = eb.pump.x < 0 ? -1.0f : 1.0f;
+                    const float xL = sx * (0.80f * B + 0.035f * B * j), yLow = t.y - 0.95f * B - 0.03f * B * j;
+                    const float zUp = t.z + 0.50f * B;   // between this cylinder's runner and the next
+                    ctrl = {out, out + v3(0, 0.05f * B, 0.12f * B), v3(xL, yLow, out.z + 0.40f * B), v3(xL, yLow, zUp - 0.25f * B),
+                            v3(xL, yLow + 0.25f * B, zUp), v3(xL, yTop - 0.10f * B, zUp), v3(0.5f * (xL + t.x), yTop, zUp - 0.10f * B),
+                            v3(t.x, yTop, t.z + 0.12f * B), v3(t.x, t.y + 0.12f * B, t.z), t + v3(0, 0.04f * B, 0)};
+                } else {   // a pump on top in the V: over to each injector above the heads
+                    ctrl = {out, out + v3(0, 0.05f * B, 0.12f * B), v3(0.5f * (out.x + t.x), yTop, out.z + 0.30f * B), v3(t.x, yTop, t.z),
+                            t + v3(0, 0.04f * B, 0)};
+                }
+                sc.put(tubeOf("hpline", spline(ctrl, 8), 0.024f * B, 8), M4{}, kSteel);
             }
         }
     }
     // glow plugs: a bus wire over their tops, glowing the app's orange while they heat
     if (eb.glowTop.size() > 1) {
-        std::vector<V3> w;
-        for (const V3& q : eb.glowTop) { w.push_back(q + v3(0, 0.02f * B, -0.08f * B)); w.push_back(q + v3(0, 0.03f * B, 0)); w.push_back(q + v3(0, 0.02f * B, 0.08f * B)); }
         Material wm = kGold;
         if (live.glowPlugOn) wm = emissive(kGold, kAccent[0] * 0.35f, kAccent[1] * 0.20f, kAccent[2] * 0.05f);
-        sc.put(tubeOf("glowbus", spline(w, 3), 0.014f * B, 6), M4{}, wm);
+        float x0 = 1e9f, x1 = -1e9f;
+        for (const V3& q : eb.glowTop) { x0 = std::min(x0, q.x); x1 = std::max(x1, q.x); }
+        const bool twoBanks = x1 - x0 > 0.8f * B;
+        for (int side = 0; side < (twoBanks ? 2 : 1); ++side) {
+            std::vector<V3> g;
+            for (const V3& q : eb.glowTop) if (!twoBanks || ((q.x >= 0.5f * (x0 + x1)) == (side == 1))) g.push_back(q);
+            if (g.size() < 2) continue;
+            std::sort(g.begin(), g.end(), [](const V3& a, const V3& b2) { return a.z < b2.z; });
+            std::vector<V3> w;
+            for (const V3& q : g) { w.push_back(q + v3(0, 0.02f * B, -0.08f * B)); w.push_back(q + v3(0, 0.03f * B, 0)); w.push_back(q + v3(0, 0.02f * B, 0.08f * B)); }
+            sc.put(tubeOf(side ? "glowbus1" : "glowbus0", spline(w, 3), 0.014f * B, 6), M4{}, wm);
+        }
     }
     // EGR: from the exhaust manifold round the front of the head into the intake, the valve body at the intake end;
     // exhaust-coloured sparks run along it while it is open
@@ -340,9 +497,34 @@ void buildDiesel(Scene& sc, const EngineParams& p, const EngineBits& eb, const E
         const float rr = clampv(p.egrValveDia_mm * 0.5f, 0.06f * B, 0.20f * B);
         const V3 a = e0.p + e0.d * (0.75f * B) + v3(0, -0.15f * B, 0);
         const V3 vlv = eb.plenum + v3(0, 0, -0.5f * eb.plenumLen + 0.25f * B) + v3(0, -0.40f * B, 0);
-        const std::vector<V3> path = spline({a, a + v3(0, 0.1f * B, -0.55f * B), v3(0.5f * (a.x + vlv.x), std::max(a.y, vlv.y) + 0.85f * B, eb.zFront - 0.55f * B),
-                                             vlv + v3(0, 0.0f, -0.45f * B), vlv}, 10);
+        // stainless tube as it is made: straight runs and rounded bends - forward from the manifold to in front of the
+        // timing drive, up, across above it, down and back into the valve's side under the plenum; a flexible bellows on
+        // the rising leg (it takes up the engine's heat growth), and a cooler body on the crossing leg if fitted
+        const float zF = eb.zFront - 0.55f * B;
+        const float yTop = std::max({a.y, vlv.y, eb.headTop}) + 0.25f * B;
+        const V3 vIn = v3(vlv.x, vlv.y + 0.10f * B, vlv.z);
+        const std::vector<V3> path = routePipe({a, v3(a.x, a.y, zF), v3(a.x, yTop, zF), v3(vlv.x, yTop, zF), v3(vIn.x, vIn.y, zF), vIn}, 0.30f * B);
         sc.put(tubeOf("egr", path, rr), M4{}, kSteel);
+        {   // bellows: corrugation rings along the middle of the rising leg
+            const Cached& ring = meshOf(key("egrbellow", {rr}), [&] {
+                std::vector<V3> c;
+                for (int k = 0; k < 20; ++k) { const float an = 2 * kPiF * k / 20; c.push_back(v3(rr * 1.18f * std::cos(an), 0, rr * 1.18f * std::sin(an))); }
+                return mesh::tube(c, std::vector<float>(c.size(), 0.25f * rr), 6, true, false); });
+            const float y0 = a.y + 0.30f * (yTop - a.y), y1 = a.y + 0.70f * (yTop - a.y);
+            for (int k = 0; k < 7; ++k) sc.put(ring, translate(v3(a.x, y0 + (y1 - y0) * k / 6.0f, zF)), kSteel);
+        }
+        if (p.egrCooler) {   // the cooler: a shell round the tube bundle, end cones, coolant hoses in and out
+            const float span = std::fabs(vlv.x - a.x), cl = std::min(1.0f * B, 0.55f * span), cr = std::max(0.22f * B, rr * 1.8f);
+            const V3 mid = v3(0.5f * (a.x + vlv.x), yTop, zF);
+            const V3 ax = v3(vlv.x > a.x ? 1.0f : -1.0f, 0, 0);
+            const Cached& shell = meshOf(key("egrcooler", {cl, cr, rr}), [&] {
+                return mesh::lathe({{rr, -0.5f * cl - 0.15f * B}, {cr, -0.5f * cl}, {cr, 0.5f * cl}, {rr, 0.5f * cl + 0.15f * B}}, 28); });
+            sc.put(shell, alongY(mid, ax), mat(0.50f, 0.52f, 0.56f, 0.6f, 0.4f));
+            for (int s2 = -1; s2 <= 1; s2 += 2) {
+                const V3 h0 = mid + ax * (s2 * 0.32f * cl) + v3(0, cr, 0);
+                sc.put(tubeOf("egrhose", routePipe({h0, h0 + v3(0, 0.18f * B, 0), h0 + v3(0, 0.18f * B, 0.45f * B)}, 0.10f * B), 0.05f * B, 10), M4{}, kRubber);
+            }
+        }
         const Cached& valve = meshOf(key("egrvalve", {B}), [&] {
             Data d = mesh::lathe({{0, 0}, {0.16f * B, 0}, {0.16f * B, 0.22f * B}, {0.10f * B, 0.30f * B}, {0, 0.30f * B}}, 28);
             mesh::append(d, mesh::box(0.06f * B, 0.08f * B, 0.06f * B), translate(v3(0, 0.36f * B, 0)));
@@ -363,11 +545,12 @@ void buildDiesel(Scene& sc, const EngineParams& p, const EngineBits& eb, const E
 void buildBoost(Scene& sc, const EngineParams& p, const EngineBits& eb, const EngineViewLive& live, float crankDeg, V3 turbineIn, V3 throttleIn,
                 V3 throttleDir) {
     const float B = eb.B;
-    // spin: the real shaft speed slowed down to something the eye can follow (and capped well below strobing)
+    // spin: the real shaft speed slowed down by the view's slow motion, like the crank (Engine view > Slow motion), and
+    // capped at 5 rev/s on screen (faster would strobe: the blades seem to stand or run backwards)
     static float spin = 0, lastT = -1;
     const float dt = lastT < 0 ? 0.0f : clampv(live.time - lastT, 0.0f, 0.1f);
     lastT = live.time;
-    spin = std::fmod(spin + dt * 2 * kPiF * std::min(live.shaftRpm / 60.0f * 0.02f, 5.0f), 2 * kPiF);
+    spin = std::fmod(spin + dt * 2 * kPiF * std::min(live.shaftRpm / 60.0f * std::max(0.0f, live.animSpeed), 5.0f), 2 * kPiF);
     const float rp = 0.20f * B;   // boost pipe radius
     // intercooler in front of the engine, if fitted: compressor -> core -> throttle (a Roots / screw blower sits on the
     // plenum and blows straight down into it: no front core)
@@ -375,7 +558,7 @@ void buildBoost(Scene& sc, const EngineParams& p, const EngineBits& eb, const En
     V3 icC = v3(0, 0, 0);
     float icHx = 0;
     if (frontIc) {
-        icC = v3(0, -0.2f * B, eb.zFront - 1.6f * B);
+        icC = v3(0, -0.2f * B, eb.zFront - (p.induction == Induction::Turbo ? 1.6f : 2.3f) * B);
         const float hx = 1.3f * B, hy = 0.7f * B, hz = 0.14f * B;
         icHx = hx + 0.16f * B;
         const Cached& core = meshOf(key("iccore", {B}), [&] { return mesh::box(hx, hy, hz); });
@@ -386,47 +569,85 @@ void buildBoost(Scene& sc, const EngineParams& p, const EngineBits& eb, const En
         sc.put(tank, translate(icC + v3(-icHx, 0, 0)), kAlu);
         sc.put(tank, translate(icC + v3(icHx, 0, 0)), kAlu);
     }
-    auto pipe = [&](const std::vector<V3>& ctrl, const char* nm) { sc.put(tubeOf(nm, spline(ctrl, 10), rp), M4{}, kAlu); };
-    auto pipeTo = [&](V3 from, V3 to, V3 fromDir, V3 toDir, const char* nm) {
-        const float d = len(to - from);
-        pipe({from, from + fromDir * (0.30f * d), to - toDir * (0.30f * d), to}, nm);
+    // boost tubing: straight runs with rounded bends (routePipe), couplers at the joints
+    auto pipe = [&](const std::vector<V3>& pts, const char* nm) {
+        sc.put(tubeOf(nm, routePipe(pts, 0.45f * B), rp), M4{}, kAlu);
+        const Cached& coupler = meshOf(key("coupler", {rp}), [&] { return mesh::lathe({{rp * 1.12f, -0.07f * B}, {rp * 1.12f, 0.07f * B}, {rp * 0.9f, 0.07f * B}, {rp * 0.9f, -0.07f * B}}, 20); });
+        sc.put(coupler, alongY(pts.back(), pts.back() - pts[pts.size() - 2]), kRubber);
     };
-    // compressor outlet -> (core ->) throttle. The core's ends take the pipes on their back faces, the compressor's side
-    // first; pipes run along the engine's side at the core's height
+    // compressor outlet -> (core ->) throttle. Out of the compressor along its outlet, forward at that height (outside the
+    // engine), across behind the core to its end tank; out of the other tank, back and across in front of the engine to
+    // the throttle's mouth. The core's inlet is on the side away from the throttle, so the two runs never cross.
     auto boostTo = [&](V3 from, V3 dir) {
-        if (!frontIc) { pipeTo(from, throttleIn, dir, throttleDir * -1.0f, "boostA"); return; }
-        const float sIn = from.x < 0 ? -1.0f : 1.0f;
-        const V3 inP = icC + v3(sIn * icHx, 0, 0.20f * B), outP = icC + v3(-sIn * icHx, 0, 0.20f * B);
-        const V3 side = v3(from.x, inP.y + 0.2f * B, 0.5f * (from.z + inP.z));
-        pipe({from, from + dir * (0.6f * B), side, inP + v3(0, 0, 0.9f * B), inP}, "boostA");
-        const V3 tin = throttleIn + throttleDir * (0.35f * B);
-        pipe({outP, outP + v3(0, 0.1f * B, 0.5f * B), v3(lerp(outP, tin, 0.6f).x, lerp(outP, tin, 0.6f).y, std::max(outP.z + 0.6f * B, tin.z)), tin, throttleIn}, "boostB");
+        const V3 qa = throttleIn + throttleDir * (0.55f * B);   // in front of the throttle's mouth
+        const V3 p1 = from + dir * (0.40f * B);
+        if (!frontIc) {
+            pipe({from, p1, v3(p1.x, p1.y, qa.z), v3(qa.x, p1.y, qa.z), qa, throttleIn}, "boostA");
+            return;
+        }
+        const float tSide = std::fabs(throttleIn.x) > 0.2f * B ? (throttleIn.x < 0 ? -1.0f : 1.0f) : (from.x < 0 ? 1.0f : -1.0f);
+        const V3 inP = icC + v3(-tSide * icHx, 0, 0.16f * B), outP = icC + v3(tSide * icHx, 0, 0.16f * B);
+        const float zb = icC.z + 0.50f * B;   // the run behind the core
+        pipe({from, p1, v3(p1.x, p1.y, zb), v3(inP.x, p1.y, zb), v3(inP.x, inP.y, zb), inP}, "boostA");
+        pipe({outP, v3(outP.x, outP.y, zb), v3(outP.x, qa.y, zb), v3(qa.x, qa.y, zb), qa, throttleIn}, "boostB");
     };
     if (p.induction == Induction::Turbo) {
-        // turbine beside the rear of the engine, its shaft across; the compressor on the outer end
-        const V3 out = norm(v3(turbineIn.x == 0 ? 1.0f : turbineIn.x, 0, 0));
-        const V3 T = turbineIn + v3(0, 0.25f * B, 0.75f * B);
-        const M4 tf = alongY(T, out);   // +y along the turbo shaft, outward
-        const Cached& tv = meshOf(key("turbvol", {B}), [&] { return voluteMesh(0.42f * B, 0.55f * B, 0.10f * B, 0.21f * B); });
-        sc.put(tv, tf, hot(live.egtGas, 0.9f));
-        const Cached& chra = meshOf(key("chra", {B}), [&] { return mesh::lathe({{0, 0}, {0.20f * B, 0}, {0.24f * B, 0.10f * B}, {0.24f * B, 0.30f * B}, {0.20f * B, 0.40f * B}, {0, 0.40f * B}}, 28); });
-        sc.put(chra, tf * translate(v3(0, 0.12f * B, 0)), kSteelDark);
-        const Cached& cv = meshOf(key("compvol", {B}), [&] { return voluteMesh(0.48f * B, 0.62f * B, 0.11f * B, 0.23f * B); });
-        const M4 cf = tf * translate(v3(0, 0.62f * B, 0));
-        sc.put(cv, cf, glassMat(0.30f, 0.78f, 0.79f, 0.82f));
-        const Cached& wh = meshOf(key("compwheel", {B}), [&] { return wheelMesh(0.36f * B, 0.30f * B, 10); });
-        sc.put(wh, cf * rotY(spin) * translate(v3(0, -0.12f * B, 0)), kSilver);
-        // compressor inlet (open, outward) and the turbine's downpipe to the tail
-        sc.put(tubeOf("compinlet", {xform(cf, v3(0, 0.10f * B, 0)), xform(cf, v3(0, 0.55f * B, 0))}, 0.24f * B), M4{}, kAlu);
-        tailWithFlame(sc, {T + v3(0, -0.1f * B, 0.35f * B), T + v3(0, -0.4f * B, 1.0f * B), T + v3(0, -0.55f * B, 2.2f * B), T + v3(0, -0.6f * B, 3.4f * B)},
-                      clampv(p.pipeDia_mm * 0.5f, 0.15f * B, 0.4f * B), live, live.egtGas, 7);
-        const V3 compOut = xform(cf, v3(0.62f * B, 0, 0.30f * B));
-        boostTo(compOut, norm(v3(0, 0.6f, -1)));
-        if (p.vgt) {   // variable geometry: the vane actuator (a vacuum can) on the turbine housing
-            const Cached& can = meshOf(key("vgtcan", {B}), [&] { return mesh::lathe({{0, 0}, {0.16f * B, 0}, {0.17f * B, 0.04f * B}, {0.17f * B, 0.16f * B}, {0, 0.18f * B}}, 24); });
-            sc.put(can, tf * translate(v3(0.0f, -0.10f * B, 0.0f)) * translate(v3(0.62f * B, 0, -0.25f * B)) * rotX(kPiF * 0.5f), kSteelDark);
+        // the turbo: shaft along the crank, turbine at the back on its inlet flange (turbineIn: the gas goes down into
+        // it), the bearing housing, the compressor in front - solid housings, the compressor wheel seen in its inlet
+        const Snail sT{0.30f * B, 0.20f * B, 0.12f * B, 0.25f * B, 0.28f * B}, sC{0.34f * B, 0.18f * B, 0.12f * B, 0.26f * B, 0.32f * B};
+        const V3 axT = v3(0, 0, 1);
+        M4 mT = snailFrame(sT, turbineIn, axT, v3(0, 1, 0));
+        V3 E, D;
+        snailPort(sT, E, D);
+        mT = translate(turbineIn - xform(mT, E)) * mT;   // the port on the flange
+        const V3 T = xform(mT, v3(0, 0, 0));
+        const Cached& tv = meshOf(key("tsnail", {B}), [&] { return snailMesh(sT); });
+        {   // a see-through housing, tinted and glowing with the exhaust heat, the turbine wheel turning in it
+            const Material hm = hot(live.egtGas, 0.9f);
+            Material gm = glassMat(0.32f, 0.62f, 0.53f, 0.48f);
+            gm.er = hm.er; gm.eg = hm.eg; gm.eb = hm.eb;
+            sc.put(tv, mT, gm);
+            const Cached& tw = meshOf(key("turbwheel", {B}), [&] { return wheelMesh(0.25f * B, 0.22f * B, 11); });
+            sc.put(tw, alongY(T + v3(0, 0, -0.10f * B), v3(0, 0, 1)) * rotY(-spin), emissive(kSteelDark, hm.er * 0.6f, hm.eg * 0.6f, hm.eb * 0.6f));
         }
-        sc.label(T + v3(0, 0.9f * B, 0), p.vgt ? "VGT turbo" : "turbo");
+        // bearing housing (CHRA) forward of the turbine, then the compressor
+        const V3 chraA = T + v3(0, 0, -sT.w);
+        const Cached& chra = meshOf(key("chra2", {B}), [&] { return mesh::lathe({{0, 0}, {0.17f * B, 0}, {0.21f * B, 0.06f * B}, {0.21f * B, 0.24f * B},
+                                                                                  {0.17f * B, 0.30f * B}, {0, 0.30f * B}}, 28); });
+        sc.put(chra, alongY(chraA, v3(0, 0, -1)), kSteelDark);
+        const V3 Cc = chraA + v3(0, 0, -(0.30f * B + sC.w));
+        const M4 mC = snailFrame(sC, Cc, v3(0, 0, -1), v3(0, 1, 0));
+        const Cached& cv = meshOf(key("csnail", {B}), [&] { return snailMesh(sC); });
+        sc.put(cv, mC, glassMat(0.30f, 0.78f, 0.79f, 0.82f));
+        // inlet: an open bell on the front face, the wheel turning inside, a short tube and the air filter
+        const V3 inA = Cc + v3(0, 0, -sC.w);
+        const Cached& bell = meshOf(key("cbell", {B}), [&] { return mesh::lathe({{0.22f * B, 0}, {0.26f * B, 0}, {0.27f * B, 0.20f * B}, {0.24f * B, 0.22f * B}, {0.22f * B, 0.03f * B}}, 28); });
+        sc.put(bell, alongY(inA, v3(0, 0, -1)), kAlu);
+        const Cached& wh = meshOf(key("compwheel", {B}), [&] { return wheelMesh(0.30f * B, 0.24f * B, 10); });
+        sc.put(wh, alongY(Cc + v3(0, 0, 0.10f * B), v3(0, 0, -1)) * rotY(spin), kSilver);
+        const V3 f0 = inA + v3(0, 0, -0.22f * B);
+        sc.put(tubeOf("cinlet", {f0, f0 + v3(0, 0, -0.25f * B)}, 0.23f * B), M4{}, kAlu);
+        const Cached& filt = meshOf(key("airfilter", {B}), [&] { return mesh::lathe({{0, 0}, {0.26f * B, 0}, {0.30f * B, 0.08f * B}, {0.30f * B, 0.42f * B}, {0.22f * B, 0.50f * B}, {0, 0.50f * B}}, 28); });
+        sc.put(filt, alongY(f0 + v3(0, 0, -0.25f * B), v3(0, 0, -1)), kRubber);
+        // downpipe: out of the turbine's back face, down and back to the silencer and the tail
+        const V3 o0 = T + v3(0, 0, sT.w);
+        const float rtl = clampv(p.pipeDia_mm * 0.5f, 0.15f * B, 0.4f * B);
+        sc.put(tubeOf("toutlet", {o0, o0 + v3(0, 0, 0.18f * B)}, 0.22f * B), M4{}, hot(live.egtGas, 0.8f));
+        {   // straight back past the flywheel, then the silencer and the tail
+            const float zb = std::max(o0.z + 0.6f * B, eb.zRear + 0.7f * B);
+            const V3 d0 = o0 + v3(0, 0, 0.18f * B);
+            tailWithFlame(sc, {d0, v3(d0.x, d0.y - 0.15f * B, zb), v3(d0.x, d0.y - 0.35f * B, zb + 1.6f * B), v3(d0.x, d0.y - 0.40f * B, zb + 3.2f * B),
+                               v3(d0.x, d0.y - 0.40f * B, zb + 4.4f * B)}, rtl, live, live.egtGas, 7, 1.6f * B);
+        }
+        V3 cE, cD;
+        snailPort(sC, cE, cD);
+        boostTo(xform(mC, cE), norm(xdir(mC, cD)));
+        if (p.vgt) {   // variable geometry: the vane actuator (a vacuum can) on the turbine housing
+            const Cached& can = meshOf(key("vgtcan", {B}), [&] { return mesh::lathe({{0, 0}, {0.13f * B, 0}, {0.14f * B, 0.04f * B}, {0.14f * B, 0.15f * B}, {0, 0.17f * B}}, 24); });
+            const V3 outSide = v3(T.x >= 0 ? 1.0f : -1.0f, 0, 0);
+            sc.put(can, alongY(T + outSide * (0.62f * B) + v3(0, 0.10f * B, 0), outSide), kSteelDark);
+        }
+        sc.label(T + v3(0, 0.95f * B, 0), p.vgt ? "VGT turbo" : "turbo");
         return;
     }
     // supercharger: crank-driven by a belt
@@ -434,22 +655,37 @@ void buildBoost(Scene& sc, const EngineParams& p, const EngineBits& eb, const En
     const float ang = -crankDeg * kDegF * (p.scType == Supercharger::Centrifugal ? std::min(ratio, 3.0f) : ratio);
     const V3 cp = eb.crankFront;
     if (p.scType == Supercharger::Centrifugal) {
-        const V3 S = cp + v3(1.25f * B, 1.45f * B, 0.55f * B);
-        const M4 sf = alongY(S, v3(0, 0, -1));   // shaft forward
-        const Cached& cv = meshOf(key("compvol", {B}), [&] { return voluteMesh(0.48f * B, 0.62f * B, 0.11f * B, 0.23f * B); });
-        sc.put(cv, sf, glassMat(0.30f, 0.78f, 0.79f, 0.82f));
-        const Cached& wh = meshOf(key("compwheel", {B}), [&] { return wheelMesh(0.36f * B, 0.30f * B, 10); });
-        sc.put(wh, sf * rotY(spin) * translate(v3(0, -0.12f * B, 0)), kSilver);
-        const Cached& body = meshOf(key("scgearcase", {B}), [&] { return mesh::lathe({{0, 0}, {0.30f * B, 0}, {0.30f * B, 0.45f * B}, {0, 0.45f * B}}, 28); });
-        sc.put(body, sf * translate(v3(0, -0.55f * B, 0)), kSteelDark);
+        // a centrifugal head unit (ProCharger / Vortech style) low beside the crankcase on its bracket: the pulley in the
+        // crank pulley's plane, the gear case in front of it, the compressor housing ahead of that, its outlet up, the
+        // inlet turned outboard to its filter; a straight belt from the crank pulley
+        const float side = -1.0f;
+        const V3 S = cp + v3(side * 1.75f * B, 0.40f * B, 0.0f);
         const V3 pul = v3(S.x, S.y, cp.z);
         const Cached& pulley = meshOf(key("scpulley", {B}), [&] { return mesh::extrude(mesh::gearOutline(0.26f * B, 0.28f * B, 36), -0.08f * B, 0.08f * B); });
         sc.put(pulley, translate(pul) * rotZ(ang * 0.3f), kSteel);
         const Cached& crankPul = meshOf(key("crankpulley", {B}), [&] { return mesh::extrude(mesh::gearOutline(0.40f * B, 0.42f * B, 40), -0.08f * B, 0.08f * B); });
         sc.put(crankPul, translate(cp) * rotZ(-crankDeg * kDegF), kSteel);
         sc.put(tubeOf("scbelt", beltAround(cp, 0.43f * B, pul, 0.29f * B), 0.025f * B, 8), M4{}, kRubber);
-        boostTo(xform(sf, v3(0.62f * B, 0, 0.30f * B)), v3(0, 0.3f, 1));
-        sc.label(S + v3(0, 0.8f * B, 0), "supercharger");
+        const Cached& body = meshOf(key("scgearcase2", {B}), [&] { return mesh::lathe({{0, 0}, {0.26f * B, 0}, {0.30f * B, 0.05f * B}, {0.30f * B, 0.36f * B}, {0.24f * B, 0.42f * B}, {0, 0.42f * B}}, 28); });
+        sc.put(body, alongY(pul + v3(0, 0, -0.09f * B), v3(0, 0, -1)), kSteelDark);
+        const Snail sC{0.34f * B, 0.18f * B, 0.12f * B, 0.26f * B, 0.32f * B};
+        const V3 Cc = pul + v3(0, 0, -(0.51f * B + sC.w));
+        const M4 mC = snailFrame(sC, Cc, v3(0, 0, -1), v3(0, 1, 0));
+        const Cached& cv = meshOf(key("csnail", {B}), [&] { return snailMesh(sC); });
+        sc.put(cv, mC, glassMat(0.30f, 0.78f, 0.79f, 0.82f));
+        const V3 inA = Cc + v3(0, 0, -sC.w);
+        const Cached& bell = meshOf(key("cbell", {B}), [&] { return mesh::lathe({{0.22f * B, 0}, {0.26f * B, 0}, {0.27f * B, 0.20f * B}, {0.24f * B, 0.22f * B}, {0.22f * B, 0.03f * B}}, 28); });
+        sc.put(bell, alongY(inA, v3(0, 0, -1)), kAlu);
+        const Cached& wh = meshOf(key("compwheel", {B}), [&] { return wheelMesh(0.30f * B, 0.24f * B, 10); });
+        sc.put(wh, alongY(Cc + v3(0, 0, 0.10f * B), v3(0, 0, -1)) * rotY(spin), kSilver);
+        const V3 e0 = inA + v3(0, 0, -0.20f * B), e1 = e0 + v3(0, 0, -0.30f * B), e2 = e1 + v3(side * 0.45f * B, 0, 0);
+        sc.put(tubeOf("scinlet", routePipe({e0, e1, e2}, 0.25f * B), 0.23f * B), M4{}, kAlu);
+        const Cached& filt = meshOf(key("airfilter", {B}), [&] { return mesh::lathe({{0, 0}, {0.26f * B, 0}, {0.30f * B, 0.08f * B}, {0.30f * B, 0.42f * B}, {0.22f * B, 0.50f * B}, {0, 0.50f * B}}, 28); });
+        sc.put(filt, alongY(e2, v3(side, 0, 0)), kRubber);
+        V3 cE, cD;
+        snailPort(sC, cE, cD);
+        boostTo(xform(mC, cE), norm(xdir(mC, cD)));
+        sc.label(Cc + v3(0, 0.85f * B, 0), "supercharger");
         return;
     }
     // Roots / twin-screw on the plenum
@@ -472,7 +708,7 @@ void buildBoost(Scene& sc, const EngineParams& p, const EngineBits& eb, const En
     sc.put(pulley, translate(pul) * rotZ(ang), kSteel);
     const Cached& crankPul = meshOf(key("crankpulley", {B}), [&] { return mesh::extrude(mesh::gearOutline(0.40f * B, 0.42f * B, 40), -0.08f * B, 0.08f * B); });
     sc.put(crankPul, translate(cp) * rotZ(-crankDeg * kDegF), kSteel);
-    sc.put(tubeOf("scbelt", beltAround(cp, 0.43f * B, pul, 0.29f * B), 0.025f * B, 8), M4{}, kRubber);
+    blowerBelt(sc, cp, 0.43f * B, pul, 0.29f * B, 1.0f, false, B, ang * 0.3f);
     sc.label(S + v3(0, 0.75f * B, 0), screw ? "twin-screw" : "Roots");
     (void)throttleIn;
 }
@@ -725,7 +961,8 @@ void buildRotaryEngine(Scene& sc, const EngineParams& p, const float phases[kMax
     // exhaust: the rotors' pipes join and run back to the tail (rotaries pop: the flame shows there)
     const V3 col = v3((float)Rout + 0.40f * R, -(float)(Rin - e) - 0.55f * R, zB + 0.35f * R);
     for (const V3& q : exEnds) sc.put(tubeOf("rexh2", spline({q, q + v3(0.05f * R, -0.1f * R, 0.25f * R), col}, 8), rRun * 1.1f), M4{}, hot(live.egtGas));
-    turbineIn = col;
+    turbineIn = col + v3(0, -0.45f * R, 0);
+    if (turbo) sc.put(tubeOf("rexhdrop", {col, turbineIn}, rRun * 1.1f), M4{}, hot(live.egtGas));
     if (!turbo)
         tailWithFlame(sc, {col, col + v3(0, -0.10f * R, 0.5f * R), col + v3(0, -0.20f * R, 1.6f * R), col + v3(0, -0.22f * R, 2.6f * R)}, 0.16f * R, live,
                       live.egtGas, 11);

@@ -1,4 +1,5 @@
 #pragma once
+#include <tuple>
 // Shared pieces of the parametric engine model (EngineModel.cpp builds the core; EngineModelParts.cpp the intake,
 // exhaust, forced induction, two-stroke and rotary parts).
 #include "ui/EngineModel.h"
@@ -44,6 +45,7 @@ struct EngineBits {
     float zFront = 0, zRear = 0, B = 80, r = 40;
     bool vee = false, boxer = false;
     V3 crankFront;              // the crank's front end (accessory belt pulley)
+    float headTop = 0;          // top of the heads / valvetrain (piston engines): lines and wires route over it
     V3 plenum;                  // intake plenum centre (set by buildIntake) and its length along the crank
     float plenumLen = 0;
     // diesel: the injection pump's pulley (front plane), the injectors' and glow plugs' tops
@@ -52,6 +54,8 @@ struct EngineBits {
 };
 
 // intake runners / plenum / throttle (returns the throttle inlet: where boost piping ends)
+// a belt round pulleys (x, y, r) in the plane z; force: +1 wrap outside, -1 back side (an idler pressing on it), 0 auto
+std::vector<V3> serpentine(const std::vector<std::tuple<float, float, float>>& pulleys, float z, const std::vector<int>& force);
 V3 buildIntake(Scene& sc, const EngineParams& p, EngineBits& eb, V3& inletDir);
 // headers, collector(s) and tail pipe(s); with a turbo the first collector feeds the turbine instead
 void buildExhaust(Scene& sc, const EngineParams& p, const EngineBits& eb, const EngineViewLive& live, bool turbo, V3& turbineIn);

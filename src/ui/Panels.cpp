@@ -1731,6 +1731,7 @@ void App::panelEngineView() {
     if (isDiesel(p_) && tel_.running) live.advance = tel_.soi;   // start of injection, deg BTDC
     live.time = (float)ImGui::GetTime();
     live.shaftRpm = tel_.running ? tel_.shaftRpm : 0.0f;
+    live.animSpeed = animSpeed_;
     live.boostBar = tel_.boostBar;
     live.egtGas = tel_.running ? tel_.egtGas : 0.0f;
     if (tel_.running && tel_.egtPerCyl)
