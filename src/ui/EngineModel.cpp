@@ -309,8 +309,15 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
 
     // ---- crankshaft: main journals between the throws, gold main bearings, front sprocket, rear flywheel
     {
-        const Cached& mMain = meshOf(key("mainjournal", {B, zFront, zRear}), [&] { return rodZ(0.25f * B, zFront - 0.2f * B, zRear + 0.2f * B, 32); });
+        // main journals from the first main bearing back; in front of it the snout (thinner: the timing sprocket and
+        // the pulley sit on it - the full-size journal used to swallow the crank sprocket)
+        const float zMain0 = zOf0 - 0.5f * pitch - 0.06f * B;
+        const Cached& mMain = meshOf(key("mainjournal", {B, zMain0, zRear}), [&] { return rodZ(0.25f * B, zMain0, zRear + 0.2f * B, 32); });
         sc.put(mMain, rotZ(crankRad), kSteel);
+        if (!two) {
+            const Cached& mSnout = meshOf(key("cranksnout", {B, zFront, zMain0}), [&] { return rodZ(0.11f * B, zFront - 0.34f * B, zMain0 + 0.01f * B, 24); });
+            sc.put(mSnout, rotZ(crankRad), kSteel);
+        }
         const Cached& mBear = meshOf(key("mainbear", {B}), [&] { return mesh::extrude(mesh::circleOutline(0.30f * B, 28), -0.06f * B, 0.06f * B); });
         for (int c = 0; c <= cols; ++c) {
             const float z = zOf0 + (c - 0.5f) * pitch;
@@ -634,7 +641,7 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
                 camSprR = std::min(camSprR, (len(v3(ca.x - cb.x, ca.y - cb.y, 0)) - gap) / (sprCentres[a].second + sprCentres[b2].second));
             }
         }
-        camSprR = std::max(camSprR, 0.12f * B);
+        camSprR = std::max(camSprR, 0.30f * B);   // (the crank sprocket, half of it, stays well over the 0.11 bore snout)
     }
     const float crankSprR = 0.5f * camSprR;
     pulleys.push_back({0, 0, crankSprR});
@@ -647,6 +654,16 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
         const bool gears = drive == CamDrive::Gears;
         const Cached& mCrankSpr = meshOf(key("crankspr", {crankSprR, B}), [&] { return gearMesh(crankSprR, 0.04f * B, 20, 0.12f * B, 0.12f * B); });
         if (!two) sc.put(mCrankSpr, translate(v3(0, 0, zFront)) * rotZ(crankRad), kSteel);
+        if (!two && p.induction != Induction::Supercharger) {
+            // the accessory belt pulley / harmonic balancer: a ribbed rim, a rubber ring, the hub
+            const Cached& mPul = meshOf(key("frontpulley", {B}), [&] {
+                Data d = mesh::extrude(mesh::gearOutline(0.33f * B, 0.345f * B, 48), -0.07f * B, 0.07f * B);
+                mesh::append(d, mesh::extrude(mesh::circleOutline(0.15f * B, 24), -0.10f * B, 0.10f * B), M4{});
+                return d; });
+            sc.put(mPul, translate(v3(0, 0, zFront - 0.25f * B)) * rotZ(crankRad), kSteelDark);
+            const Cached& mDamp = meshOf(key("damperring", {B}), [&] { return mesh::extrude(mesh::circleOutline(0.27f * B, 36), -0.075f * B, 0.075f * B); });
+            sc.put(mDamp, translate(v3(0, 0, zFront - 0.25f * B)), kRubber);
+        }
         for (const auto& sp : sprocketsAt) {
             const Cached& mCamSpr = meshOf(key("camspr", {sp.second, B}), [&] { return gearMesh(sp.second, 0.04f * B, (int)(sp.second / (0.012f * B)), 0.12f * B, 0.10f * B); });
             sc.put(mCamSpr, translate(sp.first) * rotZ(crankRad * 0.5f * (gears ? -1.0f : 1.0f)), kSteel);
