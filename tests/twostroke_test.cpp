@@ -5,6 +5,7 @@
 #include "ecu/BaseMap.h"
 #include "sim/Scavenge.h"
 #include "sim/Squish.h"
+#include "sim/Duct.h"
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -316,6 +317,30 @@ int main() {
         }
         std::printf("  %.0f C (measured 517, Blair's own simulation ~540)\n", tm / n - 273.15);
         CHECK(std::fabs(tm / n - 273.15 - 517.0) < 100.0, "within 100 K of the thermocouple");
+    }
+
+    // ---------------- duct wall temperature: hot gas at rest in a pipe closed at the port must not heat itself
+    // (the wall followed sum(R T V) / sum(m) = T / rho instead of T: in exhaust gas the wall ran hotter than the gas,
+    // the gas thinned, the wall got hotter - after a minute of light load the tail of the pipe ran away to NaN)
+    {
+        std::printf("[duct wall] 900 K gas at rest for 3 s: the wall stays below the gas, the gas does not heat up\n");
+        const double ambK = 293.15, T0 = 900.0, dt = 1.0 / 48000.0, A = kPi * 0.25 * 0.04 * 0.04;
+        std::vector<double> xs(13), as(13, A);
+        for (int k = 0; k <= 12; ++k) xs[k] = 1.0 * k / 12;
+        Duct d;
+        d.build(xs, as, T0, kPatm, 1);
+        const double rhoW = kPatm / (kR * T0), cW = std::sqrt(kGamma * kR * T0);
+        for (double t = 0; t < 3.0; t += dt) {
+            d.solvePort(0.0, kPatm, T0);
+            d.setOutlet(0.0, rhoW * cW / A, rhoW, T0, 0.0, 1.0);
+            d.solveOutlet(dt);
+            d.step(dt, ambK);
+        }
+        double tMax = 0;
+        for (int i = 0; i < d.cells(); ++i) tMax = std::max(tMax, d.cellT(i));
+        std::printf("  wall %.0f K, hottest cell %.0f K\n", d.wallT(), tMax);
+        CHECK(std::isfinite(tMax) && tMax <= T0 + 2.0, "no cell heats above the gas it started with");
+        CHECK(d.wallT() <= ambK + 0.55 * (T0 - ambK) + 2.0, "the wall sits at ambient + 0.55 (gas - ambient) or below");
     }
 
     // ---------------- light load: four-stroking (residual feedback misfires - SAE 830091), not at full load

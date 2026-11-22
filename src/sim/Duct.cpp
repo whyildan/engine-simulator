@@ -260,14 +260,15 @@ void Duct::step(double dtCaller, double ambientK) {
     const double h = dt / sub;
     std::vector<Prim>& W = W_;
     std::vector<Prim>& D = D_;
-    double smax = 1.0, tm = 0;
+    double smax = 1.0, tm = 0, mm = 0;
     for (int s = 0; s < sub; ++s) {
         for (int i = 0; i < n; ++i) W[i] = prim(i);
         if (s == 0)
             for (int i = 0; i < n; ++i) {
                 const double pr = W[i].p / W[i].r;
                 smax = std::max(smax, std::fabs(W[i].u) + std::sqrt(g * pr));
-                tm += pr * vol_[i];   // (mass x temperature x R)
+                const double mi = W[i].r * vol_[i];
+                tm += pr * mi; mm += mi;   // (mass x temperature x R, and the mass: a mass-weighted mean)
             }
         // limited slopes (primitive variables, none in the end cells) and the Hancock half step (primitive form, with
         // the area change: d(rho)/dt gets -rho u dlnA/dx, dp/dt -g p u dlnA/dx), in one pass
@@ -333,11 +334,24 @@ void Duct::step(double dtCaller, double ambientK) {
     oAccM_ = oAccMu_ = oAccE_ = oAccF_ = oAccB_ = 0;
     if (++cfAge_ >= 16) cfAge_ = 0;
     smax_ = smax;
-    // wall temperature: follows the mean gas temperature slowly
-    double mm = 0;
-    for (int i = 0; i < n; ++i) mm += m_[i];
+    // wall temperature: follows the mass-weighted mean gas temperature slowly. (It was sum(R T V) / sum(m) - T / rho,
+    // not T: in hot exhaust (rho ~0.35) the "wall" ran hotter than the gas, heated it, the gas thinned and the wall
+    // got hotter still - after a minute or so of light load the tail of a tuned pipe ran away to 1e4 K and NaN.)
     tMean_ += (tm / (kR * std::max(1e-12, mm)) - tMean_) * std::min(1.0, dt / 20.0);
     tWall_ = ambientK + 0.55 * (tMean_ - ambientK);
+    // safety net: a duct state gone non-finite (it would poison the waveguide and every audio filter after it, for
+    // good) starts again at rest - ambient pressure, the wall temperature
+    double chk = tMean_;
+    for (int i = 0; i < n; ++i) chk += e_[i] + mom_[i];
+    if (!std::isfinite(chk)) {
+        if (!std::isfinite(tMean_)) tMean_ = ambientK;
+        tWall_ = ambientK + 0.55 * (tMean_ - ambientK);
+        for (int i = 0; i < n; ++i) {
+            m_[i] = p0_ / (kR * tWall_) * vol_[i]; mom_[i] = 0; e_[i] = p0_ / gm1 * vol_[i];
+            mf_[i] = 0; mb_[i] = m_[i];
+        }
+        smax_ = 1000.0; ubPort_ = ubOut_ = 0;
+    }
 }
 
 } // namespace es

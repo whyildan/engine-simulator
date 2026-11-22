@@ -1,6 +1,7 @@
 #include "sim/Simulator.h"
 #include "sim/DataLog.h"
 #include <chrono>
+#include <cmath>
 #include <thread>
 #include <algorithm>
 #include "audio/ImpulseResponses.h"
@@ -164,7 +165,7 @@ void Simulator::render(float* out, int frames) {
                 if (fade_ >= 1) { fade_ = 1; old_.reset(); }
             }
             for (int c = 0; c < 5; ++c) {
-                double x = v[c];
+                double x = std::isfinite(v[c]) ? v[c] : 0.0;   // (a NaN would stick in every filter after this, for good)
                 if (os_ > 1) x = dec_[c][1].tick(dec_[c][0].tick(x));
                 s[c] = x;
             }
