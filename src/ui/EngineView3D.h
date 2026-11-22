@@ -24,7 +24,8 @@ struct EngineViewLive {
     // GPU view extras
     float time = 0;             // s (wall clock: spinning turbo / supercharger, flicker)
     float shaftRpm = 0;         // turbo / supercharger shaft
-    float animSpeed = 0.02f;    // the view's slow motion (the crank angle runs at rpm x this): the turbo shaft too
+    float animSpeed = 0.02f;
+    float throttle = 0;         // throttle opening 0..1 (a carburettor's slide, a throttle body's plate)    // the view's slow motion (the crank angle runs at rpm x this): the turbo shaft too
     float boostBar = 0;
     float egtC[kMaxCyl] = {};   // exhaust gas temperature per cylinder (headers glow), 0 = use egtGas
     float egtGas = 0;

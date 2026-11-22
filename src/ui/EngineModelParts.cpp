@@ -755,22 +755,99 @@ void buildTwoStrokeCyl(Scene& sc, const EngineParams& p, const M4& cf, double ph
     const float ccHx = std::max(1.45f * r, 0.62f * B), ccY0 = -1.45f * r, ccY1 = std::min(1.1f * r, yBdc - 0.45f * B);
     const Cached& cc = meshOf(key("2tcc", {ccHx, ccY0, ccY1, B}), [&] { return mesh::extrude(mesh::roundedRect(ccHx, 0.5f * (ccY1 - ccY0), 0.35f * B), -0.55f * B, 0.55f * B); });
     sc.put(cc, cf * translate(v3(0, 0.5f * (ccY0 + ccY1), 0)), glassMat(glassA * 0.8f));
-    // reed: open while the rising piston draws the crankcase down (~210 deg .. 40 deg after TDC), lagging behind
+    // Inlet, as two-stroke motorcycles have it (the exhaust in front, +x; the inlet behind, -x):
+    //  - reed valve: the reed cage in the crankcase mouth at the back of the cylinder base, its petals pointing in;
+    //    a rubber inlet boot rising backwards to the carburettor
+    //  - piston port: the port in the back of the barrel, low down where the skirt uncovers it; a short boot, the carb
+    //  - disc valve: the port in the side of the crankcase under a cover, the carburettor out sideways along the crank
+    //    (a Rotax / MZ racer, Yamaha's rotary-valve singles)
+    // then a round-slide carburettor (slide tower on top, float bowl under; the slide lifts with the throttle) or, on an
+    // EFI engine, a throttle body with its injector; an air boot to the air box behind (one box along the engine).
+    const float dCarb = clampv((p.fuelSystem == FuelSystem::EFI ? p.throttleBore_mm : p.venturi_mm), 0.25f * B, 0.75f * B);
+    const float rBoot = 0.5f * dCarb + 0.03f * B;
     double u = wrapPos(phi - 210.0, 360.0);
-    const float open = u < 190.0 ? (float)std::pow(std::sin(kPi * u / 190.0), 0.7) : 0.0f;
-    const V3 rb = v3(-ccHx - 0.05f * B, 0.15f * r, 0);
-    const Cached& block = meshOf(key("2treed", {B}), [&] { return mesh::extrude({{0, -0.32f * B}, {0.30f * B, 0}, {0, 0.32f * B}, {-0.06f * B, 0.32f * B}, {-0.06f * B, -0.32f * B}}, -0.30f * B, 0.30f * B); });
-    sc.put(block, cf * translate(rb), kSteelDark);
-    const Cached& petal = meshOf(key("2tpetal", {B}), [&] { return mesh::box(0.19f * B, 0.005f * B, 0.27f * B); });
-    for (int s = -1; s <= 1; s += 2) {
-        const float a0 = s * 0.82f, a = a0 + s * open * 0.30f;   // petal angle: lies on the block, swings off it
-        sc.put(petal, cf * translate(rb + v3(0, s * 0.32f * B, 0)) * rotZ(-a) * translate(v3(0.19f * B, 0, 0)), mat(0.18f, 0.18f, 0.2f, 0.1f, 0.5f));
+    float open = u < 190.0 ? (float)std::pow(std::sin(kPi * u / 190.0), 0.7) : 0.0f;   // reed: open while the piston rises
+    V3 mouth, dirOut;   // where the tract leaves the engine (cylinder frame) and its outward direction
+    if (p.tsInlet == 2) {
+        // disc valve on the side of the crankcase away from the flywheel (-z): the disc turning with the crank under its
+        // cover (the flywheel / ignition sit on the other side, as on a disc-valve racer)
+        const float zc = -(0.55f * B + 0.06f * B);
+        const Cached& disc = meshOf(key("2tdisc", {B}), [&] {
+            Poly o;
+            for (int k = 0; k <= 40; ++k) { const float an = 0.6f * kPiF + 1.4f * kPiF * k / 40; o.push_back({0.55f * B * std::cos(an), 0.55f * B * std::sin(an)}); }
+            o.push_back({0, 0});
+            return mesh::extrude(o, -0.01f * B, 0.01f * B); });
+        sc.put(disc, cf * translate(v3(0, 0, zc)) * rotZ(-crankDeg * kDegF), kSteel);
+        const Cached& cover = meshOf(key("2tdisccover", {B}), [&] { return mesh::lathe({{0, 0}, {0.62f * B, 0}, {0.64f * B, 0.03f * B}, {0.64f * B, 0.08f * B}, {0, 0.09f * B}}, 40); });
+        sc.put(cover, cf * alongY(v3(0, 0, zc - 0.015f * B), v3(0, 0, -1)), glassMat(glassA * 0.9f));
+        mouth = v3(-0.30f * B, 0.25f * r, zc - 0.10f * B);
+        dirOut = norm(v3(-0.25f, 0.10f, -1.0f));
+        const double sinceOpen = wrapPos(phi + p.tsInletOpen, 360.0);
+        open = sinceOpen < p.tsInletOpen + p.tsInletClose ? 1.0f : 0.0f;
+    } else if (p.tsInlet == 1) {
+        // piston port: low in the back of the barrel
+        mouth = v3(-(0.5f * B + wall), std::max(ccY1 + 0.25f * B, yBdc - 0.35f * B), 0);
+        dirOut = norm(v3(-1.0f, 0.18f, 0));
+        const Cached& flange = meshOf(key("2tportfl", {B, rBoot}), [&] { return mesh::lathe({{rBoot * 0.9f, 0}, {rBoot * 1.35f, 0}, {rBoot * 1.35f, 0.06f * B}, {rBoot * 0.9f, 0.06f * B}}, 24); });
+        sc.put(flange, cf * alongY(mouth, dirOut), kSteelDark);
+        const double sinceOpen = wrapPos(phi + p.tsInletOpen, 360.0);
+        open = sinceOpen < 2.0 * p.tsInletOpen ? 1.0f : 0.0f;
+    } else {
+        // reed cage in the crankcase mouth behind the cylinder base, pointing down into the crankcase
+        const V3 rb = v3(-(0.5f * B + wall) - 0.12f * B, ccY1 + 0.05f * B, 0);
+        const V3 into = norm(v3(0.75f, -0.66f, 0));
+        const float ang = std::atan2(into.y, into.x);
+        const Cached& block = meshOf(key("2treed2", {B}), [&] { return mesh::extrude({{0, -0.26f * B}, {0.30f * B, 0}, {0, 0.26f * B}, {-0.07f * B, 0.26f * B}, {-0.07f * B, -0.26f * B}}, -0.28f * B, 0.28f * B); });
+        sc.put(block, cf * translate(rb) * rotZ(ang), kSteelDark);
+        const Cached& petal = meshOf(key("2tpetal2", {B}), [&] { return mesh::box(0.16f * B, 0.005f * B, 0.25f * B); });
+        for (int sgn = -1; sgn <= 1; sgn += 2) {
+            const float a0 = sgn * 0.70f, a = a0 + sgn * open * 0.30f;   // the petals lie on the cage and swing off it
+            sc.put(petal, cf * translate(rb) * rotZ(ang) * translate(v3(0, sgn * 0.26f * B, 0)) * rotZ(-a) * translate(v3(0.16f * B, 0, 0)), mat(0.18f, 0.18f, 0.2f, 0.1f, 0.5f));
+        }
+        mouth = rb - into * (0.09f * B);
+        dirOut = norm(v3(-1.0f, 0.45f, 0));
     }
-    const std::vector<V3> inl = {v3(rb.x - 0.05f * B, rb.y, 0), v3(rb.x - 0.55f * B, rb.y + 0.10f * B, 0), v3(rb.x - 0.95f * B, rb.y + 0.35f * B, 0)};
-    std::vector<V3> inw;
-    for (const V3& q : inl) inw.push_back(xform(cf, q));
-    sc.put(tubeOf("2tintake", spline(inw, 6), clampv(p.throttleBore_mm * 0.5f, 0.12f * B, 0.30f * B)), M4{}, kAlu);
-    if (open > 0.2f) for (int d = 0; d < 4; ++d) sc.glow(lerp(inw[0], inw[2], rnd(idx + 50, d)), 0.05f * B, kCharge[0], kCharge[1], kCharge[2], 0.5f * open);
+    // the tract in world space: boot, carburettor / throttle body, air boot, the air box
+    const V3 mW = xform(cf, mouth), dW = norm(xdir(cf, dirOut));
+    const V3 upW = norm(xdir(cf, v3(0, 1, 0)) - dW * dot(xdir(cf, v3(0, 1, 0)), dW));
+    const float lBoot = 0.40f * B, lCarb = 1.25f * dCarb, lAir = 0.35f * B;
+    const V3 c0 = mW + dW * lBoot, c1 = c0 + dW * lCarb, a1 = c1 + dW * lAir;
+    sc.put(tubeOf("2tboot", {mW, c0}, rBoot, 18), M4{}, kRubber);
+    const bool efi = p.fuelSystem == FuelSystem::EFI;
+    const Cached& body = meshOf(key("2tcarbbody", {dCarb, lCarb}), [&] {
+        return mesh::lathe({{0.5f * dCarb, 0}, {0.5f * dCarb + 0.12f * dCarb, 0}, {0.5f * dCarb + 0.20f * dCarb, 0.15f * lCarb},
+                            {0.5f * dCarb + 0.20f * dCarb, 0.85f * lCarb}, {0.5f * dCarb + 0.12f * dCarb, lCarb}, {0.5f * dCarb, lCarb}}, 28); });
+    sc.put(body, alongY(c0, dW), kAlu);
+    const V3 mid = c0 + dW * (0.5f * lCarb);
+    if (!efi) {
+        // round-slide carburettor: the slide tower on top, the float bowl under, the slide lifting with the throttle
+        const Cached& tower = meshOf(key("2ttower", {dCarb}), [&] { return mesh::lathe({{0, 0}, {0.42f * dCarb, 0}, {0.42f * dCarb, 0.85f * dCarb}, {0.36f * dCarb, 0.95f * dCarb}, {0, 0.95f * dCarb}}, 24); });
+        sc.put(tower, alongY(mid + upW * (0.55f * dCarb), upW), kAlu);
+        const Cached& bowl = meshOf(key("2tbowl", {dCarb}), [&] { return mesh::lathe({{0, 0}, {0.48f * dCarb, 0}, {0.50f * dCarb, 0.55f * dCarb}, {0, 0.60f * dCarb}}, 24); });
+        sc.put(bowl, alongY(mid - upW * (0.62f * dCarb), upW * -1.0f), kAlu);
+        const float th = clampv(live.throttle, 0.0f, 1.0f);
+        const Cached& slide = meshOf(key("2tslide", {dCarb}), [&] { return mesh::box(0.36f * dCarb, 0.45f * dCarb, 0.08f * dCarb); });
+        sc.put(slide, alongY(mid + upW * ((0.05f + 0.95f * th) * 0.5f * dCarb), upW) * translate(v3(0, -0.45f * dCarb, 0)) * rotY(std::atan2(dW.x, dW.z)), kSteel);
+        // fuel line to the bowl
+        sc.put(tubeOf("2tfuel", spline({mid - upW * (0.30f * dCarb) + cross(dW, upW) * (0.45f * dCarb), mid - upW * (0.1f * dCarb) + cross(dW, upW) * (0.9f * dCarb),
+                                        mid + upW * (0.9f * dCarb) + cross(dW, upW) * (1.0f * dCarb)}, 6), 0.025f * B, 8), M4{}, kRubber);
+    } else {
+        // throttle body: the plate turning with the throttle, the injector on top
+        const float th = clampv(live.throttle, 0.0f, 1.0f);
+        const Cached& plate = meshOf(key("2tplate", {dCarb}), [&] { return mesh::extrude(mesh::circleOutline(0.49f * dCarb, 24), -0.01f * dCarb, 0.01f * dCarb); });
+        sc.put(plate, alongY(mid, dW) * rotX(0.5f * kPiF * (1.0f - th)), kSteel);
+        const Cached& inj = meshOf(key("2tinj", {dCarb}), [&] { return mesh::lathe({{0, 0}, {0.10f * dCarb, 0}, {0.14f * dCarb, 0.30f * dCarb}, {0.14f * dCarb, 0.65f * dCarb}, {0, 0.70f * dCarb}}, 16); });
+        sc.put(inj, alongY(c0 + dW * (0.2f * lCarb) + upW * (0.55f * dCarb), upW), kSteelDark);
+    }
+    sc.put(tubeOf("2tairboot", {c1, a1}, 0.5f * dCarb + 0.06f * B, 18), M4{}, kRubber);
+    {   // the air box: a box segment one cylinder pitch long (side by side they make one box along the engine)
+        const float hz = 0.66f * B * 1.32f, hy = 0.55f * B, hx = 0.55f * B;
+        const Cached& box = meshOf(key("2tairbox", {B}), [&] { return mesh::box(hx, hy, hz); });
+        const V3 cB = a1 + dW * hx;
+        // (a disc valve's carburettor points sideways: its box sits at its end)
+        sc.put(box, translate(p.tsInlet == 2 ? cB : v3(cB.x, cB.y, xform(cf, v3(0, 0, 0)).z)), glassMat(glassA * 1.2f, 0.32f, 0.33f, 0.36f));
+    }
+    if (open > 0.2f) for (int d = 0; d < 5; ++d) sc.glow(lerp(c1, mW, rnd(idx + 50, d)), 0.05f * B, kCharge[0], kCharge[1], kCharge[2], 0.5f * open);
     (void)crownTop; (void)crankDeg;
 
     // exhaust: the expansion chamber (Blair's design, as the simulation builds it) or a plain header pipe
@@ -791,7 +868,17 @@ void buildTwoStrokeCyl(Scene& sc, const EngineParams& p, const M4& cf, double ph
     // underneath it beside the engine, up behind the cylinder and back under the seat; what the bends do not use runs
     // on straight back. (The pipe is ~3-4 times the engine's height long: folded, the view can still show the engine.)
     const float k1 = std::min(segLen[0], 1.0f * B);
-    const float yLow = -1.45f * r - 0.95f * B, side = (idx % 2 == 0 ? 1.0f : -1.0f) * 1.1f * B;
+    // the folded part runs along the outside of the engine and its air box: the cylinders on one half to one side,
+    // the rest to the other, side by side in lanes (a triple: two pipes on one side, one on the other)
+    float bellyR = 0;
+    for (float d : segD) bellyR = std::max(bellyR, 0.5f * d);
+    const int nCyl = std::max(1, (int)p.cylinders);
+    const float zc = xform(cf, v3(0, 0, 0)).z;
+    const float sgnSide = idx < 0.5f * nCyl - 0.01f && nCyl > 1 ? -1.0f : 1.0f;
+    const float lane = std::floor(std::fabs(idx - 0.5f * (nCyl - 1)) + 0.01f) * (nCyl > 1 ? 1.0f : 0.0f);
+    const float halfEng = 0.5f * (nCyl - 1) * 1.32f * B + 0.66f * B * 1.32f;   // (to the air box's end)
+    const float side = sgnSide * (halfEng + bellyR + 0.15f * B + lane * (2.0f * bellyR + 0.10f * B)) - zc;
+    const float yLow = -1.45f * r - 0.95f * B;
     ctrl = {e0, e0 + v3(0.6f * k1, -0.08f * B, 0), e0 + v3(k1 + 0.40f * B, -0.65f * B, 0.25f * side),
             v3(e0.x + k1 + 0.55f * B, 0.5f * (e0.y + yLow), 0.7f * side), v3(e0.x + k1 + 0.10f * B, yLow + 0.35f * B, side),
             v3(e0.x - 0.20f * B, yLow, side), v3(-ccHx - 0.60f * B, yLow + 0.15f * B, side), v3(-ccHx - 1.50f * B, yLow + 0.90f * B, side),
@@ -844,9 +931,9 @@ void buildTwoStrokeCyl(Scene& sc, const EngineParams& p, const M4& cf, double ph
         }
     }
     // silencer and tail after the pipe
-    const V3 endW = pw.back(), dW = norm(pw.back() - pw[pw.size() - 2]);
-    const V3 upW = norm(xdir(cf, v3(0, 1, 0)));
-    tailWithFlame(sc, {endW, endW + dW * (0.8f * B) + upW * (0.15f * B), endW + dW * (2.2f * B) + upW * (0.6f * B), endW + dW * (3.2f * B) + upW * (0.9f * B)},
+    const V3 endW = pw.back(), tdW = norm(pw.back() - pw[pw.size() - 2]);
+    const V3 tupW = norm(xdir(cf, v3(0, 1, 0)));
+    tailWithFlame(sc, {endW, endW + tdW * (0.8f * B) + tupW * (0.15f * B), endW + tdW * (2.2f * B) + tupW * (0.6f * B), endW + tdW * (3.2f * B) + tupW * (0.9f * B)},
                   std::max(rad.back(), 0.10f * B), live, egt, idx + 20);
     sc.fit = true;
 }

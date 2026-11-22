@@ -1747,6 +1747,7 @@ void App::panelEngineView() {
     live.time = (float)ImGui::GetTime();
     live.shaftRpm = tel_.running ? tel_.shaftRpm : 0.0f;
     live.animSpeed = animSpeed_;
+    live.throttle = tel_.throttle;
     live.boostBar = tel_.boostBar;
     live.egtGas = tel_.running ? tel_.egtGas : 0.0f;
     if (tel_.running && tel_.egtPerCyl)

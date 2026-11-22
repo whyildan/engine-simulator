@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <string>
 #include <vector>
 
 using namespace es;
@@ -50,10 +52,16 @@ int main(int argc, char** argv) {
     gpu::setDevice(dev, ctx);
     if (!gpu::ready()) { std::printf("renderer init failed\n"); return 1; }
 
-    const EngineParams p = makePreset(preset);
+    EngineParams p = makePreset(preset);
+    for (int i = 10; i < argc; ++i) {   // (key=value: inlet=0/1/2)
+        const char* eq = std::strchr(argv[i], '=');
+        if (!eq) continue;
+        const std::string k(argv[i], eq - argv[i]);
+        if (k == "inlet") p.tsInlet = std::atoi(eq + 1);
+    }
     float ph[kMaxCyl]; computePhases(p, ph);
     EngineViewLive live;
-    live.egtGas = 700; live.advance = 20;
+    live.egtGas = 700; live.advance = 20; live.throttle = 0.6f;
     EngineModel model;
     buildEngineModel(p, ph, crankDeg, live, 0.16f, model);
     if (model.items.empty()) { std::printf("empty model\n"); return 1; }
