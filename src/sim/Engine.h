@@ -78,6 +78,8 @@ public:
     bool antiLagActive = false;
     // thermal / electrical / fuel supply physics, sensors and the ECU
     ThermalModel thermal;
+    ThermalInputs thermalIn;      // what the thermal model got on the last step (heat in, cooling air)
+    double fuelFlowKgs() const { return fuelFlowKgs_; }   // fuel into the engine (kg/s; a diesel's injected)
     Electrical elec;
     FuelRail rail;
     SensorLayer sensors;
@@ -94,6 +96,7 @@ public:
         for (int i = 0; i < kMaxCyl; ++i) { egtCylProbe_[i] = o.egtCylProbe_[i]; egtCylWall_[i] = o.egtCylWall_[i]; }
         tank_ = o.tank_; line_ = o.line_; tankL_ = o.tankL_; fuel_ = o.fuel_; tankProps_ = o.tankProps_;
         refuelSeen_ = o.refuelSeen_; fuelTypeSeen_ = o.fuelTypeSeen_; pvPos_ = o.pvPos_;
+        drainSeen_ = o.drainSeen_; pickup_ = o.pickup_; bowlL_ = o.bowlL_; prime_ = o.prime_;
         intake.setFuel(fuel_);
     }
     // fuel (Package 1): the tank, and the fuel line that feeds the injectors - a new fuel reaches them gradually
@@ -118,7 +121,11 @@ public:
     double combNoiseRms() { const double r = cnN_ > 0 ? std::sqrt(cnE2_ / cnN_) : 0.0; cnE2_ = 0; cnN_ = 0; return r; }
     const FuelProps& tankFuel() const { return tankProps_; }
     double tankLitres() const { return tankL_; }
+    // the share of liquid fuel the system still gets (pickup / float bowl / a diesel's injection pump prime): < 1 when
+    // the tank runs dry
+    double fuelSupply() const;
     static constexpr double kTankCapL = 50.0;
+    static constexpr double kBowlL = 0.1;     // carburettor float bowl (L, chosen)
     // nitrous: what flows now and what is left in the bottle
     double n2oFlow = 0;           // kg/s of N2O
     double n2oBottle = 0;         // kg
@@ -178,10 +185,13 @@ private:
     FuelBlend tank_, line_;
     FuelProps fuel_, tankProps_;
     double tankL_ = 30;
-    int refuelSeen_ = 0, fuelTypeSeen_ = -1;
+    int refuelSeen_ = 0, fuelTypeSeen_ = -1, drainSeen_ = 0;
+    double pickup_ = 1.0;     // liquid share at the tank's pickup (falls as the last half litre goes)
+    double bowlL_ = 0.1;      // carburettor float bowl contents (L)
+    double prime_ = 1.0;      // diesel: how much of its fuel the injection pump still delivers (air in the pump)
     void fuelSetup(bool fresh);
     FuelProps lineFuel() const;
-    void fuelStep(double dt, double fuelKgs);
+    void fuelStep(double dt, double fuelKgs, double rpm);
     double exhFlowAvg_ = 0;
     void stepCylinder(int i, double dt, double phiPrev, double phi, double rpm, bool spark, bool fuelCut);
     void updateValves();
@@ -278,6 +288,7 @@ private:
     long long cnN_ = 0;
     Biquad ping_, starterBp_;
     double blockIn_ = 0, tickIn_ = 0, pingIn_ = 0, starterPhase_ = 0;
+    double fuelFlowKgs_ = 0;
 };
 
 } // namespace es

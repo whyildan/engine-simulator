@@ -7,6 +7,7 @@
 #include "sim/DataLog.h"
 #include "ui/TableEditor.h"
 #include "ui/EngineView3D.h"
+#include "ui/Gamepad.h"
 #include "sim/Valvetrain.h"
 #include <atomic>
 #include <thread>
@@ -233,6 +234,8 @@ private:
     int presetIdx_ = 0;
     int setupStep_ = 0;   // Engine Setup: the step of the build flow shown
     bool keyThrottle_ = false, brakeKey_ = false, clutchKey_ = false;
+    ui::Gamepad pad_;                                  // game controller (Gamepad.h: R2 gas, L2 clutch, R1 / L1 gears)
+    bool padThr_ = false, padClutch_ = false, padBrake_ = false;
     float animAngle_ = 0, animSpeed_ = 0.02f;
     ui::ViewCam engCam_;
     bool autoStart_ = false;

@@ -215,7 +215,7 @@ static uint64_t engineKey(const EngineParams& in) {
     p.environment = Environment::OpenRoad; p.reverbMix = 0; p.irChoice = 0; p.irMix = 0;
     p.comp.repairCount = 0; p.comp.allowFailure = 0;
     p.coldStart = 0;
-    p.refuelRequest = 0; p.refuelType = 0; p.refuelLitres = 0;
+    p.refuelRequest = 0; p.refuelType = 0; p.refuelLitres = 0; p.drainRequest = 0;
     std::memset(&p.cal.veMap.v, 0, sizeof(p.cal.veMap.v)); std::memset(&p.cal.veTps.v, 0, sizeof(p.cal.veTps.v));
     p.cal.veMap.locked = p.cal.veTps.locked = 0; p.cal.autoTune = 0; p.cal.closedLoop = 0;
     // Phase 3 control settings (trims, knock, idle, boost control, protection) do not change the measured air

@@ -67,6 +67,33 @@ void App::keyboard(float dt) {
     ImGuiIO& io = ImGui::GetIO();
     const bool captured = ui::g_tableKeysCaptured;
     ui::g_tableKeysCaptured = false;   // the editors set it again while they have focus
+    auto shift = [&](int dir) {        // manual: one gear up / down; automatic: up = Drive, down = Neutral
+        if (p_.transMode == TransMode::Automatic) p_.gear = dir > 0 ? 1 : 0;
+        else p_.gear = clampv((int)p_.gear + dir, 0, (int)p_.gears);
+    };
+    // ---- game controller (only while this window has the focus): the analog pedals take over while pressed and let
+    //      go to zero when released; buttons on their press
+    {
+        HWND hwnd = (HWND)ImGui::GetMainViewport()->PlatformHandleRaw;
+        pad_.poll(hwnd);
+        const ui::PadState& g = pad_.state();
+        if (g.connected && hwnd && GetForegroundWindow() == hwnd) {
+            if (g.throttle > 0.0f) { p_.throttle = g.throttle; keyThrottle_ = false; padThr_ = true; }
+            else if (padThr_) { p_.throttle = 0; padThr_ = false; }
+            if (g.clutch > 0.0f) { p_.clutchPedal = g.clutch; clutchKey_ = false; padClutch_ = true; }
+            else if (padClutch_) { p_.clutchPedal = 0; padClutch_ = false; }
+            if (g.brake > 0.0f) { p_.brake = g.brake; brakeKey_ = false; padBrake_ = true; }
+            else if (padBrake_) { p_.brake = 0; padBrake_ = false; }
+            if (g.shiftUp) shift(+1);
+            if (g.shiftDown) shift(-1);
+            if (g.neutral) p_.gear = 0;
+            if (g.start) { p_.ignition = 1; autoStart_ = true; autoStartTimer_ = 0; }
+            if (g.ignition) p_.ignition = !p_.ignition;
+            if (g.driveMode) p_.vehicle = !p_.vehicle;
+            if (g.listenerNext) p_.listener = (ListenerPos)(((int)p_.listener + 1) % 3);
+            if (g.listenerPrev) p_.listener = (ListenerPos)(((int)p_.listener + 2) % 3);
+        }
+    }
     if (io.WantTextInput || captured) return;
     bool up = ImGui::IsKeyDown(ImGuiKey_W) || ImGui::IsKeyDown(ImGuiKey_UpArrow);
     bool wot = ImGui::IsKeyDown(ImGuiKey_Space);
@@ -85,14 +112,9 @@ void App::keyboard(float dt) {
     else if (clutchKey_) { p_.clutchPedal = std::max(0.0f, p_.clutchPedal - dt * 2.5f); if (p_.clutchPedal <= 0) clutchKey_ = false; }
     // gears: E up, Q down (automatic: E = Drive, Q = Neutral), N neutral, V toggles driving mode
     if (ImGui::IsKeyPressed(ImGuiKey_V, false)) p_.vehicle = !p_.vehicle;
-    if (p_.transMode == TransMode::Automatic) {
-        if (ImGui::IsKeyPressed(ImGuiKey_E, false)) p_.gear = 1;
-        if (ImGui::IsKeyPressed(ImGuiKey_Q, false) || ImGui::IsKeyPressed(ImGuiKey_N, false)) p_.gear = 0;
-    } else {
-        if (ImGui::IsKeyPressed(ImGuiKey_E, false)) p_.gear = std::min((int)p_.gears, (int)p_.gear + 1);
-        if (ImGui::IsKeyPressed(ImGuiKey_Q, false)) p_.gear = std::max(0, (int)p_.gear - 1);
-        if (ImGui::IsKeyPressed(ImGuiKey_N, false)) p_.gear = 0;
-    }
+    if (ImGui::IsKeyPressed(ImGuiKey_E, false)) shift(+1);
+    if (ImGui::IsKeyPressed(ImGuiKey_Q, false)) shift(-1);
+    if (ImGui::IsKeyPressed(ImGuiKey_N, false)) p_.gear = 0;
     for (int k = 0; k <= 9; ++k)
         if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_0 + k), false)) { p_.throttle = k == 0 ? 1.0f : k * 0.1f; keyThrottle_ = false; }
     if (ImGui::IsKeyPressed(ImGuiKey_I, false)) p_.ignition = !p_.ignition;

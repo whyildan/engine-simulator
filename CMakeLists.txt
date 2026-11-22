@@ -102,6 +102,7 @@ add_executable(enginesim WIN32
   src/app.rc
   src/audio/AudioOutput.cpp
   src/ui/App.cpp
+  src/ui/Gamepad.cpp
   src/ui/Panels.cpp
   src/ui/Layout.cpp
   src/ui/TableEditor.cpp
@@ -123,7 +124,7 @@ add_executable(enginesim WIN32
   src/ui/EngineModelParts.cpp
 )
 target_include_directories(enginesim PRIVATE src ${miniaudio_SOURCE_DIR})
-target_link_libraries(enginesim PRIVATE enginesim_core imgui_lib d3d11 dxgi d3dcompiler winmm comdlg32)
+target_link_libraries(enginesim PRIVATE enginesim_core imgui_lib d3d11 dxgi d3dcompiler winmm comdlg32 dinput8 dxguid)
 # the 3D engine model without a GPU: bounds of every preset's model
 add_executable(model_test tests/model_test.cpp src/ui/Mesh3D.cpp src/ui/EngineModel.cpp src/ui/EngineModelParts.cpp)
 target_include_directories(model_test PRIVATE src)
@@ -252,6 +253,13 @@ add_executable(exhaust_config_test tests/exhaust_config_test.cpp)
 target_link_libraries(exhaust_config_test PRIVATE enginesim_core)
 add_executable(builder_test tests/builder_test.cpp)
 target_link_libraries(builder_test PRIVATE enginesim_core)
+add_executable(pad_probe tools/pad_probe.cpp src/ui/Gamepad.cpp)
+target_include_directories(pad_probe PRIVATE src)
+target_link_libraries(pad_probe PRIVATE dinput8 dxguid)
+add_executable(thermal_test tests/thermal_test.cpp)
+target_link_libraries(thermal_test PRIVATE enginesim_core)
+add_executable(thermal_probe tests/thermal_probe.cpp)
+target_link_libraries(thermal_probe PRIVATE enginesim_core)
 add_executable(coast_probe tests/coast_probe.cpp)
 target_link_libraries(coast_probe PRIVATE enginesim_core)
 add_executable(turbo_test tests/turbo_test.cpp)
@@ -295,3 +303,6 @@ target_link_libraries(knock_probe PRIVATE enginesim_core)
 
 add_executable(sound_test tests/sound_test.cpp)
 target_link_libraries(sound_test PRIVATE enginesim_core)
+
+add_executable(fuel_drain_test tests/fuel_drain_test.cpp)
+target_link_libraries(fuel_drain_test PRIVATE enginesim_core)

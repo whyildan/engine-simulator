@@ -229,6 +229,7 @@ void IntakeSystem::stepAir(double dt, double pedal, double rpm, bool fuelEnabled
                 pumpFuel_ -= shot * nIn;
                 mf += shot / dt;
             }
+            mf *= carbSupply_;
             addFuel(g, inletFilm_[k], mf * dt, 0.22 + 0.12 * cold_);
             totalFuel += mf * dt;
         }

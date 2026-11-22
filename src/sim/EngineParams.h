@@ -309,6 +309,7 @@ struct EngineParams {
     int32_t refuelRequest;
     int32_t refuelType;
     float refuelLitres;
+    int32_t drainRequest;     // incremented by the UI: drains the tank completely (the engine then runs out of fuel)
     SensorConfig sensors[kSensorCount];
 
     // ---------------------------------------------------------- ECU calibration (maps, curves, settings)

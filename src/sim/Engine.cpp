@@ -250,9 +250,11 @@ void Engine::fuelSetup(bool fresh) {
     if (fresh) {
         tank_ = line_ = fuelTypeBlend(type);
         tankL_ = 30.0;
-        fuelTypeSeen_ = type; refuelSeen_ = p_.refuelRequest;
+        fuelTypeSeen_ = type; refuelSeen_ = p_.refuelRequest; drainSeen_ = p_.drainRequest;
+        pickup_ = 1.0; bowlL_ = kBowlL; prime_ = 1.0;
     } else {
         if (type != fuelTypeSeen_) { tank_ = fuelTypeBlend(type); fuelTypeSeen_ = type; }
+        if (p_.drainRequest != drainSeen_) { drainSeen_ = p_.drainRequest; tankL_ = 0.0; }   // the tank drained
         if (p_.refuelRequest != refuelSeen_) {
             refuelSeen_ = p_.refuelRequest;
             const double add = clampv((double)p_.refuelLitres, 0.0, kTankCapL - tankL_);
@@ -273,11 +275,43 @@ FuelProps Engine::lineFuel() const {
 
 // fuel line + rail (~1 L): the pump circulates it through the return line, so a new fuel in the tank reaches the
 // injectors over about half a minute; the engine draws from the tank
-void Engine::fuelStep(double dt, double fuelKgs) {
+// Running dry: the pickup sock sits a little above the tank floor - below about half a litre it starts to gulp air
+// (sloshing), and the last ~0.15 L cannot be drawn at all (both chosen; "unusable fuel"). An electric pump then
+// delivers less and less, so the rail pressure sags (lean stumble) and falls away - the engine dies. A carburettor
+// runs on what is left in its float bowl (~0.1 L - chosen; the jets lean out as its level falls below half) until
+// its mechanical pump stops refilling it - at idle that takes a minute or two, under load seconds. A diesel's
+// injection pump loses its prime once air reaches it (it fills with air in about a second - chosen) and does not
+// pump again until the electric lift pump has pushed the air out after refuelling (~5 s with the ignition on -
+// chosen; older engines without one need bleeding by hand).
+double Engine::fuelSupply() const {
+    if (p_.fuelSystem == FuelSystem::Carburetor && !diesel_) return clampv(bowlL_ / (0.5 * kBowlL), 0.0, 1.0);
+    return prime_;
+}
+
+void Engine::fuelStep(double dt, double fuelKgs, double rpm) {
     const double usedL = std::max(0.0, fuelKgs) / std::max(0.5, fuel_.density) * dt;
-    tankL_ = std::max(0.5, tankL_ - usedL);
+    pickup_ = clampv((tankL_ - 0.15) / 0.35, 0.0, 1.0);
+    const bool carb = p_.fuelSystem == FuelSystem::Carburetor && !diesel_;
+    if (carb) {
+        // the jets drink from the bowl; the mechanical pump (turned by the engine) tops it up from the tank
+        bowlL_ = std::max(0.0, bowlL_ - usedL);
+        const double pumpLs = rpm > 50.0 ? 90.0 / 3600.0 * clampv(rpm / 800.0, 0.2, 1.0) * pickup_ : 0.0;   // (chosen)
+        const double refill = std::min({kBowlL - bowlL_, pumpLs * dt, std::max(0.0, tankL_)});
+        bowlL_ += refill;
+        tankL_ = std::max(0.0, tankL_ - refill);
+        intake.setCarbSupply(fuelSupply());
+    } else {
+        tankL_ = std::max(0.0, tankL_ - usedL);
+        // the liquid share in the line / rail (EFI) or the injection pump (diesel): air drawn in displaces it within
+        // about a second; with fuel back at the pickup the pump (on with the ignition) pushes the air out again -
+        // an EFI pump through the return line in ~1 s, a diesel's lift pump through its filter in ~5 s (chosen)
+        const bool pumpOn = p_.ignition != 0;
+        if (pickup_ < prime_) prime_ += (pickup_ - prime_) * std::min(1.0, dt / 1.0);
+        else if (pumpOn) prime_ += (pickup_ - prime_) * std::min(1.0, dt / (diesel_ ? 5.0 : 1.0));
+    }
     const double lineL = 1.0;
-    const double flowL = (p_.ignition ? 120.0 / 3600.0 * dt : 0.0) + usedL;   // circulation (pump on) + consumption
+    // circulation (pump on) + consumption: only liquid reaches the line
+    const double flowL = ((p_.ignition ? 120.0 / 3600.0 * dt : 0.0) + usedL) * (tankL_ > 0.0 ? pickup_ : 0.0);
     if (flowL > 0) {
         line_ = mixBlends(line_, std::max(0.0, lineL - flowL), tank_, std::min(flowL, lineL));
         fuel_ = lineFuel();
@@ -288,10 +322,20 @@ void Engine::fuelStep(double dt, double fuelKgs) {
 // one ECU loop: electrical / fuel / thermal physics at this rate, sensors, then the controller
 void Engine::ecuTick(double h, double pedal, double rpm) {
     const double mapPa = intake.map();
-    const double fuelKgs = intake.fuelFlow();
+    // fuel flow: through the intake (port / throttle-body injection, carburettor); a diesel injects straight into the
+    // cylinders - its flow from the ECU's commanded quantities (pilots, main, post) per stroke (the intake carried none:
+    // its tank never drained and its cooling got no heat)
+    double fuelKgs = intake.fuelFlow();
+    if (diesel_) {
+        const ActuatorCommands& k = ecu.cmd;
+        const double mg = k.pilot2Mg + k.pilotMg + k.dieselFuelMg + k.postMg;
+        const bool on = p_.ignition && !failure && !k.syncLost && rpm > 50.0;
+        fuelKgs = on ? std::max(0.0, mg) * prime_ * 1e-6 * (double)cyls_.size() * rpm / 60.0 / revsPerFiring(p_) : 0.0;
+    }
+    fuelFlowKgs_ = fuelKgs;
     elec.step(h, rpm, p_.ignition != 0, p_.starter != 0);
-    rail.step(h, fuelKgs / fuel_.density * 3600.0, (mapPa - kPatm) / 1e5, p_.ignition != 0, p_);
-    fuelStep(h, fuelKgs);
+    rail.step(h, fuelKgs / fuel_.density * 3600.0, (mapPa - kPatm) / 1e5, p_.ignition != 0, p_, pickup_);
+    fuelStep(h, fuelKgs, rpm);
     // power valve: a servo lifts it with engine speed (Yamaha's YPVS: the CDI drives a servo motor) - linear from
     // tsPvRpmLow to tsPvRpmHigh, first-order with a 0.12 s time constant (chosen; Blair's 125: fully lifted by 9500)
     if (twoStroke_ && p_.tsPowerValve) {
@@ -301,11 +345,19 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     } else pvPos_ = 1.0;
     ThermalInputs ti;
     ti.fuelPowerW = fuelKgs * fuel_.lhv;
+    // what can burn: a rich mixture's excess fuel finds no air (it leaves unburned - no heat into the walls)
+    ti.releasedPowerW = std::min(fuelKgs, std::max(0.0, intake.airFlow()) / std::max(1.0, fuel_.stoich)) * fuel_.lhv;
+    // a turbo's bearings and the heat soaking from its turbine housing into its oil: ~1.2 kW per turbo at full speed,
+    // with the square of the speed (chosen: journal-bearing friction of a small automotive turbo is of the order of
+    // a kilowatt near its top speed)
+    if (p_.induction == Induction::Turbo)
+        ti.turboOilW = 1200.0 * (boost.speedFrac * boost.speedFrac + (boost.units > 1 ? boost.speedFrac2 * boost.speedFrac2 : 0.0));
     ti.frictionPowerW = lastFricW_;
     ti.airflowKgs = std::max(0.0, intake.airFlow());
     ti.speedMs = coolingAirMs();
     ti.rpm = rpm;
     ti.ambientC = p_.ambientTemp_C;
+    thermalIn = ti;
     thermal.step(h, ti, p_);
     boost.setCoolingAir(coolingAirMs());
     updateValveDynamics(rpm);
@@ -314,7 +366,7 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     // the actual injector flow / dead time follow the rail pressure and battery voltage
     // an injector flows about the same volume of any of these fuels (the mass follows the density)
     const double rated = p_.injector_ccmin * fuel_.density * 1e-3 / 60.0;
-    intake.setSprayRate(rated * std::sqrt(std::max(0.0, rail.deltaBar((mapPa - kPatm) / 1e5)) / 3.0));
+    intake.setSprayRate(prime_ * rated * std::sqrt(std::max(0.0, rail.deltaBar((mapPa - kPatm) / 1e5)) / 3.0));
 
     SensorTruth t;
     t.v[kSnsTPS] = intake.throttlePosition() * 100.0;
@@ -374,7 +426,7 @@ void Engine::ecuTick(double h, double pedal, double rpm) {
     if (p_.fuelSystem == FuelSystem::EFI && p_.ignition && !fuelCutNow_) {
         const double cycT = rpm > 30 ? 60.0 * revsPerFiring(p_) / rpm : 1.0;
         const double ratedA = p_.injector_ccmin * 0.745e-3 / 60.0;
-        const double flowA = ratedA * std::sqrt(std::max(0.0, rail.deltaBar((mapPa - kPatm) / 1e5)) / 3.0);
+        const double flowA = prime_ * ratedA * std::sqrt(std::max(0.0, rail.deltaBar((mapPa - kPatm) / 1e5)) / 3.0);
         const double deadA = std::max(0.0, (double)p_.comp.injDeadTime_ms) * 1e-3 * (1.0 + 0.12 * (14.0 - elec.volts));
         for (int i = 0; i < (int)ecu.asyncFuel.size(); ++i)
             if (ecu.asyncFuel[i] > 0) intake.injectPulse(i, ecu.pulseFor(ecu.asyncFuel[i], sensors.r), cycT, flowA, deadA);
@@ -409,7 +461,7 @@ void Engine::injectPort(int port, double rpm, double share) {
     double pw = ecu.injectionPulse(port, sensors.r, share);
     double cyc = rpm > 30 ? 60.0 * revsPerFiring(p_) / rpm : 1.0;
     const double rated = p_.injector_ccmin * fuel_.density * 1e-3 / 60.0;
-    double flow = rated * std::sqrt(std::max(0.0, rail.deltaBar((intake.map() - kPatm) / 1e5)) / 3.0);
+    double flow = prime_ * rated * std::sqrt(std::max(0.0, rail.deltaBar((intake.map() - kPatm) / 1e5)) / 3.0);
     double dead = std::max(0.0, (double)p_.comp.injDeadTime_ms) * 1e-3 * (1.0 + 0.12 * (14.0 - elec.volts));
     intake.injectPulse(port, pw, cyc, flow, dead);
 }
@@ -453,7 +505,7 @@ void Engine::dieselStep(Cylinder& c, double dt, double phiPrev, double phi, doub
             c.injStarted = true;
             const bool on = p_.ignition && !fuelCut && !failure && !ecu.cmd.syncLost;
             c.nPulse = 0;
-            if (on) for (int i = first; i < n; ++i) c.dPulse[c.nPulse++] = sched[i];
+            if (on) for (int i = first; i < n; ++i) { c.dPulse[c.nPulse] = sched[i]; c.dPulse[c.nPulse++].q *= prime_; }
             c.nGroup = 0; c.injDone = 0; c.injPlanned = 0;
             for (int i = 0; i < c.nPulse; ++i) c.injPlanned += c.dPulse[i].q;
             c.dBurning = false; c.dBurned = 0; c.soiPhi = phi; c.ringKickPeak = 0; c.dpStep = 0; c.mainOwnDelay = false;

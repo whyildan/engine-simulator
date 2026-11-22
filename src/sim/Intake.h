@@ -27,6 +27,8 @@ public:
     // one injector pulse: pw (s) including the dead time, delivered at the actual flow (kg/s)
     void injectPulse(int cyl, double pw, double cycleTime, double flowKgs, double deadS);
     void setSprayRate(double kgs) { sprayRate_ = kgs; }
+    // carburettor: the share of its normal fuel the jets still get (a float bowl running dry - Engine::fuelStep)
+    void setCarbSupply(double f) { carbSupply_ = clampv(f, 0.0, 1.0); }
     // thermal state from the engine: inlet air temperature (K) and how cold the port walls are (0..1)
     void setInletTemp(double K) { inletT_ = K; }
     void setColdWalls(double cold) { cold_ = clampv(cold, 0.0, 1.0); }
@@ -93,6 +95,7 @@ private:
     double pumpFuel_ = 0;
     double iac_ = 0.35;
     double sprayRate_ = 1e-3;          // kg/s an open injector delivers right now
+    double carbSupply_ = 1.0;
     double inletT_ = 298, cold_ = 0;
     FuelProps fuel_;
     // wall film evaporation time: longer when cold, and much longer for alcohols when cold

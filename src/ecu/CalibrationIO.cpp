@@ -719,6 +719,7 @@ const EngineField kEngineFields[] = {
     CF("fuel_pump_lph", fuelPumpLph), CI("coil_type", coilType), CF("coil_energy_mj", coilEnergy_mJ),
     CF("coil_charge_ms", coilCharge_ms), CI("plug_heat_range", plugHeatRange), CF("plug_gap_mm", plugGap_mm),
     CF("oil_pump_capacity", oilPumpCapacity), CF("oil_relief_bar", oilRelief_bar), CF("water_pump_capacity", waterPumpCapacity),
+    CF("radiator_size", radiatorSize), CI("oil_cooler", oilCooler),
 };
 #undef EF
 #undef EI

@@ -135,8 +135,6 @@ void App::navBar() {
         if (!ready && ImGui::IsItemHovered()) ImGui::SetTooltip("Planned - see docs/ECU_PLAN.md");
     }
     ImGui::Separator();
-    ImGui::TextDisabled("dimmed = planned");
-    ImGui::Separator();
     ImGui::TextDisabled("misfires %d", tel_.misfires);
     ImGui::TextDisabled("pops %d", tel_.afterfires);
     ImGui::TextDisabled("audio buf %.0f ms", tel_.ringFill * 1000);

@@ -40,6 +40,8 @@ struct ComponentSet {
     float oilPumpCapacity;     // 1 = standard
     float oilRelief_bar;       // relief valve pressure
     float waterPumpCapacity;   // 1 = standard
+    float radiatorSize;        // 1 = stock (sized for the engine's rated heat); bigger core > 1
+    int32_t oilCooler;         // 0 none, 1 oil-to-water (on the block), 2 air-to-oil (in front of the radiator)
     int32_t allowFailure;      // mechanical damage can destroy the engine
     int32_t repairCount;       // incremented by the UI: repair a failed engine
 };

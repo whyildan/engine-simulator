@@ -70,6 +70,7 @@ struct Telemetry {
     // fuel (Package 1): what burns now (fuel line), what is in the tank, and what the ECU believes
     float lambda = 1, fuelStoich = 14.7f, fuelAlcohol = 0, fuelRon = 95, fuelMon = 85, fuelLhv = 43.5f;
     float tankAlcohol = 0, tankRon = 95, tankLitres = 30, tankCap = 50;
+    float fuelSupply = 1;   // 0..1 liquid fuel still reaching the engine (Engine::fuelSupply)
     float ecuFlexPct = 0, ecuStoich = 14.7f, ecuTargetLambda = 1, ecuFlexCold = 0;
     bool ecuFlexLive = false;
     // exhaust sensors (Package 2): gas at the wideband (before its delay), EMAP, drive pressure ratio, EGT after the

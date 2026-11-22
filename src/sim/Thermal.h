@@ -7,7 +7,9 @@
 namespace es {
 
 struct ThermalInputs {
-    double fuelPowerW = 0;     // chemical power of the fuel burnt
+    double fuelPowerW = 0;     // chemical power of the fuel injected
+    double releasedPowerW = 0; // ... of the part that can burn (a rich mixture's excess fuel leaves unburned: air-limited)
+    double turboOilW = 0;      // turbocharger bearings' heat into the oil
     double frictionPowerW = 0; // mechanical friction power
     double airflowKgs = 0;     // air through the engine
     double speedMs = 0;        // vehicle speed (ram air through the radiator)
@@ -23,6 +25,10 @@ public:
     double thermostat = 0;     // opening 0..1
     bool fan = false;
     double radiatorW = 0;      // heat rejected by the radiator
+    double oilCoolerW = 0;     // heat rejected by an air-to-oil cooler
+    // the fuel power the cooling system is designed for (W): the engine's rated output, estimated from its size,
+    // revs and boost (the radiator and oil cooler are sized to it)
+    static double ratedFuelPowerW(const EngineParams& p);
     // effects on the physics
     double viscosityFriction() const;           // friction multiplier from oil viscosity (1 = hot oil)
     double coldFactor() const;                  // 1 = stone cold walls, 0 = fully warm (fuel film behaviour)
@@ -40,7 +46,8 @@ public:
 // fuel pump + regulator: rail pressure (bar gauge) and how far it sags when the pump can't keep up
 class FuelRail {
 public:
-    void step(double dt, double demandLph, double mapGaugeBar, bool pumpOn, const EngineParams& p);
+    // supply: the share of liquid fuel at the pump's inlet (1 = covered pickup, 0 = sucking air: an empty tank)
+    void step(double dt, double demandLph, double mapGaugeBar, bool pumpOn, const EngineParams& p, double supply = 1.0);
     double pressureBar = 3.0;  // rail pressure (gauge)
     double setpointBar = 3.0;  // where the regulator wants it
     // pressure across the injector nozzle (rail minus manifold, both gauge)

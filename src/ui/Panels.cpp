@@ -3,6 +3,7 @@
 #include "sim/Fuel.h"
 #include "sim/Scavenge.h"
 #include "ui/App.h"
+#include "sim/Thermal.h"
 #include "ui/Widgets.h"
 #include "imgui.h"
 #include "implot.h"
@@ -678,11 +679,19 @@ void App::panelFuelIntake() {
     ImGui::PopItemWidth();
     ImGui::SameLine();
     if (ImGui::Button("Refuel")) ++p_.refuelRequest;
+    ImGui::SameLine();
+    if (ImGui::Button("Empty tank")) ++p_.drainRequest;
+    if (tel_.fuelSupply < 0.98f || tel_.tankLitres < 0.5f)
+        ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), tel_.fuelSupply < 0.02f ? "Out of fuel - the pump is sucking air. Refuel to run again."
+                                                                             : "Fuel low - the pickup is gulping air (fuel supply %.0f %%)", tel_.fuelSupply * 100);
     if (isDiesel(p_) != isDieselFuel(p_.fuelType))
         ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), isDiesel(p_) ? "Petrol / alcohol in a diesel: outside what the model covers (its ignition delay is a diesel-fuel correlation)."
                                                                   : "Diesel in a petrol engine is not supported - it will not run on it.");
     Help("Adds this many litres of that fuel to what is in the tank (as far as it fits): blends mix by volume.\n"
-         "E.g. 20 L of E85 on top of 30 L of premium gives about E34 - the flex fuel sensor follows it.");
+         "E.g. 20 L of E85 on top of 30 L of premium gives about E34 - the flex fuel sensor follows it.\n"
+         "Empty tank drains it: below about half a litre the pickup gulps air, the fuel pressure sags and the engine\n"
+         "stumbles and dies (a carburettor first runs its float bowl dry; a diesel's injection pump loses its prime\n"
+         "and needs a few seconds with the ignition on after refuelling while the lift pump pushes the air out).");
     if (p_.fuelSystem == FuelSystem::EFI) {
         Check("Flex fuel sensor fitted", &p_.flexSensor);
         Help("Measures the alcohol content in the fuel line (50 Hz = E0 .. 150 Hz = E100). The ECU then sets its\n"
@@ -1081,6 +1090,17 @@ void App::panelVehicle() {
     ImGui::PushItemWidth(-170);
     Check("Driving mode [V]", &p_.vehicle);
     Help("The engine drives a car through the clutch and gearbox instead of the dyno.\nE/Q change gear, C = clutch, B/Down = brake, W/Space = gas.");
+    {
+        const ui::PadState& g = pad_.state();
+        if (g.connected) {
+            ImGui::Text("Controller: %s", g.name.c_str());
+            ImGui::TextDisabled("gas %3.0f %%   clutch %3.0f %%   brake %3.0f %%", g.throttle * 100, g.clutch * 100, g.brake * 100);
+        } else ImGui::TextDisabled("No game controller found (Xbox via XInput; DualShock 4 / DualSense directly or via Steam / DS4Windows)");
+        Help("R2 / RT = gas, L2 / LT = clutch (both analog), R1 / RB = shift up, L1 / LB = shift down.\n"
+             "Brake: Cross / A (full) or the right stick pulled back (analog). Triangle / Y = neutral.\n"
+             "Options / Start = start the engine, Share / Back = ignition, Circle / B = driving mode,\n"
+             "D-pad left / right = listener position. Works while this window has the focus.");
+    }
     int tm = (int)p_.transMode;
     if (ImGui::Combo("Transmission", &tm, "Manual (you work the clutch)\0Manual, automatic clutch\0Automatic\0")) {
         p_.transMode = (TransMode)tm;
@@ -2007,6 +2027,22 @@ void App::panelComponents() {
     Meter("Oil pressure now", tel_.oilBar, 0, 8, "%.1f bar", tel_.running && tel_.oilBar < 0.7f ? rgba(1, 0.3f, 0.2f) : rgba(0.9f, 0.75f, 0.3f));
     SliderF("Water pump capacity", &c.waterPumpCapacity, 0.4f, 2.0f, "%.2f x", "Coolant circulation through the radiator (and its drive power).\nToo small: the engine runs hot under load.");
     Meter("Coolant now", tel_.coolantC, 0, 130, "%.0f C", tel_.coolantC > 105 ? rgba(1, 0.3f, 0.2f) : rgba(0.4f, 0.7f, 1.0f));
+    ImGui::SeparatorText("Cooling");
+    SliderF("Radiator size", &c.radiatorSize, 0.6f, 2.0f, "%.2f x",
+            "1 = the stock core, sized for this engine's heat at its rated output: with the fan on and 50 km/h of air it holds\n"
+            "the coolant near 100 C at full power. Bigger (a thicker / race core) runs cooler under sustained load; the\n"
+            "thermostat keeps it from overcooling.");
+    Combo("Oil cooler", &c.oilCooler, "None\0Oil-to-water (on the block)\0Air-to-oil (in front of the radiator)\0");
+    Help("Oil-to-water: the oil gives its heat to the coolant (2.5x the block's own exchange) - it also warms up faster.\n"
+         "Air-to-oil: its own core in the air stream, sized for ~5 % of the rated fuel power - the oil can run below the\n"
+         "coolant at speed. Turbos add heat to the oil through their bearings.");
+    {
+        char cb[96];
+        std::snprintf(cb, sizeof(cb), "radiator %.0f kW now, %.0f kW of rated fuel power designed for", tel_.radiatorKw,
+                      ThermalModel::ratedFuelPowerW(p_) * 1e-3);
+        ImGui::TextDisabled("%s", cb);
+    }
+    Meter("Oil now", tel_.oilC, 0, 150, "%.0f C", tel_.oilC > 130 ? rgba(1, 0.3f, 0.2f) : rgba(0.9f, 0.75f, 0.3f));
     std::snprintf(b, sizeof(b), "%+.1f kPa at 1500 rpm, %+.1f kPa at the limiter (vs standard parts)",
                   m.extraFmep(p_, 1500, 2 * p_.stroke_mm * 1e-3 * 1500 / 60, equivalentDisplacementL(p_) * 5e-4) * 1e-3,
                   m.extraFmep(p_, lim, 2 * p_.stroke_mm * 1e-3 * lim / 60, equivalentDisplacementL(p_) * 5e-4) * 1e-3);

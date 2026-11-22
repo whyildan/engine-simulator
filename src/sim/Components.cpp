@@ -184,6 +184,10 @@ void applyComponentDefaults(EngineParams& p) {
     c.plugHeatRange = clampv(heat, 5, 9);
     c.plugGap_mm = isBoosted(p) ? 0.65f : 0.8f;
     c.oilPumpCapacity = 1.0f; c.oilRelief_bar = 5.0f; c.waterPumpCapacity = 1.0f;
+    // cooling: the radiator sized for the engine's rated heat (Thermal.cpp); boosted engines carry an oil-to-water
+    // cooler, as the 2JZ-GTE / RB26DETT / 13B-REW do
+    c.radiatorSize = 1.0f; c.oilCooler = isBoosted(p) || p.revLimit >= 8000 ? 1 : 0;   // (and the high-revving ones, chosen:
+                                                                                         //  the friction heat at 8000+ rpm)
     c.allowFailure = 0;
     // valvetrain layout
     const int vpc = p.intakeValves + p.exhaustValves;

@@ -212,7 +212,7 @@ void Simulator::render(float* out, int frames) {
     t.fuelStoich = (float)e.fuel().stoich; t.fuelAlcohol = (float)e.fuel().alcoholPct;
     t.fuelRon = (float)e.fuel().ron; t.fuelMon = (float)e.fuel().mon; t.fuelLhv = (float)(e.fuel().lhv * 1e-6);
     t.tankAlcohol = (float)e.tankFuel().alcoholPct; t.tankRon = (float)e.tankFuel().ron;
-    t.tankLitres = (float)e.tankLitres(); t.tankCap = (float)Engine::kTankCapL;
+    t.tankLitres = (float)e.tankLitres(); t.tankCap = (float)Engine::kTankCapL; t.fuelSupply = (float)e.fuelSupply();
     t.ecuFlexPct = (float)e.ecu.flexPct; t.ecuStoich = (float)e.ecu.stoichEcu; t.ecuTargetLambda = (float)e.ecu.targetLambda;
     t.ecuFlexCold = (float)e.ecu.flexCold; t.ecuFlexLive = e.ecu.flexLive;
     t.lambdaPipe = (float)e.lambdaPipe(); t.emapKPa = (float)e.emapKPa();
@@ -224,7 +224,7 @@ void Simulator::render(float* out, int frames) {
     t.widebandPost = e.params().widebandPos != 0 && e.exhaust.hasTurbine();
     t.ve = (float)e.veAvg;
     t.airFlow = (float)(e.intake.airFlow() * 1000.0);
-    t.fuelFlow = (float)(e.intake.fuelFlow() * 1000.0);
+    t.fuelFlow = (float)(e.fuelFlowKgs() * 1000.0);
     t.injDuty = (float)e.ecu.injDuty;
     t.advance = (float)e.advance();
     t.iac = (float)(e.ecu.cmd.iac * 100.0);

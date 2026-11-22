@@ -33,7 +33,7 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🛢️ **Diesel** | Compression ignition with direct injection: Assanis ignition delay, pump or common rail injection (rail pressure, nozzle orifice flow, pilots / main / post), premixed / diffusion burn, no throttle (the load is the fuel quantity), smoke limiter, idle and max-speed governors, glow plugs with pre- and post-heat, variable geometry turbo, cooled EGR, engine-out NOx and soot (smoke number) — and the diesel clatter from the chamber ringing through the engine structure. |
 | 🏍️ **Two-stroke** | One power stroke per revolution: piston-controlled exhaust and transfer ports, the crankcase pumping the charge in through a spring-mass reed valve, a piston port or a disc valve - its intake tract as 1D gas dynamics too -, a servo-driven power valve, scavenging from cylinders measured on Blair's QUB rig, and an expansion chamber (Blair's empirical design) simulated as 1D unsteady gas dynamics, whose suction and plugging waves push the escaped charge back and move the power band with its tuning; Blair-style ignition delay and Vibe burn, squish velocity from the chamber, premix oil — checked against Blair's measured 125 cc racing engine with its own pipe (delivery ratio within 0.05, charging within 0.04). Light load four-strokes on its own residual; twins and triples step their pipes on extra cores (same result as one core). |
 | 🧊 **3D engine view** | A GPU-rendered (Direct3D 11) model built from the engine's own dimensions: pistons, rods, crank, valvetrain (DOHC / SOHC / OHV) and its belt, chain or gears, manifolds, turbo / supercharger, the diesel's injection system, the two-stroke's ports and expansion chamber, the rotary's housings — moving live with valve lift, spark, gas by stroke and glowing headers. |
-| ⛽ **Fuels and flex fuel** | Regular / premium / race gasoline, E10, E20, E85, E100 and methanol, each with its own stoichiometric AFR, heating value, octane (knock), charge cooling, flame speed and cold start; a tank you can refuel with a blend, and a flex fuel sensor the ECU uses to adapt its fuelling, spark and cold enrichment. |
+| ⛽ **Fuels and flex fuel** | Regular / premium / race gasoline, E10, E20, E85, E100 and methanol, each with its own stoichiometric AFR, heating value, octane (knock), charge cooling, flame speed and cold start; a tank you can refuel with a blend or drain (the engine runs out of fuel: the pump sucks air and it stalls), and a flex fuel sensor the ECU uses to adapt its fuelling, spark and cold enrichment. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
 | 🌬️ **Forced induction** | Turbos with lag, wastegate and anti-lag; compressor surge as Greitzer compression-system dynamics (the "stu-tu-tu" flutter on a lift-off comes out of the charge-pipe volume), a spring-mass blow-off valve (vented or recirculating), compressor whistle at the shaft order with blade-pass, buzz-saw, tip-clearance and whoosh noise; compressor / turbine maps (built in or loaded from CSV) with efficiency islands, surge and choke; intercooler heat soak; Roots, twin-screw and centrifugal superchargers. **Twin turbos**: parallel (a turbo per bank, or an inline's front / rear halves) or sequential (pre-spool bypass, exhaust and intake control valves, 13B-REW / 2JZ-GTE style); cast log, tubular and twin-scroll manifolds; screamer pipe. |
 | 📈 **Virtual dyno** | WOT sweeps, steady-state step tests and holds, SAE J1349 / DIN 70020 / ISO 1585 / SAE J607 correction, altitude, cell fan, BSFC / EGT / boost per point, before / after comparison, CSV export. |
@@ -84,6 +84,7 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 | `T` (hold) | transbrake · `G` (hold) rolling anti-lag · `X` nitrous arming switch |
 | `L` | listener: tailpipe / engine bay / cabin |
 | `V` | driving mode (car as the load) |
+| Game controller | `R2`/`RT` gas · `L2`/`LT` clutch (analog) · `R1`/`RB` shift up · `L1`/`LB` shift down · `✕`/`A` or right stick back: brake · `△`/`Y` neutral · `Options`/`Start` start the engine · `Share`/`Back` ignition · `○`/`B` driving mode · D-pad ←/→ listener (Xbox pads via XInput; DualShock 4 / DualSense directly or via Steam / DS4Windows) |
 | `E` / `Q` | shift up / down · `N` neutral · `C` (hold) clutch · `B` brake |
 
 ### Presets
@@ -148,7 +149,7 @@ warning lamps) and a 12-section navigation in the style of ECU software:
    stroke, headers glowing with the exhaust temperature, the turbo spinning with its shaft speed, afterfire flames
    at the tail pipe. Drag to orbit, right-drag to pan, wheel to zoom; "Flat view" keeps the older 2.5D cutaways
 2. **ECU Setup** — loop rate, trigger wheel and cam sensor, injection timing, coil type and dwell, cold start, simulation pause / reset
-3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, flex fuel, fuel system (fuel type, tank, refuel), base map
+3. **Fuel Tuning** — VE (speed density / alpha-N), lambda, enrichments, corrections, injectors, closed loop, flex fuel, fuel system (fuel type, tank, refuel, empty tank), base map
 4. **Ignition Tuning** — ignition map, corrections, knock control, per-cylinder trims
 5. **Boost Control** — turbo / supercharger hardware (generic or compressor / turbine maps), ECU boost control, anti-lag, nitrous
 6. **Engine Control** — idle control, drive-by-wire pedal map, soft / hard rev limiter, cam control (VTEC / VTC), launch / shift, traction control, torque limit and rev limit / spark trim by gear
@@ -307,6 +308,7 @@ build/Release/engine_file_test.exe  # engine files: every preset round trips, pa
 
 ```bash
 build/Release/fuel_test.exe          # fuels: properties, knock by octane, E85 / methanol with and without flex fuel, refuel, cold start
+build/Release/fuel_drain_test.exe    # running out of fuel: EFI, carburettor and diesel stall on an empty tank and restart after refuelling
 ```
 
 ```bash
