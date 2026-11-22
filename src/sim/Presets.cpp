@@ -89,7 +89,8 @@ static EngineParams base() {
     p.collectorLen_mm = 300; p.collectorDia_mm = 55; p.crossover = Crossover::TrueDual;
     p.pipeDia_mm = 55; p.midpipeLen_mm = 1500; p.cat = 1; p.resonator = 1;
     p.muffler = Muffler::Chambered; p.tailpipeLen_mm = 600; p.resonatorHz = 0; p.mufflerExtTubes = 0;
-    p.exhaustSplit = 0; p.exhaustValveMode = 0; p.exhaustValveRpm = 3500;
+    p.exhaustSplit = 0; p.exhaustValveMode = 0; p.exhaustValveRpm = 3500; p.wgScreamer = 0;
+    p.turboCount = 1; p.twinMode = 0; p.seqRpm = 4500;
 
     p.throttle = 0; p.ignition = 0; p.starter = 0; p.ambientTemp_C = 25;
     p.listener = ListenerPos::Tailpipe; p.volume = 1.0f; p.oversample = 2;
@@ -181,6 +182,34 @@ void applyInductionDefaults(EngineParams& p, Induction ind, Supercharger sc) {
         p.intercooler = 1; p.bov = 1; p.afrBoost = 11.6f; p.boostRetard = 4.0f;
         p.limiter = Limiter::IgnitionCut;
     }
+}
+
+// Two turbos for one engine: each parallel twin passes about half the air, so each compressor is a bit over half the
+// size (0.55x - a pair of small ones has a little more total flow than the one big turbo they replace, chosen) and its
+// rotor - the wheel's moment of inertia going with the diameter to about the 4th power - under half (0.45x, chosen):
+// the reason twins spool quicker. A sequential pair's first turbo carries the whole engine alone up to the change-over:
+// 0.70x / 0.63x (chosen - at 0.55x the 13B-style pair's first turbo ran past its top speed before the change-over, and
+// the change-over dipped the boost by a third)
+static float twinFlowK(const EngineParams& p) { return p.twinMode == 1 ? 0.70f : 0.55f; }
+static float twinInertiaK(const EngineParams& p) { return p.twinMode == 1 ? 0.63f : 0.45f; }
+void applyTurboCount(EngineParams& p, int count) {
+    count = count >= 2 ? 2 : 1;
+    const int was = p.turboCount >= 2 ? 2 : 1;
+    if (count == was) { p.turboCount = count; return; }
+    const float fk = twinFlowK(p), ik = twinInertiaK(p);
+    p.compFlow_gs = clampv(count == 2 ? p.compFlow_gs * fk : p.compFlow_gs / fk, 40.0f, 900.0f);
+    p.turboInertia = clampv(count == 2 ? p.turboInertia * ik : p.turboInertia / ik, 0.02f, 0.8f);
+    p.turboCount = count;
+}
+void applyTwinMode(EngineParams& p, int mode) {
+    mode = mode == 1 ? 1 : 0;
+    if (p.turboCount >= 2 && mode != p.twinMode) {
+        const float f0 = twinFlowK(p), i0 = twinInertiaK(p);
+        p.twinMode = mode;
+        p.compFlow_gs = clampv(p.compFlow_gs / f0 * twinFlowK(p), 40.0f, 900.0f);
+        p.turboInertia = clampv(p.turboInertia / i0 * twinInertiaK(p), 0.02f, 0.8f);
+    }
+    p.twinMode = mode;
 }
 
 const char* rotaryPortingName(int style) {
@@ -281,7 +310,7 @@ static const char* kNames[] = {
     "Rotary 1-rotor 0.65L carb",
     "I4 2.0 turbo EFI (hot hatch)",
     "V8 6.2 Roots blower (supercharged muscle)",
-    "Rotary 2-rotor 1.3L turbo (13B-REW-style)",
+    "Rotary 2-rotor 1.3L sequential twin turbo (13B-REW-style)",
     "I6 3.0 big single turbo (drag)",
     "V6 3.5 centrifugal supercharger",
     "I5 2.5 EFI (five cylinder)",
@@ -296,6 +325,9 @@ static const char* kNames[] = {
     "2-cyl 350 two-stroke YPVS (RD350-style)",
     "3-cyl 500 piston-port two-stroke (H1-style)",
     "1-cyl 300 two-stroke EFI (300 TPI-style)",
+    "I6 3.0 sequential twin turbo (2JZ-GTE-style)",
+    "I6 2.6 parallel twin turbo ITB (RB26DETT-style)",
+    "V6 3.0 twin turbo, one per bank (VG30DETT-style)",
 };
 
 int presetCount() { return (int)(sizeof(kNames) / sizeof(kNames[0])); }
@@ -509,13 +541,62 @@ EngineParams makePreset(int idx) {
         p.muffler = Muffler::StraightThrough; p.crossover = Crossover::XPipe; p.revLimit = 6500;
         p.limiter = Limiter::IgnitionCut; p.sweepStartRpm = 1500; p.sweepEndRpm = 6400;
         break;
-    case 18: // turbo rotary
+    case 18: // 13B-REW (FD RX-7, 1992-2002): the 13B with a sequential pair of Hitachi HT-12 turbos (Tashima et al., SAE
+             // 941030), 9.0:1, ~0.75 bar (11 psi); 255-280 PS at 6500 rpm. The second turbo comes in around 4500 rpm
+             // (owner / tuner sources; the paper's own figure is behind its paywall). Sizes: the old single turbo's,
+             // split into a sequential pair (applyTurboCount / applyTwinMode: 0.70x flow, 0.63x inertia each) - chosen
         p = makePreset(12);
         applyInductionDefaults(p, Induction::Turbo);
-        p.compFlow_gs = 300; p.turbineAR = 0.7f; p.turboInertia = 0.14f; p.wastegateBar = 0.9f;
+        p.compFlow_gs = 300; p.turbineAR = 0.7f; p.turboInertia = 0.14f; p.wastegateBar = 0.75f;
+        p.twinMode = 1; applyTurboCount(p, 2); p.seqRpm = 4500;
         p.compression = 9.0f; p.injector_ccmin = 950; p.cat = 0; p.resonator = 0; p.muffler = Muffler::StraightThrough;
-        p.pipeDia_mm = 76; p.revLimit = 8200; p.sweepEndRpm = 8000;
+        p.pipeDia_mm = 76; p.revLimit = 8000; p.sweepEndRpm = 7800;
         p.idleTargetRpm = 1100;   // big injectors + low compression: a little more idle margin
+        break;
+    case 33: // Toyota 2JZ-GTE (Supra MkIV, 1993-2002): 86 x 86 mm, 2997 cc, 8.5:1, DOHC 24 valves, a sequential pair of
+             // Hitachi CT12B (export) with intake / exhaust / bypass control valves (Supra 1997 repair manual); 280 PS at
+             // 5600 rpm (JDM), 320 hp export. Rods 142 mm, valves, cams, the change-over speed (4000 rpm) and 0.8 bar
+             // boost chosen
+        p = makePreset(2);
+        p.bore_mm = 86; p.stroke_mm = 86; p.rod_mm = 142; p.compression = 8.5f;
+        p.intakeValveDia_mm = 33.5f; p.exhaustValveDia_mm = 29; p.intakeDuration = 236; p.exhaustDuration = 236;
+        p.intakeLift_mm = 8.25f; p.exhaustLift_mm = 8.4f;
+        applyInductionDefaults(p, Induction::Turbo);
+        p.twinMode = 1; applyTurboCount(p, 2); p.seqRpm = 4000;
+        p.turbineAR = 0.6f; p.wastegateBar = 0.8f; p.mechAdvance = 11; p.boostRetard = 5;
+        p.header = HeaderType::Collector; p.injector_ccmin = 440; p.revLimit = 6800;
+        p.cat = 1; p.resonator = 1; p.muffler = Muffler::Turbo; p.pipeDia_mm = 70;
+        p.sweepStartRpm = 1500; p.sweepEndRpm = 6700;
+        break;
+    case 34: // Nissan RB26DETT (Skyline GT-R R32-R34, 1989-2002): 86 x 73.7 mm, 2568 cc, 8.5:1, DOHC 24 valves, six
+             // individual throttle bodies, two Garrett T28-type ceramic turbos in parallel - the front three cylinders on
+             // one, the rear three on the other; ~0.7 bar (10 psi), 280 PS at 6800 rpm. Rods 121.5 mm; cams chosen
+        p = makePreset(2);
+        p.bore_mm = 86; p.stroke_mm = 73.7f; p.rod_mm = 121.5f; p.compression = 8.5f;
+        p.intakeValveDia_mm = 34.5f; p.exhaustValveDia_mm = 30; p.intakeDuration = 240; p.exhaustDuration = 236;
+        p.intakeLift_mm = 8.6f; p.exhaustLift_mm = 8.6f;
+        p.itb = 1; p.throttleBore_mm = 45; p.runnerLen_mm = 280; p.runnerDia_mm = 40;
+        applyInductionDefaults(p, Induction::Turbo);
+        p.twinMode = 0; applyTurboCount(p, 2);
+        p.turbineAR = 0.6f; p.wastegateBar = 0.7f; p.mechAdvance = 11; p.boostRetard = 5;
+        p.header = HeaderType::Collector; p.injector_ccmin = 444; p.revLimit = 8000;
+        p.cat = 1; p.resonator = 0; p.muffler = Muffler::Chambered; p.pipeDia_mm = 76;
+        p.sweepStartRpm = 2000; p.sweepEndRpm = 7900;
+        break;
+    case 35: // Nissan VG30DETT (300ZX Z32, 1989-2000): 60 deg V6, 87 x 83 mm, 2960 cc, 8.5:1, DOHC 24 valves, a Garrett
+             // T22 on each bank (parallel), ~0.75 bar; 300 hp at 6400 rpm, 384 Nm at 3600. A downpipe and system per bank
+             // (true dual). Rods, valves, cams chosen
+        p = makePreset(3);
+        p.bore_mm = 87; p.stroke_mm = 83; p.rod_mm = 154; p.compression = 8.5f;
+        p.intakeValveDia_mm = 34; p.exhaustValveDia_mm = 29.5f; p.intakeDuration = 240; p.exhaustDuration = 240;
+        p.intakeLift_mm = 9.0f; p.exhaustLift_mm = 8.8f;
+        applyInductionDefaults(p, Induction::Turbo);
+        p.twinMode = 0; applyTurboCount(p, 2);
+        p.turbineAR = 0.55f; p.wastegateBar = 0.75f; p.mechAdvance = 11; p.boostRetard = 5;
+        p.header = HeaderType::Collector; p.crossover = Crossover::TrueDual; p.injector_ccmin = 370; p.revLimit = 7000;
+        p.cat = 1; p.resonator = 1; p.muffler = Muffler::Chambered; p.pipeDia_mm = 57;
+        for (int i = 0; i < kMaxCyl; ++i) p.primaryLen_mm[i] = 300;
+        p.sweepStartRpm = 1500; p.sweepEndRpm = 6900;
         break;
     case 19: // big single I6
         p = makePreset(2);
@@ -764,6 +845,9 @@ EngineParams makePreset(int idx) {
             {28, CamLayout::OHV, CamDrive::Gears, Cooling::Liquid},   // L5P (pushrod; gear drive chosen)
             {29, CamLayout::OHV, CamDrive::Gears, Cooling::Air},      // Hatz single cam system (gears chosen)
             {31, CamLayout::DOHC, CamDrive::Chain, Cooling::Air},     // H1 triple: air-cooled (no camshafts - a two-stroke)
+            {33, CamLayout::DOHC, CamDrive::Belt, Cooling::Liquid},   // 2JZ-GTE: a toothed belt to both cams
+            {34, CamLayout::DOHC, CamDrive::Belt, Cooling::Liquid},   // RB26DETT
+            {35, CamLayout::DOHC, CamDrive::Belt, Cooling::Liquid},   // VG30DETT
         };
         for (const Build& b : kBuild)
             if (b.preset == idx) { p.camLayout = b.cam; p.camDrive = b.drive; p.cooling = b.cool; }
@@ -815,6 +899,7 @@ static const signed char kPresetGroup[] = {
     0, 0, 3, 3, 3, 3, 2, 2, 3, 2,   // 10-19: single, I4 ITB, rotaries 12-15, turbo I4, Roots V8, turbo rotary, turbo I6
     2, 0, 1, 3, 4, 5, 4, 4, 4, 4,   // 20-29: centrifugal V6, I5, flat-6, bridge port, TDI, 2T single, diesels 26-29
     5, 5, 5,                        // 30-32: two-strokes
+    2, 2, 2,                        // 33-35: twin turbos (2JZ, RB26, VG30)
 };
 static_assert(sizeof(kPresetGroup) == sizeof(kNames) / sizeof(kNames[0]), "every preset needs a group");
 int presetGroupCount() { return (int)(sizeof(kGroupNames) / sizeof(kGroupNames[0])); }

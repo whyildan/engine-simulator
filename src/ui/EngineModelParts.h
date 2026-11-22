@@ -58,11 +58,11 @@ struct EngineBits {
 std::vector<V3> serpentine(const std::vector<std::tuple<float, float, float>>& pulleys, float z, const std::vector<int>& force);
 V3 buildIntake(Scene& sc, const EngineParams& p, EngineBits& eb, V3& inletDir);
 // headers, collector(s) and tail pipe(s); with a turbo the first collector feeds the turbine instead
-void buildExhaust(Scene& sc, const EngineParams& p, const EngineBits& eb, const EngineViewLive& live, bool turbo, V3& turbineIn);
+void buildExhaust(Scene& sc, const EngineParams& p, const EngineBits& eb, const EngineViewLive& live, bool turbo, std::vector<V3>& turbineIns);
 // diesel extras: injection pump and its high-pressure lines, the glow plugs' bus wire, the EGR valve and pipe
 void buildDiesel(Scene& sc, const EngineParams& p, const EngineBits& eb, const EngineViewLive& live);
 // turbo / supercharger / intercooler and their piping
-void buildBoost(Scene& sc, const EngineParams& p, const EngineBits& eb, const EngineViewLive& live, float crankDeg, V3 turbineIn,
+void buildBoost(Scene& sc, const EngineParams& p, const EngineBits& eb, const EngineViewLive& live, float crankDeg, const std::vector<V3>& turbineIns,
                 V3 throttleIn, V3 throttleDir);
 // a two-stroke cylinder's own parts (ports, transfers, crankcase, reed, head) and its expansion chamber
 void buildTwoStrokeCyl(Scene& sc, const EngineParams& p, const M4& cf, double phi, float crankDeg, const EngineViewLive& live, float glassA,

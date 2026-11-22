@@ -287,6 +287,7 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
     burned_.V = 1; burned_.T = kGasT; burned_.m = 1; burned_.mb = 1; burned_.mf = 0;
     helm_.clear(); helm_.reserve(8);
     valvePipes_.clear(); valveApplied_ = -1;
+    nTin_ = nTout_ = 1; twinScroll_ = screamer_ = false;
     ports_.assign(n, GasNode());
     for (int i = 0; i < n; ++i) {
         GasNode& g = ports_[i];
@@ -365,6 +366,25 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
     for (int i = 0; i < n; ++i) grp[(p.layout == Layout::Inline) ? 0 : clampv(p.bank[i], 0, 1)].push_back(i);
     if (grp[1].empty()) grp.pop_back();
     else if (grp[0].empty()) { grp[0] = grp[1]; grp.pop_back(); }
+    const bool turboNow = p.induction == Induction::Turbo && !tsPipe_;
+    const bool twinTurbo = turboNow && p.turboCount >= 2;
+    twinScroll_ = turboNow && !twinTurbo && p.header == HeaderType::TwinScroll && n >= 2;
+    if (twinScroll_) {
+        // twin-scroll / divided manifold: every other cylinder along the firing order into each scroll, so the
+        // pulses in one scroll come 720 / (n / 2) deg apart (an I4 1-3-4-2: 1 + 4 and 3 + 2, 360 deg; an I6: groups of
+        // three, 240 deg - Watson & Janota, Turbocharging the I.C. Engine, ch. 8: pulse systems work best with three
+        // cylinders to a turbine entry) - one cylinder's blowdown cannot push back into another's exhaust stroke
+        std::vector<int> s(n);
+        for (int i = 0; i < n; ++i) s[i] = i;
+        std::sort(s.begin(), s.end(), [&](int a, int b) { return phase[a] < phase[b]; });
+        grp.assign(2, {});
+        for (int k = 0; k < n; ++k) grp[k % 2].push_back(s[k]);
+    } else if (twinTurbo && p.twinMode == 0 && grp.size() == 1 && n >= 2) {
+        // parallel twins on an inline engine: the front and the rear half each to its own turbo (RB26 / 2JZ-style
+        // split manifold; an I6's halves fire 240 deg apart within each)
+        grp.assign(2, {});
+        for (int i = 0; i < n; ++i) grp[i < (n + 1) / 2 ? 0 : 1].push_back(i);
+    }
     groups = (int)grp.size();
 
     if (p.header == HeaderType::OpenStacks && p.induction != Induction::Turbo && !tsPipe_) {
@@ -414,6 +434,7 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
             for (int c2 : g) feeds.push_back(PipeEnd{prim[c2], 1});
         }
         int col = newPipe(Collector, 0, 1, 0, 9000, 0.03);
+        if (twinScroll_) net.pipes[col].area *= 0.6;   // (each scroll's runner: about half the housing inlet)
         std::vector<PipeEnd> j = feeds;
         j.push_back(PipeEnd{col, 0});
         net.connect(j);
@@ -424,14 +445,46 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
     if (hasTurbine_) {
         // all collectors feed one turbine; after it a single downpipe -> cat / muffler / tail
         double disp = std::max(0.3, equivalentDisplacementL(p));
-        tin_ = GasNode(); tin_.V = 0.35e-3 * disp; tin_.T = kGasT; tin_.setPressure(kPatm); tin_.mb = tin_.m;
-        tout_ = GasNode(); tout_.V = 0.25e-3 * disp; tout_.T = kGasT; tout_.setPressure(kPatm); tout_.mb = tout_.m;
-        for (const PipeEnd& g : groupOut) net.addNodeEnd(g, &tin_);
+        // turbine inlets: one manifold (single, sequential), one per scroll (twin-scroll) or one per turbo (parallel)
+        nTin_ = (twinScroll_ || (twinTurbo && p.twinMode == 0)) && groupOut.size() == 2 ? 2 : 1;
+        nTout_ = twinTurbo && p.twinMode == 0 && nTin_ == 2 ? 2 : 1;
+        for (int i = 0; i < 2; ++i) {
+            tin_[i] = GasNode(); tin_[i].V = 0.35e-3 * disp / nTin_; tin_[i].T = kGasT; tin_[i].setPressure(kPatm); tin_[i].mb = tin_[i].m;
+            tout_[i] = GasNode(); tout_[i].V = 0.25e-3 * disp / nTout_; tout_[i].T = kGasT; tout_[i].setPressure(kPatm); tout_[i].mb = tout_[i].m;
+        }
+        for (size_t g = 0; g < groupOut.size(); ++g) net.addNodeEnd(groupOut[g], &tin_[nTin_ == 2 ? g : 0]);
         fixedZone_ = 0.7;    // expansion through the turbine cools the gas
-        int dp = newPipe(Fixed, 0, 1.15, 0.55, 9000, 0.03);
-        net.addNodeEnd(PipeEnd{dp, 0}, &tout_);
-        outlets = 1;
-        finishPath(PipeEnd{dp, 1}, 0.f, 1.0);
+        std::vector<PipeEnd> downs;
+        for (int i = 0; i < nTout_; ++i) {
+            const int dp = newPipe(Fixed, 0, nTout_ == 2 ? 0.85 : 1.15, 0.55, 9000, 0.03);
+            net.addNodeEnd(PipeEnd{dp, 0}, &tout_[i]);
+            downs.push_back(PipeEnd{dp, 1});
+        }
+        if (downs.size() == 2 && p.layout != Layout::Inline && p.crossover == Crossover::TrueDual) {
+            outlets = 2;   // a downpipe and a system per bank
+            finishPath(downs[0], -0.7f, 1.0);
+            finishPath(downs[1], 0.7f, 1.0);
+        } else {
+            outlets = 1;
+            PipeEnd d0 = downs[0];
+            if (downs.size() == 2) {   // the two downpipes merge into one system (a Y)
+                const int m = newPipe(Mid, 0, 1.0, 0.3, 9000, 0.03);
+                net.connect({downs[0], downs[1], PipeEnd{m, 0}});
+                d0 = PipeEnd{m, 1};
+            }
+            finishPath(d0, 0.f, 1.0);
+        }
+        screamer_ = p.wgScreamer != 0;
+        if (screamer_) {
+            // screamer pipe: an external wastegate's own short pipe out to the air - the wastegate flow skips the
+            // silencers (the open pipe's rasp when it opens on boost); 0.45 x the system pipe, 0.4 m (chosen)
+            scream_ = GasNode(); scream_.V = 0.03e-3 * disp; scream_.T = kGasT; scream_.setPressure(kPatm); scream_.mb = scream_.m;
+            fixedZone_ = 0.8;
+            const int sp = newPipe(Fixed, 0, 0.45, 0.40, 10000, 0.03);
+            net.addNodeEnd(PipeEnd{sp, 0}, &scream_);
+            net.addOpenEnd(PipeEnd{sp, 1}, 0.35f);
+            ++outlets;
+        }
     } else if (groupOut.size() == 1) {
         outlets = 1;
         finishPath(groupOut[0], 0.f, 1.0);
@@ -475,7 +528,7 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
         }
         }
     }
-    if (p.exhaustSplit) outlets *= 2;
+    if (p.exhaustSplit) outlets = (outlets - (screamer_ ? 1 : 0)) * 2 + (screamer_ ? 1 : 0);   // (the screamer is not split)
     if (gasT_ <= 0) gasT_ = kGasT;
     net.setGasTemp(gasT_, 300.0);
     net.reset(1.0);
@@ -551,7 +604,7 @@ void ExhaustSystem::stepPost(double dt) {
     double k = 1.0 - std::exp(-dt / 0.04);
     for (Pipe& pp : net.pipes) { double d = pp.cmf * k; pp.cmf -= d; pp.cmb += d; }
     for (GasNode& g : ports_) { double d = g.mf * k; g.mf -= d; g.mb += d; }
-    if (hasTurbine_) for (GasNode* g : {&tin_, &tout_}) { double d = g->mf * k; g->mf -= d; g->mb += d; }
+    if (hasTurbine_) for (GasNode* g : {&tin_[0], &tin_[1], &tout_[0], &tout_[1], &scream_}) { double d = g->mf * k; g->mf -= d; g->mb += d; }
 }
 
 void ExhaustSystem::apply(const EngineParams& p) {

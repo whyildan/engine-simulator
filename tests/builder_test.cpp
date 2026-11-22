@@ -137,8 +137,10 @@ int main(int argc, char** argv) {
         const Run r = drive(p);
         std::printf("  idle %.0f rpm (min %.0f), free rev peak %.0f, after the lift %.0f\n", r.idleRpm, r.idleMin, r.peakRpm, r.afterRpm);
         CHECK(r.finite, "finite throughout");
-        // (a two-stroke idles four-stroking - lumpy: the KTM TPI preset dips to 0.4 x its target the same way)
-        const double dip = isTwoStroke(p) ? 0.3 : 0.4;
+        // (a two-stroke idles four-stroking - lumpy: the KTM TPI preset dips to 0.4 x its target the same way; a bridge
+        //  or peripheral port rotary idles with its brap - the bridge-port preset dips to 0.5 x)
+        const bool lumpy = isTwoStroke(p) || (isRotary(p) && c.r.character >= 2);
+        const double dip = lumpy ? 0.3 : 0.4;
         CHECK(r.idleMin > dip * p.idleTargetRpm && r.idleRpm > 0.6 * p.idleTargetRpm && r.idleRpm < 1.6 * p.idleTargetRpm,
               "idles near its target (a carburettor sets its own idle with the screw)");
         CHECK(r.peakRpm > 0.8 * p.revLimit, "revs out toward its limiter with the throttle open");

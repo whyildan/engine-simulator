@@ -989,7 +989,7 @@ void buildEngineModel(const EngineParams& p, const float phases[kMaxCyl], float 
         EngineBits eb;
         V3 turbineIn = v3(0, 0, 0), throttleIn = v3(0, 0, 0), throttleDir = v3(0, 0, -1);
         buildRotaryEngine(sc, p, phases, crankDeg, live, glassAlpha, p.induction == Induction::Turbo, eb, turbineIn, throttleIn, throttleDir);
-        if (isBoosted(p)) buildBoost(sc, p, eb, live, crankDeg, turbineIn, throttleIn, throttleDir);
+        if (isBoosted(p)) buildBoost(sc, p, eb, live, crankDeg, {turbineIn}, throttleIn, throttleDir);
         return;
     }
     EngineBits eb;
@@ -997,11 +997,11 @@ void buildEngineModel(const EngineParams& p, const float phases[kMaxCyl], float 
     if (isTwoStroke(p)) return;   // (its expansion chamber / intake are part of each cylinder)
     V3 inletDir = v3(0, 0, -1);
     const V3 throttleIn = buildIntake(sc, p, eb, inletDir);
-    V3 turbineIn = v3(0, 0, 0);
+    std::vector<V3> turbineIns;
     const bool turbo = p.induction == Induction::Turbo;
-    buildExhaust(sc, p, eb, live, turbo, turbineIn);
+    buildExhaust(sc, p, eb, live, turbo, turbineIns);
     if (isDiesel(p)) buildDiesel(sc, p, eb, live);
-    if (isBoosted(p)) buildBoost(sc, p, eb, live, crankDeg, turbineIn, throttleIn, inletDir);
+    if (isBoosted(p)) buildBoost(sc, p, eb, live, crankDeg, turbineIns, throttleIn, inletDir);
 }
 
 namespace model {

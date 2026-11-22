@@ -774,6 +774,19 @@ void App::panelExhaust() {
     ExhaustSchematic(p_, ImVec2(ImGui::GetContentRegionAvail().x, 170));
     ImGui::PushItemWidth(-170);
     ImGui::SeparatorText("Headers");
+    if (p_.induction == Induction::Turbo) {
+        // a turbo manifold: what the cylinders' pulses do before the turbine
+        static const HeaderType kT[] = {HeaderType::Log, HeaderType::Collector, HeaderType::TwinScroll};
+        static const char* kTn[] = {"Cast log manifold", "Tubular (equal length)", "Twin-scroll / divided"};
+        int cur = p_.header == HeaderType::Log ? 0 : p_.header == HeaderType::TwinScroll ? 2 : 1;
+        if (ImGui::Combo("Turbo manifold", &cur, kTn, 3)) p_.header = kT[cur];
+        Help("Log: compact cast manifold - the pulses run into each other before the turbine.\n"
+             "Tubular: a header of equal-length runners into the turbine flange.\n"
+             "Twin-scroll / divided: the cylinders in two groups by firing order (an I4: 1+4 and 2+3, an I6: 1-2-3 and\n"
+             "4-5-6), each into its own scroll of the turbine housing - one cylinder's blowdown cannot push back into\n"
+             "another's exhaust stroke, and the pulses keep their energy for the turbine (Watson & Janota: pulse systems).\n"
+             "Twin turbos: each turbo gets its own manifold (per bank, or front / rear).");
+    } else
     Combo("Header type", &p_.header, "Log manifold\0N-into-1 collector\0Tri-Y / 4-2-1\0Open stacks (zoomies)\0");
     Help("Log: compact cast manifold, muffled.\nCollector: long tube headers, every pulse separate.\nTri-Y: pairs cylinders 360 deg apart (smooth mid-range).\n"
          "Open stacks: every primary ends in the open air - no collector, cat or silencer (drag / race stacks).\n"
@@ -853,7 +866,12 @@ void App::panelExhaust() {
             Help("Tubes reaching L/2 (inlet) and L/4 (outlet) into each chamber: the closed spaces around them are\n"
                  "quarter-wave resonators that fill the chambers' transmission-loss dips - fewer pass bands.");
         }
-        Check("Split into two mufflers and tips", &p_.exhaustSplit);
+        if (p_.induction == Induction::Turbo && !p_.vgt) {
+        Check("Screamer pipe (wastegate to the air)", &p_.wgScreamer);
+        Help("An external wastegate with its own short pipe out to the air instead of back into the downpipe: when it\n"
+             "opens on boost its gas skips the silencers - the open-pipe rasp of a race turbo car.");
+    }
+    Check("Split into two mufflers and tips", &p_.exhaustSplit);
         Help("A Y after the cat / resonator: each branch (0.6 x the pipe's area) gets its own muffler and tip - a single\n"
              "pipe becomes a dual exit, a true dual becomes four tips.");
         SliderF("Tailpipe length", &p_.tailpipeLen_mm, 50, 2500, "%.0f mm");
@@ -918,6 +936,30 @@ void App::panelBoost() {
     }
     if (p_.induction == Induction::Turbo) {
         ImGui::SeparatorText("Turbocharger");
+        {
+            int cnt = p_.turboCount >= 2 ? 2 : 1;
+            if (ImGui::RadioButton("Single turbo", &cnt, 1)) applyTurboCount(p_, 1);
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Twin turbo", &cnt, 2)) applyTurboCount(p_, 2);
+            Help("Twin: two smaller turbos (each sized for half the engine: they spool quicker). Sizes below are each one's.");
+            if (p_.turboCount >= 2) {
+                int mode = p_.twinMode;
+                if (ImGui::Combo("Arrangement", &mode, "Parallel\0Sequential\0")) applyTwinMode(p_, mode);
+                if (p_.twinMode == 0)
+                    Help(p_.layout == Layout::Inline ? "Parallel on an inline engine: the front and the rear cylinders each drive their own turbo\n(a split manifold, RB26-style); both blow into one intercooler." :
+                         "Parallel on a V / boxer: one turbo per bank, each bank's exhaust drives its own; both blow into\none intercooler. True dual crossover: a downpipe and exhaust per bank, else they merge.");
+                else {
+                    SliderF("Second turbo from", &p_.seqRpm, 2500, 7000, "%.0f rpm");
+                    Help("Sequential (Mazda 13B-REW, Toyota 2JZ-GTE): one manifold; the first turbo takes all the exhaust down low.\n"
+                         "1200 rpm before the change-over a bypass valve starts spinning the second (pre-spool); at it the exhaust\n"
+                         "control valve opens to it, and its compressor joins the charge only once it has caught up. Under load\n"
+                         "(pedal past 40 %) only.");
+                    static const char* kStage[] = {"first turbo alone", "second turbo spooling", "both turbos"};
+                    ImGui::Text("Now: %s   (second %.0f krpm)", kStage[clampv(tel_.seqStage, 0, 2)], tel_.shaftRpm2 / 1000.0f);
+                }
+                if (p_.twinMode == 0) ImGui::Text("Turbo speeds %.0f / %.0f krpm", tel_.shaftRpm / 1000.0f, tel_.shaftRpm2 / 1000.0f);
+            }
+        }
         turboModelUi();
         if (!p_.turbo.useMaps) {
             SliderF("Compressor size", &p_.compFlow_gs, 60, 900, "%.0f g/s max flow", "Bigger compressor = more top-end power, but needs more exhaust energy to spin (lag).");
@@ -1783,6 +1825,7 @@ void App::panelEngineView() {
     if (isDiesel(p_) && tel_.running) live.advance = tel_.soi;   // start of injection, deg BTDC
     live.time = (float)ImGui::GetTime();
     live.shaftRpm = tel_.running ? tel_.shaftRpm : 0.0f;
+    live.shaftRpm2 = tel_.running ? tel_.shaftRpm2 : 0.0f;
     live.animSpeed = animSpeed_;
     live.throttle = tel_.throttle;
     live.boostBar = tel_.boostBar;

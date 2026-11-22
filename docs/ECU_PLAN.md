@@ -1540,6 +1540,38 @@ energi < 200 Hz hanya 1,4 %; whine = satu sinus pada 1,6× putaran poros (angka 
 - **Batas**: konstanta saluran / bentuk garis kiri dipilih; level relatif antar sumber dipilih; paper Loughborough
   (Walsh, ICSV22 — surge mesin bensin) tidak bisa diunduh otomatis; sisi turbin (siulan turbin, wastegate) belum.
 
+### Twin turbo, manifold turbo, knalpot tambahan ✅ (2026-11-22)
+Atas permintaan ("tambah konfigurasi knalpot, header turbo beda, dua turbo kanan-kiri, sekuensial dan paralel, X/H
+pipe V8 belum ter-render").
+- **Twin turbo** (`turbo_count`, `twin_mode`, `seq_rpm`): ForcedInduction kini per unit (poros, state aliran Greitzer,
+  garis kecepatan, fase bunyi). Dua turbo masing-masing separuh luas turbin untuk A/R yang sama; ukuran per turbo
+  0,55× kompresor / 0,45× inersia (paralel) atau 0,70× / 0,63× (sekuensial: turbo pertama memikul mesin sendirian sampai
+  change-over) — dipilih.
+  - Paralel: V / boxer satu turbo per bank; inline depan / belakang (manifold terbelah, ala RB26). Dua downpipe:
+    true dual = dua sistem, selain itu menyatu (Y).
+  - Sekuensial (Tashima dkk., SAE 941030 – 13B-REW; SAE 910624; katup 2JZ-GTE: ICV / ECV / EBV, manual Supra 1997):
+    satu manifold; 1200 rpm sebelum change-over katup bypass (EBV) memutar turbo kedua — diregulasi ke ±92 % putaran
+    turbo pertama; di change-over katup buang (ECV, 0,15 s) membuka; katup isap (ICV) baru membuka setelah turbo kedua
+    mencapai 85 % putaran turbo pertama dan berayun ±0,3 s (urutan katup turbin dulu, kompresor belakangan: Galindo,
+    Climent, Guardiola, Domenech, Int. J. Automot. Technol. 10:141, 2009). Kompresor kedua di balik ICV tertutup
+    berputar di jalur relief (5 % kenaikan tekanannya). Hasil (twin_turbo_test, 13B 4500 rpm): boost 0,97 → 0,81 bar
+    sesaat di change-over, pulih ±0,3 s (13B-REW memang dikenal ada "dip" transisi).
+    Catatan: tanpa regulasi EBV turbo kedua overspeed tanpa beban, ICV yang membuka seketika membuang udaranya sekaligus
+    → boost 1,4 bar lalu wastegate membuka penuh → dip ke 0,6 bar.
+- **Manifold turbo**: log cor, tubular, **twin-scroll / divided** — silinder dibagi dua per urutan pengapian (I4
+  1-3-4-2: 1+4 / 3+2, pulsa 360° terpisah; I6: 240°), tiap kelompok ke scroll sendiri (Watson & Janota,
+  Turbocharging the I.C. Engine, bab 8: sistem pulsa paling efektif dengan tiga silinder per masuk turbin; paten
+  pairing twin-scroll). Hasil (I4 turbo, 1300 rpm, gas penuh, wastegate tertutup): log 0,22 bar / turbo 60 000 rpm, twin-scroll 0,56 bar / 94 000 rpm; pada putaran yang boost-nya sudah di target, wastegate menyamakan keduanya.
+- **Screamer pipe** (`wg_screamer`): wastegate eksternal ke udara lewat pipa pendek sendiri — aliran wastegate tidak
+  lewat peredam.
+- **Knalpot (sebelumnya hari ini)**: open stacks, glasspack, reverse-flow 3-pass (Munjal), muffler bercelah aktif
+  (flap pengalih), cat high-flow, split dual / quad.
+- **3D**: X-pipe (dua pipa bertemu di tengah lalu berpisah, peredam di belakangnya), H-pipe (pipa penyeimbang),
+  Y (menyatu jadi satu); twin turbo per bank / depan-belakang / bertumpuk (sekuensial dengan pipa ECV); twin-scroll dua
+  kerucut kolektor dengan sekat; wastegate eksternal + screamer.
+- **Batas**: X / H pipe tidak punya sumber akademik (hanya praktisi) — fisikanya sambungan waveguide yang sudah ada;
+  konstanta katup sekuensial dipilih; paper SAE 941030 / 910624 berbayar (abstrak saja).
+
 ## 5. Keputusan (sudah disepakati)
 
 1. **Urutan fase:** sesuai daftar di atas (1 Fondasi → 2 Kalibrasi → 3 Kontrol → 4 Monitoring → 5 Motorsport → 6 Lanjutan).

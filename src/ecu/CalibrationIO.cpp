@@ -678,6 +678,7 @@ const EngineField kEngineFields[] = {
     EI("resonator", resonator), EI("muffler", muffler), EF("tailpipe_len_mm", tailpipeLen_mm),
     EF("resonator_hz", resonatorHz), EI("muffler_ext_tubes", mufflerExtTubes),
     EI("exhaust_split", exhaustSplit), EI("exhaust_valve_mode", exhaustValveMode), EF("exhaust_valve_rpm", exhaustValveRpm),
+    EI("wg_screamer", wgScreamer), EI("turbo_count", turboCount), EI("twin_mode", twinMode), EF("seq_rpm", seqRpm),
     // rotary
     EF("rotor_radius_mm", rotorRadius_mm), EF("eccentricity_mm", eccentricity_mm), EF("rotor_width_mm", rotorWidth_mm),
     EF("r_intake_open", rIntakeOpen), EF("r_intake_close", rIntakeClose), EF("r_intake_area_cm2", rIntakeArea_cm2),
@@ -847,6 +848,9 @@ bool engineFromJson(const std::string& text, EngineParams& p, EngineMeta& m, std
     const JVal* e = root.get("engine");
     if (!e || e->kind != JVal::Obj) { err = "the file has no \"engine\" section"; return false; }
     EngineParams n = p;
+    // keys newer than the file (v0.8: twin turbos, exhaust options): their defaults, not the engine loaded before
+    n.turboCount = 1; n.twinMode = 0; n.seqRpm = 4500; n.wgScreamer = 0;
+    n.exhaustSplit = 0; n.exhaustValveMode = 0; n.exhaustValveRpm = 3500;
     char* base = reinterpret_cast<char*>(&n);
     for (const EngineField& fd : kEngineFields) {
         const JVal* j = e->get(fd.key);
@@ -896,6 +900,10 @@ bool engineFromJson(const std::string& text, EngineParams& p, EngineMeta& m, std
     n.fuelType = clampv((int)n.fuelType, 0, kFuelTypeCount - 1);
     n.resonator = clampv((int)n.resonator, 0, 2); n.resonatorHz = clampv(n.resonatorHz, 0.0f, 400.0f);
     n.mufflerExtTubes = n.mufflerExtTubes ? 1 : 0;
+    n.header = (HeaderType)clampv((int)n.header, 0, 4); n.muffler = (Muffler)clampv((int)n.muffler, 0, 6); n.cat = clampv((int)n.cat, 0, 2);
+    n.exhaustSplit = n.exhaustSplit ? 1 : 0; n.exhaustValveMode = clampv((int)n.exhaustValveMode, 0, 2);
+    n.exhaustValveRpm = clampv(n.exhaustValveRpm, 1000.0f, 12000.0f); n.wgScreamer = n.wgScreamer ? 1 : 0;
+    n.turboCount = clampv((int)n.turboCount, 1, 2); n.twinMode = clampv((int)n.twinMode, 0, 1); n.seqRpm = clampv(n.seqRpm, 1500.0f, 9000.0f);
     // the calibration: from the file, or a base calibration made for this engine
     generateCalibration(n);
     m.hasCalibration = false;

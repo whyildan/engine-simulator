@@ -262,6 +262,8 @@ void Simulator::render(float* out, int frames) {
     t.vgtOpen = e.params().vgt ? (float)e.boost.wastegate : 1.0f;
     t.bovLift = (float)e.boost.bovLift;
     t.exhValve = e.exhaust.hasValve() ? (float)e.exhaust.valveOpen() : -1.0f;
+    t.turboUnits = e.boost.units; t.seqStage = e.boost.seqStage;
+    t.shaftRpm2 = (float)e.boost.shaftRpm2; t.speedFrac2 = (float)e.boost.speedFrac2;
     t.stress = (float)e.stress; t.floatIn = (float)e.floatIn; t.floatEx = (float)e.floatEx;
     t.sparkMargin = (float)e.sparkMargin; t.sparkAvail = (float)e.sparkAvail; t.oilBar = (float)e.oilBar;
     t.plugTempC = (float)e.plugTempC; t.fouling = (float)e.fouling; t.damage = (float)e.damage; t.failure = e.failure;

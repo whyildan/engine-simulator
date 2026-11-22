@@ -56,8 +56,17 @@ public:
     Duct& duct(int i) { return ducts_[i]; }
     const Duct& duct(int i) const { return ducts_[i]; }
     bool hasTurbine() const { return hasTurbine_; }
-    GasNode& turbineIn() { return tin_; }     // exhaust manifold / turbine housing
-    GasNode& turbineOut() { return tout_; }   // turbine exit / downpipe start
+    GasNode& turbineIn() { return tin_[0]; }     // exhaust manifold / turbine housing (the first)
+    GasNode& turbineOut() { return tout_[0]; }   // turbine exit / downpipe start (the first)
+    // two of them: a twin-scroll manifold (two inlets, one turbine), parallel twins (one inlet and outlet each); a
+    // sequential pair shares one inlet and one outlet
+    int turbineInCount() const { return nTin_; }
+    int turbineOutCount() const { return nTout_; }
+    GasNode& turbineIn(int i) { return tin_[i]; }
+    GasNode& turbineOut(int i) { return tout_[i]; }
+    bool twinScroll() const { return twinScroll_; }
+    // a screamer pipe: the wastegate's own pipe to the air (nullptr: the wastegate goes into the downpipe)
+    GasNode* screamer() { return screamer_ ? &scream_ : nullptr; }
     int portCount() const { return (int)ports_.size(); }
     double portPressure(int i) const { return ports_[i].p(); }
 
@@ -94,7 +103,9 @@ private:
     double ambK_ = 293.0;
     double helmholtzHz() const;
     GasNode burned_;   // composition of gas flowing back from the pipes (pure products)
-    GasNode tin_, tout_;
+    GasNode tin_[2], tout_[2], scream_;
+    int nTin_ = 1, nTout_ = 1;
+    bool twinScroll_ = false, screamer_ = false;
     bool hasTurbine_ = false;
     double fixedZone_ = 0.6;   // temperature zone for the next fixed (cat / muffler) pieces
     double gasT_ = 0;

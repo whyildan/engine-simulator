@@ -35,13 +35,15 @@ protection, a virtual dyno and a calibration manager. Everything is changed **li
 | 🧊 **3D engine view** | A GPU-rendered (Direct3D 11) model built from the engine's own dimensions: pistons, rods, crank, valvetrain (DOHC / SOHC / OHV) and its belt, chain or gears, manifolds, turbo / supercharger, the diesel's injection system, the two-stroke's ports and expansion chamber, the rotary's housings — moving live with valve lift, spark, gas by stroke and glowing headers. |
 | ⛽ **Fuels and flex fuel** | Regular / premium / race gasoline, E10, E20, E85, E100 and methanol, each with its own stoichiometric AFR, heating value, octane (knock), charge cooling, flame speed and cold start; a tank you can refuel with a blend, and a flex fuel sensor the ECU uses to adapt its fuelling, spark and cold enrichment. |
 | 🛡️ **Engine protection** | Ten configurable rules (overboost, oil pressure, coolant, lean, knock, EGT, sensor failure …) with limp mode and shutdown. |
-| 🌬️ **Forced induction** | Turbos with lag, wastegate and anti-lag; compressor surge as Greitzer compression-system dynamics (the "stu-tu-tu" flutter on a lift-off comes out of the charge-pipe volume), a spring-mass blow-off valve (vented or recirculating), compressor whistle at the shaft order with blade-pass, buzz-saw, tip-clearance and whoosh noise; compressor / turbine maps (built in or loaded from CSV) with efficiency islands, surge and choke; intercooler heat soak; Roots, twin-screw and centrifugal superchargers. |
+| 🌬️ **Forced induction** | Turbos with lag, wastegate and anti-lag; compressor surge as Greitzer compression-system dynamics (the "stu-tu-tu" flutter on a lift-off comes out of the charge-pipe volume), a spring-mass blow-off valve (vented or recirculating), compressor whistle at the shaft order with blade-pass, buzz-saw, tip-clearance and whoosh noise; compressor / turbine maps (built in or loaded from CSV) with efficiency islands, surge and choke; intercooler heat soak; Roots, twin-screw and centrifugal superchargers. **Twin turbos**: parallel (a turbo per bank, or an inline's front / rear halves) or sequential (pre-spool bypass, exhaust and intake control valves, 13B-REW / 2JZ-GTE style); cast log, tubular and twin-scroll manifolds; screamer pipe. |
 | 📈 **Virtual dyno** | WOT sweeps, steady-state step tests and holds, SAE J1349 / DIN 70020 / ISO 1585 / SAE J607 correction, altitude, cell fan, BSFC / EGT / boost per point, before / after comparison, CSV export. |
 | 🔩 **Valvetrain dynamics** | Spring-mass valves on an elastic train: valve float, loft, late closing and seat bounce past the float speed, from the springs, moving mass and lifter type. |
 | 🏁 **Motorsport** | Launch control (2-step) with pops and bangs, 3-step / flat shift, shift cut, traction control, transbrake, rolling anti-lag, progressive wet / dry nitrous, torque management and rev limit / timing by gear. |
 | 🗂️ **Data logging** | 62 channels at 10–100 Hz, markers, stacked graphs over time or rpm, CSV export / import, session compare tied to the calibration version. |
 | 🎛️ **Custom dashboard** | Your own grid of gauges, digital readouts and bars with warning / alarm thresholds and a sensor status strip. |
 | 🗺️ **Flow map and engine health** | The gas path drawn from the engine's own configuration: particles move at the gas velocity, coloured by temperature, and gas pushed backwards (reversion, standoff, compressor surge) moves the other way. Components turn green / yellow / red from their real state, hover shows pressures, temperatures, flows and turbo efficiencies, and a health panel covers check engine, knock, plugs, sensors, valves, rods, crank, pistons and repair. |
+| 🔥 **Exhaust systems** | Log, 4-1, 4-2-1 headers or open stacks; true dual, H-pipe, X-pipe or Y crossover; ceramic or high-flow cat; inline or tuned Helmholtz resonator; straight-through, glasspack, chambered, reverse-flow (OEM three-pass), turbo or valved (active flap) mufflers; split dual / quad tips. |
+| 🏗️ **Build your own** | A grouped, searchable preset list and *New engine from scratch*: petrol, diesel, two-stroke or rotary, layout, cylinders, size, valvetrain, fuel system, induction and character - bore, stroke, valves, cams, intake, exhaust, the car and the base calibration are sized from them. Engine Setup is a step bar: engine, parts, valvetrain, induction, intake and fuel, exhaust, vehicle, sound. |
 | 🚗 **Drive it** | Car or motorcycle as the load: manual / auto-clutch / automatic gearbox, clutch, tyre slip, 0–100 and 1/4-mile timers. |
 | 🧪 **Virtual sensors** | Lag, noise, 10-bit ADC, transport delay, faults (open / short / stuck / noisy) and the ECU's fallbacks. The wideband reads the gas in the pipe (misfires read lean, rich products rich; collector or downpipe), EMAP with the drive pressure ratio, EGT per cylinder and after the turbine. |
 | 💾 **Calibration manager** | JSON calibrations per engine, version history, compare, locks, validation. |
@@ -94,7 +96,7 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 | 3 | V6 3.5 EFI | 15 | Rotary 1-rotor carb |
 | 4 | V8 5.7 crossplane carb | 16 | I4 2.0 turbo (hot hatch) |
 | 5 | V8 4.5 flatplane EFI | 17 | V8 6.2 Roots blower |
-| 6 | V10 5.2 EFI | 18 | Rotary 13B turbo |
+| 6 | V10 5.2 EFI | 18 | **Rotary 13B sequential twin turbo (13B-REW-style)** |
 | 7 | V12 6.0 EFI | 19 | I6 3.0 big single turbo + anti-lag |
 | 8 | Flat-4 2.5 boxer (unequal headers) | 20 | V6 3.5 centrifugal supercharger |
 | 9 | V-twin 1.6 45° carb | 21 | I5 2.5 EFI |
@@ -109,6 +111,9 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 |  |  | 30 | **350 two-stroke twin with power valve (RD350 YPVS-style)** |
 |  |  | 31 | **500 piston-port two-stroke triple, air-cooled (H1-style)** |
 |  |  | 32 | **300 two-stroke EFI single, oil pump, power valve (300 TPI-style)** |
+|  |  | 33 | **I6 3.0 sequential twin turbo (2JZ-GTE-style)** |
+|  |  | 34 | **I6 2.6 parallel twin turbo, ITB (RB26DETT-style)** |
+|  |  | 35 | **V6 3.0 twin turbo, one per bank (VG30DETT-style)** |
 
 ## Building from source
 

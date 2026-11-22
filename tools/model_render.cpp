@@ -62,6 +62,11 @@ int main(int argc, char** argv) {
         if (k == "muffler") p.muffler = (Muffler)std::atoi(eq + 1);
         if (k == "split") p.exhaustSplit = std::atoi(eq + 1);
         if (k == "cat") p.cat = std::atoi(eq + 1);
+        if (k == "turbo" && std::atoi(eq + 1)) applyInductionDefaults(p, Induction::Turbo);
+        if (k == "twin" && std::atoi(eq + 1)) applyTurboCount(p, 2);
+        if (k == "seq") applyTwinMode(p, std::atoi(eq + 1));
+        if (k == "cross") p.crossover = (Crossover)std::atoi(eq + 1);
+        if (k == "screamer") p.wgScreamer = std::atoi(eq + 1);
     }
     float ph[kMaxCyl]; computePhases(p, ph);
     EngineViewLive live;

@@ -42,49 +42,52 @@ void ForcedInduction::refreshMaps() {
     tipR_ = tipRadius(nMaxC_);
     const double rInd = 0.7 * tipR_;
     ductA_ = kPi * rInd * rInd;
-    lineN_ = -1;   // (rebuild the speed line)
+    for (Unit& u : u_) u.lineN = -1;   // (rebuild the speed lines)
+    nU_ = turbo && p_.turboCount >= 2 ? 2 : 1;
+    seq_ = nU_ == 2 && p_.twinMode == 1;
+    units = nU_;
 }
 
 // The speed line at this speed as pressure ratio over flow (kg/s at the inlet state): the right branch from the map
 // (generic: its closed form) as a table, the peak (surge point) and the left / reverse branch from the shape above.
 // Rebuilt when the speed has moved by 0.2 % (a map: tens of evaluations once in a while, not per step).
-void ForcedInduction::buildLine(double n, double rpmCorr, double corrM) {
-    lineN_ = n;
+void ForcedInduction::buildLine(Unit& u, double n, double rpmCorr, double corrM) {
+    u.lineN = n;
     if (mapC_) {
         const CompPoint top = cm_.eval(rpmCorr, 99.0);   // (left of everything: the line's surge point)
-        lineS_ = top.surgeFlow * corrM; linePrS_ = std::max(1.0, top.surgePr);
+        u.lineS = top.surgeFlow * corrM; u.linePrS = std::max(1.0, top.surgePr);
         for (int k = 0; k < kLineN; ++k) {
-            const double prk = linePrS_ - (linePrS_ - 1.0) * k / (kLineN - 1.0);
-            lineM_[k] = std::max(cm_.eval(rpmCorr, prk).flow * corrM, k ? lineM_[k - 1] + 1e-6 : lineS_);
-            linePr_[k] = prk;
+            const double prk = u.linePrS - (u.linePrS - 1.0) * k / (kLineN - 1.0);
+            u.lineM[k] = std::max(cm_.eval(rpmCorr, prk).flow * corrM, k ? u.lineM[k - 1] + 1e-6 : u.lineS);
+            u.linePr[k] = prk;
         }
     } else {
         const double mP = std::max(1e-4, p_.compFlow_gs * 1e-3) * (0.12 * smoothstep(0.0, 0.12, n) + 0.88 * n);
         const double pr0 = prAtZeroFlow(n);
-        lineS_ = kSurgeFlowShare * mP;
+        u.lineS = kSurgeFlowShare * mP;
         for (int k = 0; k < kLineN; ++k) {
-            const double mk = lineS_ + (mP - lineS_) * k / (kLineN - 1.0);
-            lineM_[k] = mk; linePr_[k] = 1.0 + (pr0 - 1.0) * (1.0 - (mk / mP) * (mk / mP));
+            const double mk = u.lineS + (mP - u.lineS) * k / (kLineN - 1.0);
+            u.lineM[k] = mk; u.linePr[k] = 1.0 + (pr0 - 1.0) * (1.0 - (mk / mP) * (mk / mP));
         }
-        linePrS_ = linePr_[0];
+        u.linePrS = u.linePr[0];
     }
 }
 
-double ForcedInduction::linePr(double m) const {
-    if (m >= lineS_) {
+double ForcedInduction::linePr(const Unit& u, double m) const {
+    if (m >= u.lineS) {
         for (int k = 1; k < kLineN; ++k)
-            if (m <= lineM_[k]) {
-                const double t = (m - lineM_[k - 1]) / std::max(1e-9, lineM_[k] - lineM_[k - 1]);
-                return linePr_[k - 1] + (linePr_[k] - linePr_[k - 1]) * t;
+            if (m <= u.lineM[k]) {
+                const double t = (m - u.lineM[k - 1]) / std::max(1e-9, u.lineM[k] - u.lineM[k - 1]);
+                return u.linePr[k - 1] + (u.linePr[k] - u.linePr[k - 1]) * t;
             }
         // past the choke end: the pressure rise collapses
-        const double mL = lineM_[kLineN - 1];
-        return linePr_[kLineN - 1] - 4.0 * (m - mL) / std::max(1e-4, mL);
+        const double mL = u.lineM[kLineN - 1];
+        return u.linePr[kLineN - 1] - 4.0 * (m - mL) / std::max(1e-4, mL);
     }
-    const double prShut = 1.0 + kShut * (linePrS_ - 1.0);
-    const double u = m / std::max(1e-6, lineS_);
-    if (u >= 0) return prShut + (linePrS_ - prShut) * u * u * (3.0 - 2.0 * u);
-    return prShut + kBack * (linePrS_ - 1.0) * u * u;
+    const double prShut = 1.0 + kShut * (u.linePrS - 1.0);
+    const double x = m / std::max(1e-6, u.lineS);
+    if (x >= 0) return prShut + (u.linePrS - prShut) * x * x * (3.0 - 2.0 * x);
+    return prShut + kBack * (u.linePrS - 1.0) * x * x;
 }
 
 void ForcedInduction::init(const EngineParams& p, double fs) {
@@ -94,9 +97,13 @@ void ForcedInduction::init(const EngineParams& p, double fs) {
     chargeT = ambT_;
     icCoreT = ambT_;
     refreshMaps();
-    omegaT_ = 0;
+    for (Unit& u : u_) {
+        u = Unit();
+        u.tcnBp.bandpass(8000, 6.0, fs);
+        u.amp.lowpass(30, fs);
+    }
+    ecv_ = ebv_ = 0; icv_ = false; icvPos_ = 0; seqStage = 0;
     whooshBp_.bandpass(2500, 0.6, fs);   // (1-4 kHz)
-    tcnBp_.bandpass(8000, 6.0, fs);
     flutLp_.lowpass(2500, fs);          // (the inlet pulse through the air box)
     bovHiss_.bandpass(4800, 0.9, fs);
     bovBody_.bandpass(1300, 1.6, fs);
@@ -145,45 +152,96 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     surging = false;
     bool centrifugal = p_.induction == Induction::Turbo || p_.scType == Supercharger::Centrifugal;
 
+    double powerC = 0, T2 = ambT_;
     if (centrifugal) {
-        double rpm = p_.induction == Induction::Turbo ? omegaT_ * 60.0 / (2 * kPi)
-                                                      : engineRpm * std::max(1.0f, p_.scRatio);
-        speedFrac = clampv(rpm / nMaxC_, 0.0, 1.3);
-        shaftRpm = rpm;
-        double chokeNow;
+        const bool turboNow = p_.induction == Induction::Turbo;
+        const int nC = turboNow ? nU_ : 1;
         const double sq = std::sqrt(kMapTref / ambT_), corrM = pIn / kMapPref * sq;
-        if (mapC_) {
-            // table map: corrected speed and flow (inlet at ambient pressure and temperature) - the efficiency and the
-            // surge margin at this pressure ratio
-            const CompPoint cp = cm_.eval(rpm * sq, pr);
-            chokeNow = cp.chokeFlow * corrM;
-            eta = cp.eff;
-            surgeMargin = cp.surgePr > 1.0 ? 1.0 - (pr - 1.0) / (cp.surgePr - 1.0) : 1.0;
-        } else {
-            compressor(speedFrac, pr, eta);
-            chokeNow = chokeFlow(speedFrac);
-            const double pr0 = prAtZeroFlow(speedFrac);
-            surgeMargin = pr0 > 1.0 ? 1.0 - (pr - 1.0) / (pr0 - 1.0) : 1.0;
+        // Sequential pair (Tashima et al., "Sequential twin turbocharged rotary engine of the latest RX-7", SAE 941030;
+        // the 2JZ-GTE's valves: Toyota Supra 1997 repair manual): below the change-over speed the first turbo takes all
+        // the exhaust; nearing it an exhaust bypass valve bleeds some to the second turbine to spin it up
+        // (pre-spool); at the change-over the exhaust control valve opens to it, and the intake control valve joins
+        // its compressor to the charge only once it has caught up - the turbine valve first, the compressor valve
+        // after (Galindo, Climent, Guardiola, Domenech, Int. J. Automot. Technol. 10:141, 2009: opening the compressor
+        // side early lets the charge blow back through the slow wheel - a torque dip). Change-over under load (pedal
+        // past 40 %, back below 30 %), 300 rpm hysteresis, pre-spool from 1200 rpm below it, the bypass valve 0.08 s, the exhaust
+        // control valve 0.15 s; the intake valve once the second is at 85 % of the first's speed (chosen)
+        if (seq_) {
+            const bool load = throttle > (ecv_ > 0.5 ? 0.3 : 0.4);
+            const bool on = load && engineRpm > p_.seqRpm - (ecv_ > 0.5 ? 300.0 : 0.0);
+            ecv_ += ((on ? 1.0 : 0.0) - ecv_) * std::min(1.0, dt / 0.15);
+            // the bypass valve regulates the pre-spool: it holds the second turbo at ~92 % of the first's speed (an
+            // unloaded wheel on an open bypass overspeeds, and then dumps its air into the charge all at once when its
+            // compressor valve opens - an overshoot the wastegate answers with a dip; chosen)
+            const bool pre = load && engineRpm > p_.seqRpm - 1200.0;
+            const double ebvT = pre ? clampv((0.92 * u_[0].speedFrac - u_[1].speedFrac) / 0.08, 0.0, 1.0) : 0.0;
+            ebv_ += (ebvT - ebv_) * std::min(1.0, dt / 0.08);
+            if (!icv_ && ecv_ > 0.6 && u_[1].speedFrac >= 0.85 * u_[0].speedFrac) icv_ = true;
+            if (icv_ && ecv_ < 0.5) icv_ = false;
+            // its butterfly swings open over ~0.3 s (chosen): the second compressor's air joins the charge gradually
+            // (switched at once, the two wheels' air arrived together - a boost spike the wastegate answered with a dip)
+            icvPos_ += ((icv_ ? 1.0 : 0.0) - icvPos_) * std::min(1.0, dt / 0.3);
+            seqStage = icvPos_ > 0.5 ? 2 : (ebv_ > 0.1 || ecv_ > 0.1) ? 1 : 0;
+        } else seqStage = 0;
+        double mT2 = 0, mPos = 0;
+        dmDuct_ = 0;
+        surgeMargin = 1;
+        for (int k = 0; k < nC; ++k) {
+            Unit& u = u_[k];
+            u.rpm = turboNow ? u.omega * 60.0 / (2 * kPi) : engineRpm * std::max(1.0f, p_.scRatio);
+            u.speedFrac = clampv(u.rpm / nMaxC_, 0.0, 1.3);
+            // a sequential second compressor behind its shut intake control valve blows round its relief path at a
+            // small pressure rise (chosen: 5 % of its line's - a relief loop, not a load) - none of it reaches the charge
+            // (part open: its outlet between the relief loop and the charge, that share of its air to the charge)
+            const double share = seq_ && k == 1 ? icvPos_ : 1.0;
+            const bool shut = share < 0.02;
+            if (u.lineN < 0 || std::fabs(u.speedFrac - u.lineN) > 0.002) buildLine(u, u.speedFrac, u.rpm * sq, corrM);
+            const double dpOut = share * (charge.p() - pIn) + (1.0 - share) * 0.05 * pIn * (u.linePrS - 1.0);
+            const double prU = 1.0 + dpOut / pIn;
+            double sm = 1.0;
+            if (mapC_) {
+                // table map: corrected speed and flow (inlet at ambient pressure and temperature) - the efficiency and
+                // the surge margin at this pressure ratio
+                const CompPoint cp = cm_.eval(u.rpm * sq, prU);
+                u.eta = cp.eff;
+                sm = cp.surgePr > 1.0 ? 1.0 - (prU - 1.0) / (cp.surgePr - 1.0) : 1.0;
+            } else {
+                compressor(u.speedFrac, prU, u.eta);
+                const double pr0 = prAtZeroFlow(u.speedFrac);
+                sm = pr0 > 1.0 ? 1.0 - (prU - 1.0) / (pr0 - 1.0) : 1.0;
+            }
+            if (!shut) surgeMargin = std::min(surgeMargin, sm);
+            // the flow is a state with inertia (Greitzer): accelerated by the line's pressure rise against the outlet
+            // pressure, less the duct's friction
+            if (u.speedFrac < 0.06) {
+                u.mDuct *= std::exp(-dt / 0.01);   // (barely turning: the passive path below carries the flow)
+            } else {
+                const double dpLine = pIn * (linePr(u, u.mDuct) - 1.0);
+                const double dpLoss = kDuctK * u.mDuct * std::fabs(u.mDuct) / (2.0 * rhoIn * ductA_ * ductA_);
+                const double accel = ductA_ / kDuctL * (dpLine - dpOut - dpLoss);
+                u.mDuct += accel * dt;
+                u.mDuct = clampv(u.mDuct, -2.0 * sizeKgs_, 2.0 * sizeKgs_);
+            }
+            u.dmDuct = (u.mDuct - u.mPrev) / dt;
+            u.mPrev = u.mDuct;
+            const double tauU = std::pow(std::max(prU, 0.5), 0.2857) - 1.0;
+            u.powerC = std::max(0.0, u.mDuct) * kCpAir * ambT_ * std::max(0.0, tauU) / std::max(0.3, u.eta);
+            if (!shut) {
+                m += share * u.mDuct;
+                dmDuct_ += share * u.dmDuct;
+                mT2 += share * std::max(0.0, u.mDuct) * ambT_ * (1.0 + std::max(0.0, tauU) / std::max(0.3, u.eta));
+                mPos += share * std::max(0.0, u.mDuct);
+                powerC += u.powerC;
+                // left of the line's peak the operating point is unstable: surge (deep when the flow reverses)
+                surging = surging || (u.speedFrac > 0.15 && u.mDuct < u.lineS);
+            }
         }
-        (void)chokeNow;
-        // the flow is a state with inertia (Greitzer): accelerated by the line's pressure rise against the charge
-        // pressure, less the duct's friction
-        if (lineN_ < 0 || std::fabs(speedFrac - lineN_) > 0.002) buildLine(speedFrac, rpm * sq, corrM);
-        if (speedFrac < 0.06) {
-            mDuct_ *= std::exp(-dt / 0.01);   // (barely turning: the passive path below carries the flow)
-        } else {
-            const double dpLine = pIn * (linePr(mDuct_) - 1.0);
-            const double dpLoss = kDuctK * mDuct_ * std::fabs(mDuct_) / (2.0 * rhoIn * ductA_ * ductA_);
-            const double accel = ductA_ / kDuctL * (dpLine - (charge.p() - pIn) - dpLoss);
-            mDuct_ += accel * dt;
-            mDuct_ = clampv(mDuct_, -2.0 * sizeKgs_, 2.0 * sizeKgs_);
-        }
-        dmDuct_ = (mDuct_ - mPrev_) / dt;
-        mPrev_ = mDuct_;
-        m = mDuct_;
-        lineS = lineS_;
-        // left of the line's peak the operating point is unstable: surge (deep when the flow reverses)
-        surging = speedFrac > 0.15 && mDuct_ < lineS_;
+        eta = u_[0].eta;
+        shaftRpm = u_[0].rpm; speedFrac = u_[0].speedFrac;
+        shaftRpm2 = nC > 1 ? u_[1].rpm : 0.0; speedFrac2 = nC > 1 ? u_[1].speedFrac : 0.0;
+        lineS = u_[0].lineS;
+        const double tau = std::pow(std::max(pr, 0.5), 0.2857) - 1.0;
+        T2 = mPos > 1e-5 ? mT2 / mPos : ambT_ * (1.0 + std::max(0.0, tau) / std::max(0.3, eta));
     } else {
         // positive displacement blower: pumps a fixed volume per revolution, minus leakage
         double nsc = engineRpm * std::max(0.1f, p_.scRatio);
@@ -193,12 +251,11 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         double mIdeal = rhoIn * std::max(0.05f, p_.scDisplacement_L) * 1e-3 * nsc / 60.0;
         m = mIdeal * (1.0 - leak * std::max(0.0, pr - 1.0)) - 0.002 * std::max(0.0, pr - 1.0);
         eta = p_.scType == Supercharger::Roots ? 0.52 : 0.70;
+        const double tau = std::pow(std::max(pr, 0.5), 0.2857) - 1.0;
+        T2 = ambT_ * (1.0 + std::max(0.0, tau) / std::max(0.3, eta));
+        powerC = std::max(0.0, m) * kCpAir * ambT_ * std::max(0.0, tau) / std::max(0.3, eta);
     }
 
-    // compressor work & outlet temperature
-    double tau = std::pow(std::max(pr, 0.5), 0.2857) - 1.0;
-    double T2 = ambT_ * (1.0 + std::max(0.0, tau) / std::max(0.3, eta));
-    double powerC = std::max(0.0, m) * kCpAir * ambT_ * std::max(0.0, tau) / std::max(0.3, eta);
     // intercooler: effectiveness against its core temperature; the core takes the heat and gives it to the air
     // blown through it (vehicle speed / dyno fan) - parked or on a dyno without a fan it heat-soaks
     compOutT = T2;
@@ -206,7 +263,7 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     if (p_.intercooler) {
         const double eps = clampv((double)p_.icEfficiency, 0.0, 1.0);
         Tcharge = T2 - eps * (T2 - icCoreT);
-        const double size = std::max(0.4, sizeKgs_ / 0.25);
+        const double size = std::max(0.4, nU_ * sizeKgs_ / 0.25);
         const double cCore = 5400.0 * size;                                   // ~6 kg of aluminium
         const double ua = (60.0 + 175.0 * std::pow(std::max(0.0, coolAir_), 0.8)) * size;
         const double q = std::max(0.0, m) * kCpAir * (T2 - Tcharge);
@@ -218,8 +275,13 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     // passive path through the (stopped or slow) compressor wheel: a plain orifice, smooth in
     // both directions - this is how the engine breathes before the turbo spools
     if (centrifugal) {
-        double slow = 1.0 - clampv(speedFrac, 0.0, 1.0);
-        double aPass = 1.2 * std::max(0.05, sizeKgs_) / 236.0 * slow * slow;
+        double aPass = 0;
+        const int nC = p_.induction == Induction::Turbo ? nU_ : 1;
+        for (int k = 0; k < nC; ++k) {
+            if (seq_ && k == 1 && icvPos_ < 0.02) continue;
+            const double slow = 1.0 - clampv(u_[k].speedFrac, 0.0, 1.0);
+            aPass += 1.2 * std::max(0.05, sizeKgs_) / 236.0 * slow * slow;
+        }
         double fp = limitedFlow(aPass, pIn, ambT_, 1e3, charge.p(), charge.T, charge.V, dt, 0.4);
         // a spinning wheel blocks reverse flow (that only happens as surge); a stopped one doesn't
         if (fp < 0 && speedFrac > 0.08) fp = 0;
@@ -288,10 +350,10 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
     }
 
     if (p_.induction == Induction::Turbo && ex.hasTurbine()) {
-        // ---- turbine + wastegate between collector and downpipe
-        GasNode& tin = ex.turbineIn();
-        GasNode& tout = ex.turbineOut();
-        double aT = std::max(0.2f, p_.turbineAR) * 1.0e-3 * std::sqrt(std::max(0.3, equivalentDisplacementL(p_) / 2.0));
+        // ---- turbine(s) + wastegate(s) between the manifold and the downpipe. Two turbos: each half the area one would
+        // have for the same A/R (chosen: two turbos for one engine); a twin-scroll housing takes its two scrolls as two
+        // inlets of half the area each
+        const double aT1 = std::max(0.2f, p_.turbineAR) * 1.0e-3 * std::sqrt(std::max(0.3, equivalentDisplacementL(p_) / 2.0)) / nU_;
         // spring + diaphragm wastegate: proportional over ~0.3 bar with a damped actuator, plus a
         // slow integral trim (boost controller) so it settles on the target instead of hunting
         // ECU control: a solenoid bleeds the actuator line, so it only sees boost x (1 - 0.9 duty); the ECU's
@@ -307,82 +369,117 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         double wgTarget = clampv((actBar - p_.wastegateBar + 0.08) / 0.3 + wgTrim_ + 0.12 * boostRate_ * (ecuWg ? 0.0 : 1.0), 0.0, 1.0);
         wgPos_ += (wgTarget - wgPos_) * std::min(1.0, dt / 0.12);
         wastegate = wgPos_;
-        const double erNow = std::max(1.0, tin.p() / std::max(1.0, tout.p()));
-        if (mapT_) {
-            // table map: the reduced flow at this expansion ratio as an equivalent nozzle area
-            const double er = std::max(erNow, 1.02);
-            const double mMap = tm_.mfp(er) * tin.p() * 1e-3 / std::sqrt(std::max(300.0, tin.T));
-            const double unit = orificeFlow(1.0, tin.p(), tin.T, tin.p() / er);
-            if (unit > 1e-12) aT = std::max(1e-6, mMap / unit);
-        }
-        // a wide-open wastegate bypasses most of the exhaust (real ports pass ~2-3x the turbine's flow area)
-        double aWg = wgPos_ * aT * 2.5;
+        double fv = 1.0;
         if (p_.vgt) {
             // variable geometry: no wastegate; the guide vanes set the turbine's flow area. The ECU duty closes them
             // (no duty / no ECU: open). Area over the vane opening u as the ellipse arc of Wahlstrom & Eriksson
             // (LiTH-ISY-R-2882 eq. 53-55): f = c_f2 + c_f1 sqrt(1 - ((u - c_vgt2) / c_vgt1)^2), here centred on the
             // open end (c_vgt1 = c_vgt2 = 1) and running from vgtMinArea (closed) to 1 (open) - their fitted
             // constants belong to their engine. Actuator: first order, 0.15 s (chosen).
-            const double u = 1.0 - clampv(wgDuty_ >= 0.0 ? wgDuty_ : 0.0, 0.0, 1.0);
-            vanePos_ += (u - vanePos_) * std::min(1.0, dt / 0.15);
+            const double uv = 1.0 - clampv(wgDuty_ >= 0.0 ? wgDuty_ : 0.0, 0.0, 1.0);
+            vanePos_ += (uv - vanePos_) * std::min(1.0, dt / 0.15);
             const double amin = clampv((double)p_.vgtMinArea, 0.05, 1.0);
-            const double fv = amin + (1.0 - amin) * std::sqrt(std::max(0.0, 1.0 - (vanePos_ - 1.0) * (vanePos_ - 1.0)));
-            aT *= fv;
-            aWg = 0;
+            fv = amin + (1.0 - amin) * std::sqrt(std::max(0.0, 1.0 - (vanePos_ - 1.0) * (vanePos_ - 1.0)));
             wgPos_ = 0;
             wastegate = vanePos_;   // (telemetry: the vane opening)
         }
-        double flow = limitedFlow(aT + aWg, tin.p(), tin.T, tin.V, tout.p(), tout.T, tout.V, dt, 0.35);
-        double qf = flow * dt;
-        GasNode& s = qf >= 0 ? tin : tout;
-        GasNode& d = qf >= 0 ? tout : tin;
-        double qa = std::min(std::fabs(qf), s.m * 0.3);
-        double ff = s.fuelFrac(), bf = s.burnedFrac();
-        s.m -= qa; s.mf -= qa * ff; s.mb -= qa * bf;
-        d.m += qa; d.mf += qa * ff; d.mb += qa * bf;
-        {   // (signed: the turbine and the wastegate share the flow by their areas)
-            const double q = (qf >= 0 ? qa : -qa) / dt;
-            turbFlow = q * aT / (aT + aWg); wgFlow = q - turbFlow;
+        GasNode* scream = ex.screamer();
+        auto move = [&](GasNode& src, GasNode& dst, double flow) {   // (signed kg/s; returns what moved, signed)
+            const double qf = flow * dt;
+            GasNode& s = qf >= 0 ? src : dst;
+            GasNode& d = qf >= 0 ? dst : src;
+            const double qa = std::min(std::fabs(qf), s.m * 0.3);
+            const double ff = s.fuelFrac(), bf = s.burnedFrac();
+            s.m -= qa; s.mf -= qa * ff; s.mb -= qa * bf;
+            d.m += qa; d.mf += qa * ff; d.mb += qa * bf;
+            return (qf >= 0 ? qa : -qa) / dt;
+        };
+        turbFlow = wgFlow = 0;
+        double powSum = 0, flowSum = 0;
+        for (int k = 0; k < nU_; ++k) {
+            Unit& u = u_[k];
+            // the paths into this turbine: (inlet node, outlet node, share of its area)
+            struct Path { GasNode* in; GasNode* out; double share; };
+            Path paths[2];
+            int np = 0;
+            if (nU_ == 1) {
+                const int ni = ex.turbineInCount();
+                for (int i = 0; i < ni; ++i) paths[np++] = {&ex.turbineIn(i), &ex.turbineOut(0), 1.0 / ni};
+            } else if (!seq_) {
+                paths[np++] = {&ex.turbineIn(std::min(k, ex.turbineInCount() - 1)), &ex.turbineOut(std::min(k, ex.turbineOutCount() - 1)), 1.0};
+            } else {   // sequential: one manifold; the second turbine behind its exhaust control valve (and the pre-spool
+                       // bypass: 25 % of its area, chosen - enough to bring it near the first turbo before it takes the exhaust)
+                paths[np++] = {&ex.turbineIn(0), &ex.turbineOut(0), k == 0 ? 1.0 : std::max(ecv_, 0.25 * ebv_)};
+            }
+            double powerT = 0;
+            for (int j = 0; j < np; ++j) {
+                GasNode& tin = *paths[j].in;
+                GasNode& tout = *paths[j].out;
+                double aT = aT1;
+                const double erNow = std::max(1.0, tin.p() / std::max(1.0, tout.p()));
+                if (mapT_) {
+                    // table map: the reduced flow at this expansion ratio as an equivalent nozzle area
+                    const double er = std::max(erNow, 1.02);
+                    const double mMap = tm_.mfp(er) * tin.p() * 1e-3 / std::sqrt(std::max(300.0, tin.T));
+                    const double unit = orificeFlow(1.0, tin.p(), tin.T, tin.p() / er);
+                    if (unit > 1e-12) aT = std::max(1e-6, mMap / unit) / nU_;
+                }
+                aT *= paths[j].share * fv;
+                // a wide-open wastegate bypasses most of the exhaust (real ports pass ~2-3x the turbine's flow area);
+                // a sequential second turbo has its own only once its exhaust valve is open
+                double aWg = p_.vgt ? 0.0 : wgPos_ * aT1 * 2.5 / np * (seq_ && k == 1 ? ecv_ : 1.0);
+                double flowT, flowW;
+                if (scream) {   // the wastegate to its own pipe: two flows
+                    flowT = move(tin, tout, limitedFlow(aT, tin.p(), tin.T, tin.V, tout.p(), tout.T, tout.V, dt, 0.35));
+                    flowW = aWg > 0 ? move(tin, *scream, limitedFlow(aWg, tin.p(), tin.T, tin.V, scream->p(), scream->T, scream->V, dt, 0.35)) : 0.0;
+                } else {
+                    const double q = aT + aWg > 0 ? move(tin, tout, limitedFlow(aT + aWg, tin.p(), tin.T, tin.V, tout.p(), tout.T, tout.V, dt, 0.35)) : 0.0;
+                    flowT = aT + aWg > 0 ? q * aT / (aT + aWg) : 0.0;
+                    flowW = q - flowT;
+                }
+                turbFlow += flowT; wgFlow += flowW;
+                const double mt = std::max(0.0, flowT);
+                const double Tin = std::max(600.0, egtK);
+                const double dh = kCpExh * Tin * (1.0 - std::pow(erNow, -0.248));
+                double etaT = 0.68;
+                if (mapT_) {
+                    const double U = u.omega * tm_.wheelDia() * 0.5e-3;
+                    const double Cs = std::sqrt(2.0 * std::max(0.0, dh));
+                    turbUc = Cs > 1.0 ? U / Cs : 0.0;
+                    etaT = Cs > 1.0 ? tm_.eff(turbUc) : 0.3;
+                } else if (p_.vgt) {
+                    // generic VGT turbine (D5; the wastegated generic turbines keep the constant 0.68 their calibrations
+                    // were made with): efficiency over the blade speed ratio, Wahlstrom & Eriksson (LiTH-ISY-R-2882 eqs.
+                    // 48-49): eta = eta_max - c_m (BSR - BSR_opt)^2, BSR = R_t w_t / sqrt(2 cp T (1 - PR^(1-1/gamma))).
+                    // Peak 0.68, BSR_opt 0.58 (inside the 0.52-0.64 span of their fig. 9), c_m 2.5 (chosen); tip radius
+                    // from a 500 m/s tip speed at the top shaft speed (chosen)
+                    const double rt = 500.0 / (nMaxC_ * 2.0 * kPi / 60.0);
+                    const double Cs = std::sqrt(2.0 * std::max(0.0, dh));
+                    turbUc = Cs > 1.0 ? u.omega * rt / Cs : 0.0;
+                    etaT = Cs > 1.0 ? clampv(0.68 - 2.5 * (turbUc - 0.58) * (turbUc - 0.58), 0.2, 0.68) : 0.3;
+                } else turbUc = 0;
+                if (k == 0 && j == 0) {
+                    turbEff = etaT; turbEr = erNow;
+                    turbMfp = mt * std::sqrt(std::max(300.0, tin.T)) / std::max(1.0, tin.p() * 1e-3);
+                }
+                powerT += mt * dh * etaT;
+                flowSum += std::max(0.0, flowT + flowW);
+            }
+            powSum += powerT;
+            // ---- shaft
+            const double J = std::max(0.02f, p_.turboInertia) * 1e-4;
+            const double w = std::max(u.omega, 400.0);
+            const double fric = 1.5e-6 * u.omega + 2e-4;
+            u.omega += ((powerT - u.powerC) / w - fric) / J * dt;
+            u.omega = clampv(u.omega, 0.0, nMaxC_ * 1.25 * 2 * kPi / 60.0);
         }
-        double mt = std::max(0.0, flow) * aT / (aT + aWg);
-        double prt = std::max(1.0, tin.p() / std::max(1.0, tout.p()));
-        double Tin = std::max(600.0, egtK);
-        const double dh = kCpExh * Tin * (1.0 - std::pow(prt, -0.248));
-        double etaT = 0.68;
-        if (mapT_) {
-            const double U = omegaT_ * tm_.wheelDia() * 0.5e-3;
-            const double Cs = std::sqrt(2.0 * std::max(0.0, dh));
-            turbUc = Cs > 1.0 ? U / Cs : 0.0;
-            etaT = Cs > 1.0 ? tm_.eff(turbUc) : 0.3;
-        } else if (p_.vgt) {
-            // generic VGT turbine (D5; the wastegated generic turbines keep the constant 0.68 their calibrations were made with): efficiency over the blade speed ratio, Wahlstrom & Eriksson (LiTH-ISY-R-2882 eqs.
-            // 48-49): eta = eta_max - c_m (BSR - BSR_opt)^2, BSR = R_t w_t / sqrt(2 cp T (1 - PR^(1-1/gamma))) - the
-            // blade tip speed over the isentropic expansion speed. (Their c_m also rises with the turbo speed, eq. 50,
-            // and their fitted constants belong to their engine; there is no vane-position term - a VGT changes the
-            // efficiency only through the expansion ratio its vanes make.) Peak 0.68 (the old constant efficiency),
-            // BSR_opt 0.58 (inside the 0.52-0.64 span of their fig. 9), c_m 2.5 (chosen: -0.1 at 0.2 off the optimum);
-            // tip radius from a 500 m/s tip speed at the top shaft speed (chosen)
-            const double rt = 500.0 / (nMaxC_ * 2.0 * kPi / 60.0);
-            const double Cs = std::sqrt(2.0 * std::max(0.0, dh));
-            turbUc = Cs > 1.0 ? omegaT_ * rt / Cs : 0.0;
-            etaT = Cs > 1.0 ? clampv(0.68 - 2.5 * (turbUc - 0.58) * (turbUc - 0.58), 0.2, 0.68) : 0.3;
-        } else turbUc = 0;
-        turbEff = etaT; turbEr = erNow;
-        turbMfp = mt * std::sqrt(std::max(300.0, tin.T)) / std::max(1.0, tin.p() * 1e-3);
-        double powerT = mt * dh * etaT;
-        // the turbine takes this work out of the gas; the wastegate flow passes without expanding through it
+        // the turbines take this work out of the gas; the wastegate flow passes without expanding through them
         {   // (averaged power over averaged flow: the pulsating instantaneous ratio would be meaningless)
             const double k = std::min(1.0, dt / 0.08);
-            turbPowAvg_ += (powerT - turbPowAvg_) * k;
-            turbFlowAvg_ += (std::max(0.0, flow) - turbFlowAvg_) * k;
+            turbPowAvg_ += (powSum - turbPowAvg_) * k;
+            turbFlowAvg_ += (flowSum - turbFlowAvg_) * k;
             turbineDropK = turbPowAvg_ / (std::max(1e-3, turbFlowAvg_) * kCpExh);
         }
-        // ---- shaft
-        double J = std::max(0.02f, p_.turboInertia) * 1e-4;
-        double w = std::max(omegaT_, 400.0);
-        double fric = 1.5e-6 * omegaT_ + 2e-4;
-        omegaT_ += ((powerT - powerC) / w - fric) / J * dt;
-        omegaT_ = clampv(omegaT_, 0.0, nMaxC_ * 1.25 * 2 * kPi / 60.0);
         powerKw = powerC / 1000.0;
     } else if (p_.induction == Induction::Supercharger) {
         double drag = 150.0 + 4e-3 * shaftRpm * shaftRpm * 1e-3;   // bearing / gear losses (W)
@@ -411,41 +508,50 @@ double ForcedInduction::step(double dt, double omegaE, double egtK, IntakeSystem
         //    4 pi r) with stall noise as the flow churns back through the wheel - the "stu-tu-tu"
         // Levels are chosen (the old whine's scale); what sets pitch and rhythm is the physics.
         const bool turbo = p_.induction == Induction::Turbo;
-        const double fSh = shaftRpm / 60.0;
+        const int nC = turbo ? nU_ : 1;
         const double aIn = std::sqrt(1.4 * kR * ambT_);
-        const double mRel = 0.7 * tipR_ * shaftRpm * 2.0 * kPi / 60.0 / aIn;   // inducer tip Mach (tangential part)
-        const double fwd = smoothstep(-0.2, 0.8, mDuct_ / std::max(1e-5, lineS_));   // tones break up in reverse flow
-        const double work = speedFrac * speedFrac * (0.15 + 0.85 * std::sqrt(flowFrac)) * (0.35 + 0.65 * prLoad);
-        const double aw = ampSmooth_.lp((turbo ? 2.4 : 7.0) * work * fwd);
         const double Z = clampv((double)p_.compBlades, 4.0, 24.0);
-        const double wob = 1.0 + 0.003 * wobble_.lp(noise * 40.0);
         double tone = 0;
-        ph1_ = std::fmod(ph1_ + 2 * kPi * fSh * wob * dt, 2 * kPi);
-        tone += (0.55 * aw + 0.25 * speedFrac * speedFrac * (turbo ? 1.0 : 2.0)) * std::sin(ph1_);   // shaft order 1
-        tone += 0.12 * aw * std::sin(2.0 * ph1_ + 0.7);                                            // and its 2nd
-        const double fBpf = Z * fSh;
-        phB_ = std::fmod(phB_ + 2 * kPi * std::min(fBpf, 20000.0) * dt, 2 * kPi);
-        tone += 0.45 * aw * (1.0 - smoothstep(13000.0, 17000.0, fBpf)) * std::sin(phB_);              // blade pass
-        const double buzz = smoothstep(0.85, 1.05, mRel);
-        if (buzz > 1e-3) {   // shaft orders 2..Z under the Nyquist / 14 kHz, uneven like a real wheel's
-            static const double kW[24] = {0.0, 0.0, 0.62, 0.48, 0.71, 0.33, 0.55, 0.29, 0.41, 0.36, 0.22, 0.30, 0.18, 0.26, 0.15,
-                                          0.21, 0.12, 0.17, 0.10, 0.14, 0.09, 0.11, 0.08, 0.07};
-            double b2 = 0;
-            for (int k = 2; k <= (int)Z && k * fSh < 14000.0; ++k) b2 += kW[k] * std::sin(k * ph1_ + 0.37 * k * k);
-            tone += 1.2 * aw * buzz * b2;
+        for (int k = 0; k < nC; ++k) {
+            Unit& u = u_[k];
+            const double fSh = u.rpm / 60.0;
+            const bool shut = seq_ && k == 1 && icvPos_ < 0.5;
+            const double ff = clampv(std::max(0.0, u.mDuct) / std::max(1e-4, sizeKgs_), 0.0, 1.2);
+            const double mRel = 0.7 * tipR_ * u.rpm * 2.0 * kPi / 60.0 / aIn;   // inducer tip Mach (tangential part)
+            const double fwd = smoothstep(-0.2, 0.8, u.mDuct / std::max(1e-5, u.lineS));   // tones break up in reverse flow
+            const double load = shut ? 0.1 : prLoad;
+            const double work = u.speedFrac * u.speedFrac * (0.15 + 0.85 * std::sqrt(ff)) * (0.35 + 0.65 * load);
+            const double aw = u.amp.lp((turbo ? 2.4 : 7.0) * work * fwd);
+            // (a second wheel: its own slow wander - two turbos never run quite together, they beat)
+            const double wob = 1.0 + 0.003 * wobble_.lp(noise * 40.0) * (k ? -1.3 : 1.0);
+            u.ph1 = std::fmod(u.ph1 + 2 * kPi * fSh * wob * dt, 2 * kPi);
+            tone += (0.55 * aw + 0.25 * u.speedFrac * u.speedFrac * (turbo ? 1.0 : 2.0)) * std::sin(u.ph1);   // shaft order 1
+            tone += 0.12 * aw * std::sin(2.0 * u.ph1 + 0.7);                                                // and its 2nd
+            const double fBpf = Z * fSh;
+            u.phB = std::fmod(u.phB + 2 * kPi * std::min(fBpf, 20000.0) * dt, 2 * kPi);
+            tone += 0.45 * aw * (1.0 - smoothstep(13000.0, 17000.0, fBpf)) * std::sin(u.phB);              // blade pass
+            const double buzz = smoothstep(0.85, 1.05, mRel);
+            if (buzz > 1e-3) {   // shaft orders 2..Z under the Nyquist / 14 kHz, uneven like a real wheel's
+                static const double kW[24] = {0.0, 0.0, 0.62, 0.48, 0.71, 0.33, 0.55, 0.29, 0.41, 0.36, 0.22, 0.30, 0.18, 0.26, 0.15,
+                                              0.21, 0.12, 0.17, 0.10, 0.14, 0.09, 0.11, 0.08, 0.07};
+                double b2 = 0;
+                for (int h = 2; h <= (int)Z && h * fSh < 14000.0; ++h) b2 += kW[h] * std::sin(h * u.ph1 + 0.37 * h * h + 1.1 * k);
+                tone += 1.2 * aw * buzz * b2;
+            }
+            const double fTcn = 0.5 * fBpf;
+            if (fTcn > 200.0 && fTcn < 16000.0) {
+                u.tcnBp.bandpass(fTcn, 6.0, fs_);
+                snd += 1.0 * aw * u.tcnBp.tick(noise);
+            } else u.tcnBp.tick(0);
         }
         snd += whineLp_.lp(tone);
-        const double fTcn = 0.5 * fBpf;
-        if (fTcn > 200.0 && fTcn < 16000.0) {
-            tcnBp_.bandpass(fTcn, 6.0, fs_);
-            snd += 1.0 * aw * tcnBp_.tick(noise);
-        } else tcnBp_.tick(0);
         // whoosh: near the surge line (margin < ~0.35) with pressure ratio
         const double nearSurge = smoothstep(0.35, -0.05, surgeMargin);
         snd += whooshBp_.tick(noise) * (2.4 * flowFrac * (0.3 + prLoad) * speedFrac + 3.0 * nearSurge * (pr - 1.0) * speedFrac);
         // surge: the inlet pulse and the stall noise of the reverse flow
         const double pulse = flutLp_.lp(dmDuct_ / (4.0 * kPi));
-        const double rev = clampv(-mDuct_ / std::max(1e-5, lineS_), 0.0, 1.5);
+        double rev = 0;
+        for (int k = 0; k < nC; ++k) if (!(seq_ && k == 1 && icvPos_ < 0.5)) rev = std::max(rev, clampv(-u_[k].mDuct / std::max(1e-5, u_[k].lineS), 0.0, 1.5));
         const double stall = surgeBp_.tick(noise) * 3.5 * rev * (0.3 + prLoad) * std::max(0.2, speedFrac);
         snd += surging ? pulse + stall : 0.3 * pulse + stall;
     } else {        // Roots / twin-screw: the classic blower whine is the rotor lobe-pass tone (Roots: 2 rotors x

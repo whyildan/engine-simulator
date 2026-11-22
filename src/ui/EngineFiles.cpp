@@ -369,7 +369,7 @@ void App::engineFileUi() {
         ImGui::InputText("Author", engAuthor_, sizeof(engAuthor_));
         ImGui::InputTextMultiline("Notes", engNotes_, sizeof(engNotes_), ImVec2(-170, ImGui::GetTextLineHeight() * 3.2f));
         EngineMeta m;
-        m.author = engAuthor_; m.notes = engNotes_; m.app = "EngineSim 0.6";
+        m.author = engAuthor_; m.notes = engNotes_; m.app = "EngineSim 0.8";
         if (ImGui::Button("Save to My engines")) {
             std::string err, path;
             if (saveEngineFile(p_, m, err, &path)) { engMsg_ = std::string("Saved '") + p_.name + "' to My engines"; engMsgErr_ = false; presetIdx_ = -1; }

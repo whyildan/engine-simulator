@@ -58,6 +58,11 @@ public:
     double lineS = 0;           // the speed line's surge (peak) flow now, kg/s
     double bovLift = 0;         // blow-off valve lift 0..1 (its own spring-mass dynamics)
     double dmDuct() const { return dmDuct_; }
+    // twin turbos: the second one's speed; sequential: 0 the first alone, 1 the second pre-spooling / its exhaust
+    // valve opening, 2 both on the charge
+    int units = 1;
+    double shaftRpm2 = 0, speedFrac2 = 0;
+    int seqStage = 0;
 
 private:
     void refreshMaps();
@@ -72,25 +77,37 @@ private:
     double coolAir_ = 0;
     double wgDuty_ = -1;
     double compressor(double n, double prc, double& eta) const;  // centrifugal map -> kg/s
-    // compression system dynamics (Greitzer): the duct's flow state and the current speed line
+    // compression system dynamics (Greitzer): each compressor's duct flow state and its current speed line
     static constexpr int kLineN = 24;
-    double mDuct_ = 0, mPrev_ = 0, dmDuct_ = 0;   // kg/s through the compressor, its rate (kg/s^2)
+    struct Unit {
+        double omega = 0;                          // shaft rad/s (a turbo)
+        double mDuct = 0, mPrev = 0, dmDuct = 0;   // kg/s through the compressor, its rate (kg/s^2)
+        double lineN = -1, lineS = 0.01, linePrS = 1, lineM[kLineN] = {}, linePr[kLineN] = {};
+        double rpm = 0, speedFrac = 0, powerC = 0, eta = 0.7;
+        double ph1 = 0, phB = 0;                   // shaft order / blade-pass phases
+        Biquad tcnBp;
+        OnePole amp;
+    };
+    Unit u_[2];
+    int nU_ = 1;                                  // turbochargers (else 1)
+    bool seq_ = false;                            // sequential pair
+    double ecv_ = 0, ebv_ = 0;                    // sequential: exhaust control / exhaust bypass (pre-spool) valves
+    bool icv_ = false;                            // ... intake control valve (the second compressor on the charge)
+    double icvPos_ = 0;                           //     its butterfly 0 shut .. 1 open
+    double dmDuct_ = 0;
     double tipR_ = 0.025, ductA_ = 1e-3;          // wheel tip radius (m), inducer / duct area (m2)
-    double lineN_ = -1, lineS_ = 0.01, linePrS_ = 1, lineM_[kLineN] = {}, linePr_[kLineN] = {};
-    void buildLine(double n, double rpmCorr, double corrM);
-    double linePr(double m) const;
+    void buildLine(Unit& u, double n, double rpmCorr, double corrM);
+    double linePr(const Unit& u, double m) const;
 
     EngineParams p_{};
     double fs_ = 96000;
     double ambT_ = 298;
-    double omegaT_ = 0;         // turbo shaft rad/s
     double wgPos_ = 0, wgTrim_ = 0, prevBoost_ = 0, boostRate_ = 0;
     double vanePos_ = 1;       // VGT vane opening 0 (closed) .. 1 (open)
     double sound_ = 0, phase_ = 0, phase2_ = 0, phase3_ = 0;
     // sound shaping
-    Biquad whooshBp_, bovHiss_, bovBody_, surgeBp_, scHiss_, tcnBp_;
+    Biquad whooshBp_, bovHiss_, bovBody_, surgeBp_, scHiss_;
     OnePole whineLp_, ampSmooth_, wobble_, flutLp_;
-    double ph1_ = 0, phB_ = 0;                    // shaft order / blade-pass phases
     double bovX_ = 0, bovV_ = 0;                  // blow-off valve lift (0..1) and its rate
     double bovEnv_ = 0, thumpEnv_ = 0, thumpPh_ = 0;
     bool prevBov_ = false;

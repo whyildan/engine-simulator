@@ -87,7 +87,8 @@ struct FmPipe {
     const char* name = "";
 };
 enum CompKind { CkFilter, CkCompressor, CkBlower, CkIntercooler, CkBov, CkThrottle, CkCarb, CkPlenum, CkAirbox, CkHead, CkHeader,
-                CkTurbine, CkWastegate, CkCat, CkMuffler, CkTail, CkEgrValve, CkEgrCooler, CkReed, CkCrankcase, CkChamber, CkInjPump };
+                CkTurbine, CkWastegate, CkCat, CkMuffler, CkTail, CkEgrValve, CkEgrCooler, CkReed, CkCrankcase, CkChamber, CkInjPump,
+                CkSeqValve };   // (CkSeqValve: a sequential pair's control valve - unit 1 exhaust, 2 intake)
 struct FmComp {
     int kind = 0, part = -1;   // FlowPart for the health colour (-1: none)
     Pt c;                       // centre
@@ -98,6 +99,7 @@ struct FmComp {
     int section = -1;           // where a click goes
     const char* tab = nullptr;
     int lab = 0;                // where its label goes: 0 below, 1 above, 2 right, 3 left
+    int unit = 0;               // twin turbos: which turbo (0 / 1); CkSeqValve: 1 exhaust, 2 intake control valve
 };
 
 struct FmLayout {
@@ -108,6 +110,12 @@ struct FmLayout {
     float vIn = 0.13f, vPl0 = 0.05f, vPl1 = 0.21f, vHd0 = 0.37f, vHd1 = 0.57f, vCol = 0.72f, vTail = 0.90f, vRail = 0.29f;
     bool boosted = false, turbo = false, blower = false, ic = false, bov = false, itb = false, carb = false, rotary = false, efiPort = false;
     bool diesel = false, cr = false, vgt = false, egr = false, egrCooler = false, two = false, tsPipe = false;
+    bool twin = false, seq = false;            // twin turbos (seq: a sequential pair)
+    bool split = false;                        // parallel twins: each group of cylinders to its own turbo
+    bool twoBanks = false;
+    std::vector<int> grp;                      // ... the group of each cylinder (0 / 1)
+    float uWg2 = 0.35f;
+    float vCa = 0.085f, vCb = 0.175f, uT2 = 0.24f, vT2 = 0.79f;   // twins: the two compressors' rows, the second turbine
     float uEgr = 0, vCc0 = 0.25f, vCc1 = 0.33f, uCh0 = 0, uCh1 = 0;   // EGR riser; two-stroke crankcase band; expansion chamber span
     int n = 1;
 };
@@ -127,6 +135,8 @@ FmLayout buildLayout(const EngineParams& p) {
     L.efiPort = p.fuelSystem == FuelSystem::EFI && p.injection == Injection::Port;
     L.cr = L.diesel && p.dieselInjSystem == 1;
     L.vgt = L.turbo && p.vgt;
+    L.twin = L.turbo && p.turboCount >= 2;
+    L.seq = L.twin && p.twinMode == 1;
     L.egr = L.diesel && p.egrValveDia_mm > 0;
     L.egrCooler = L.egr && p.egrCooler;
     L.two = isTwoStroke(p);
@@ -138,26 +148,43 @@ FmLayout buildLayout(const EngineParams& p) {
     L.hx1 = 0.86f;
     L.uC = 0.17f;
     L.uT = L.uC;
-    L.uWg = L.uT + 0.10f;
+    L.uWg = L.uT + (L.twin ? 0.15f : 0.10f);
+    L.uT2 = L.uT + 0.07f; L.vT2 = L.vCol + 0.07f;
     const float minThr = L.boosted ? L.uC + (L.ic ? 0.09f : 0.0f) + (L.bov ? 0.07f : 0.0f) + 0.075f : 0.14f;
     // (a diesel's EGR riser runs up the left of the engine: keep room for its valve and cooler there)
     L.hx0 = std::max(minThr + 0.085f, L.hx1 - clampv(0.07f * n + 0.10f, 0.22f, 0.48f));
     L.uThr = L.hx0 - 0.085f;
     L.uBov = L.uThr - 0.07f;
     L.uIC = L.uBov - (L.bov ? 0.08f : 0.01f);
-    for (int i = 0; i < n; ++i) L.cylU.push_back(L.hx0 + (i + 0.5f) * (L.hx1 - L.hx0) / n);
+    // parallel twin turbos: the cylinders of each turbo side by side (as the sim groups them: a V / boxer by bank, an
+    // inline front and rear half), so each group's primaries and collector run to their own turbo without crossing
+    {
+        bool b0 = false, b1 = false;
+        for (int i = 0; i < n; ++i) (p.bank[i] ? b1 : b0) = true;
+        L.twoBanks = p.layout != Layout::Inline && b0 && b1;
+    }
+    L.grp.assign(n, 0);
+    L.split = L.twin && !L.seq && n >= 2;
+    if (L.split) for (int i = 0; i < n; ++i) L.grp[i] = L.twoBanks ? (p.bank[i] ? 1 : 0) : (i < (n + 1) / 2 ? 0 : 1);
+    {
+        std::vector<int> order;
+        for (int g = 0; g < 2; ++g) for (int i = 0; i < n; ++i) if (L.grp[i] == g) order.push_back(i);
+        L.cylU.assign(n, 0.0f);
+        for (int k = 0; k < n; ++k) L.cylU[order[k]] = L.hx0 + (k + 0.5f) * (L.hx1 - L.hx0) / n;
+    }
+    if (L.split) { L.uWg = L.uT + 0.06f; L.uT2 = L.uT + 0.12f; L.uWg2 = L.uT + 0.18f; }
 
     const float thr = std::max(25.0f, p.throttleBore_mm);
     auto pipe = [&](Pt a, Pt b, int seg, int pid, int tid, float dia, const char* name, float share = 1, int cyl = -1) {
         FmPipe q; q.a = a; q.b = q.c = b; q.seg = seg; q.pid = pid; q.tid = tid; q.diaMm = dia; q.name = name; q.share = share; q.cyl = cyl;
         L.pipes.push_back(q);
     };
-    auto pipe2 = [&](Pt a, Pt b, Pt c, int seg, int pid, int tid, float dia, const char* name) {
-        FmPipe q; q.a = a; q.b = b; q.c = c; q.legs = 2; q.seg = seg; q.pid = pid; q.tid = tid; q.diaMm = dia; q.name = name;
+    auto pipe2 = [&](Pt a, Pt b, Pt c, int seg, int pid, int tid, float dia, const char* name, float share = 1) {
+        FmPipe q; q.a = a; q.b = b; q.c = c; q.legs = 2; q.seg = seg; q.pid = pid; q.tid = tid; q.diaMm = dia; q.name = name; q.share = share;
         L.pipes.push_back(q);
     };
-    auto comp = [&](int kind, int part, Pt c, float w, float h, const char* name, int section, const char* tab, int lab = 0) {
-        FmComp k; k.kind = kind; k.part = part; k.c = c; k.wEm = w; k.hEm = h; k.name = name; k.section = section; k.tab = tab; k.lab = lab;
+    auto comp = [&](int kind, int part, Pt c, float w, float h, const char* name, int section, const char* tab, int lab = 0, int unit = 0) {
+        FmComp k; k.kind = kind; k.part = part; k.c = c; k.wEm = w; k.hEm = h; k.name = name; k.section = section; k.tab = tab; k.lab = lab; k.unit = unit;
         L.comps.push_back(k);
     };
     auto box = [&](int kind, int part, Pt r0, Pt r1, const char* name, int section, const char* tab) {
@@ -170,7 +197,28 @@ FmLayout buildLayout(const EngineParams& p) {
     // ---- intake: filter -> (compressor -> intercooler -> blow-off) -> throttle -> plenum / air box -> runners
     comp(CkFilter, kPartFilter, Pt{L.uF, vIn}, 1.6f, 2.6f, "Air filter", App::kFuelTuning, "fuel_sys", 1);
     const float thrEnd = L.itb ? plL : L.uThr;
-    if (L.boosted) {
+    if (L.twin) {
+        // twin turbos: the inlet splits to the two compressors, their outlets join before the intercooler (a sequential
+        // pair's second compressor behind its intake control valve)
+        const float uS = (L.uF + L.uC) * 0.5f, uM = L.uC + 0.045f;
+        pipe(Pt{L.uF, vIn}, Pt{uS, vIn}, kFlowInlet, NpAmb, NtAmb, thr * 1.2f, "Compressor inlets");
+        pipe2(Pt{uS, vIn}, Pt{uS, L.vCa}, Pt{L.uC, L.vCa}, kFlowInlet, NpAmb, NtAmb, thr, L.seq ? "Primary compressor inlet" : "Compressor 1 inlet", 0.5f);
+        pipe2(Pt{uS, vIn}, Pt{uS, L.vCb}, Pt{L.uC, L.vCb}, kFlowInlet, NpAmb, NtAmb, thr, L.seq ? "Secondary compressor inlet" : "Compressor 2 inlet", 0.5f);
+        pipe2(Pt{L.uC, L.vCa}, Pt{uM, L.vCa}, Pt{uM, vIn}, kFlowInlet, NpCharge, NtCompOut, thr, "Compressor 1 outlet", 0.5f);
+        pipe2(Pt{L.uC, L.vCb}, Pt{uM, L.vCb}, Pt{uM, vIn}, kFlowInlet, NpCharge, NtCompOut, thr, "Compressor 2 outlet", 0.5f);
+        if (L.ic) {
+            pipe(Pt{uM, vIn}, Pt{L.uIC, vIn}, kFlowInlet, NpCharge, NtCompOut, thr * 1.1f, "Charge pipe (hot side)");
+            pipe(Pt{L.uIC, vIn}, Pt{thrEnd, vIn}, kFlowThrottle, NpCharge, NtCharge, thr * 1.1f, "Charge pipe (cold side)");
+        } else pipe(Pt{uM, vIn}, Pt{thrEnd, vIn}, kFlowThrottle, NpCharge, NtCompOut, thr * 1.1f, "Charge pipe");
+        comp(CkCompressor, kPartCompressor, Pt{L.uC, L.vCa}, 2.4f, 2.4f, L.seq ? "Primary compressor" : "Compressor 1", App::kBoostControl, "boost_hw", 1, 0);
+        comp(CkCompressor, kPartCompressor, Pt{L.uC, L.vCb}, 2.4f, 2.4f, L.seq ? "Secondary compressor" : "Compressor 2", App::kBoostControl, "boost_hw", 0, 1);
+        if (L.seq) comp(CkSeqValve, -1, Pt{(L.uC + uM) * 0.5f + 0.008f, L.vCb}, 1.1f, 1.1f, "Intake control valve", App::kBoostControl, "boost_hw", 0, 2);
+        if (L.ic) comp(CkIntercooler, kPartIntercooler, Pt{L.uIC, vIn}, 2.0f, 3.6f, "Intercooler", App::kBoostControl, "boost_hw");
+        if (L.bov) {
+            pipe(Pt{L.uBov, vIn}, Pt{L.uBov, 0.015f}, kFlowBov, NpCharge, NtCharge, 25.0f, "Blow-off valve vent");
+            comp(CkBov, kPartBov, Pt{L.uBov, 0.055f}, 1.3f, 1.3f, "Blow-off valve", App::kBoostControl, "boost_hw", 2);
+        }
+    } else if (L.boosted) {
         pipe(Pt{L.uF, vIn}, Pt{L.uC, vIn}, kFlowInlet, NpAmb, NtAmb, thr * 1.2f, "Compressor inlet");
         if (L.ic) {
             pipe(Pt{L.uC, vIn}, Pt{L.uIC, vIn}, kFlowInlet, NpCharge, NtCompOut, thr * 1.1f, "Charge pipe (hot side)");
@@ -228,15 +276,45 @@ FmLayout buildLayout(const EngineParams& p) {
     // ---- exhaust: primaries -> collector (header) -> turbine / wastegate -> downpipe -> cat -> muffler -> tail
     const float pDia = std::max(20.0f, p.primaryDia_mm), cDia = std::max(30.0f, p.collectorDia_mm), dDia = std::max(30.0f, p.pipeDia_mm);
     for (int i = 0; i < n; ++i)
-        pipe(Pt{L.cylU[i], L.vHd1}, Pt{L.cylU[i], L.vCol}, kFlowExhaustValve, NpPortEx, NtCollector, pDia, L.rotary ? "Exhaust port" : "Primary", 1.0f / n, i);
-    if (!L.two) box(CkHeader, kPartHeader, Pt{L.hx0 - 0.012f, L.vHd1 + 0.035f}, Pt{L.hx1 + 0.012f, L.vCol + 0.04f}, "Header", App::kEngineSetup, "exhaust");
-    const float colStart = L.cylU[n - 1];
-    if (L.turbo) {
+        pipe(Pt{L.cylU[i], L.vHd1}, Pt{L.cylU[i], L.grp[i] ? L.vT2 : L.vCol}, kFlowExhaustValve, NpPortEx, NtCollector, pDia,
+             L.rotary ? "Exhaust port" : "Primary", 1.0f / n, i);
+    if (!L.two) box(CkHeader, kPartHeader, Pt{L.hx0 - 0.012f, L.vHd1 + 0.035f}, Pt{L.hx1 + 0.012f, (L.split ? L.vT2 : L.vCol) + 0.04f},
+                    L.split ? "Header (two manifolds)" : "Header", App::kEngineSetup, "exhaust");
+    float colStart = L.cylU[0], colStart2 = L.cylU[0];
+    for (int i = 0; i < n; ++i) { if (L.grp[i] == 0) colStart = std::max(colStart, L.cylU[i]); else colStart2 = std::max(colStart2, L.cylU[i]); }
+    if (L.split) {
+        // each group's collector to its own turbo and wastegate; the two downpipes into the one exhaust pipe below
+        const char* g1 = L.twoBanks ? "Bank 1 collector -> turbo 1" : "Front cylinders' collector -> turbo 1";
+        const char* g2 = L.twoBanks ? "Bank 2 collector -> turbo 2" : "Rear cylinders' collector -> turbo 2";
+        pipe(Pt{colStart, L.vCol}, Pt{L.uWg, L.vCol}, kFlowExhaustValve, NpTurbIn, NtCollector, cDia, g1, 0.5f);
+        pipe(Pt{L.uWg, L.vCol}, Pt{L.uT, L.vCol}, kFlowTurbine, NpTurbIn, NtCollector, cDia, "Turbine 1 inlet", 0.5f);
+        pipe(Pt{colStart2, L.vT2}, Pt{L.uWg2, L.vT2}, kFlowExhaustValve, NpTurbIn, NtCollector, cDia, g2, 0.5f);
+        pipe(Pt{L.uWg2, L.vT2}, Pt{L.uT2, L.vT2}, kFlowTurbine, NpTurbIn, NtCollector, cDia, "Turbine 2 inlet", 0.5f);
+        if (!L.vgt) {
+            pipe(Pt{L.uWg, L.vCol}, Pt{L.uWg, L.vTail}, kFlowWastegate, NpTurbIn, NtCollector, cDia * 0.6f, "Wastegate 1", 0.5f);
+            pipe(Pt{L.uWg2, L.vT2}, Pt{L.uWg2, L.vTail}, kFlowWastegate, NpTurbIn, NtCollector, cDia * 0.6f, "Wastegate 2", 0.5f);
+            comp(CkWastegate, kPartTurbine, Pt{L.uWg, (L.vT2 + L.vTail) * 0.5f}, 1.1f, 1.1f, "Wastegate 1", App::kBoostControl, "boost_hw", 3);
+            comp(CkWastegate, kPartTurbine, Pt{L.uWg2, (L.vT2 + L.vTail) * 0.5f}, 1.1f, 1.1f, "Wastegate 2", App::kBoostControl, "boost_hw", 2);
+        }
+        pipe(Pt{L.uT, L.vCol}, Pt{L.uT, L.vTail}, kFlowTurbine, NpTurbOut, NtPostTurb, dDia * 0.8f, "Turbine 1 outlet", 0.5f);
+        pipe(Pt{L.uT2, L.vT2}, Pt{L.uT2, L.vTail}, kFlowTurbine, NpTurbOut, NtPostTurb, dDia * 0.8f, "Turbine 2 outlet", 0.5f);
+        comp(CkTurbine, kPartTurbine, Pt{L.uT, L.vCol}, 2.4f, 2.4f, L.vgt ? "VGT turbine 1" : "Turbine 1", App::kBoostControl, "boost_hw", 1, 0);
+        comp(CkTurbine, kPartTurbine, Pt{L.uT2, L.vT2}, 2.4f, 2.4f, L.vgt ? "VGT turbine 2" : "Turbine 2", App::kBoostControl, "boost_hw", 2, 1);
+    } else if (L.turbo) {
         pipe(Pt{colStart, L.vCol}, Pt{L.uWg, L.vCol}, kFlowExhaustValve, NpTurbIn, NtCollector, cDia, "Collector");
         pipe(Pt{L.uWg, L.vCol}, Pt{L.uT, L.vCol}, kFlowTurbine, NpTurbIn, NtCollector, cDia, "Turbine inlet");
         if (!L.vgt) pipe(Pt{L.uWg, L.vCol}, Pt{L.uWg, L.vTail}, kFlowWastegate, NpTurbIn, NtCollector, cDia * 0.6f, "Wastegate");
+        if (L.twin) {
+            pipe(Pt{L.uT2, L.vCol}, Pt{L.uT2, L.vT2}, kFlowTurbine, NpTurbIn, NtCollector, cDia * 0.8f, L.seq ? "To the secondary turbine" : "Turbine 2 inlet", 0.5f);
+            pipe(Pt{L.uT, L.vCol}, Pt{L.uT, L.vTail}, kFlowTurbine, NpTurbOut, NtPostTurb, dDia * 0.8f, "Turbine 1 outlet", 0.5f);
+            pipe(Pt{L.uT2, L.vT2}, Pt{L.uT2, L.vTail}, kFlowTurbine, NpTurbOut, NtPostTurb, dDia * 0.8f, "Turbine 2 outlet", 0.5f);
+            comp(CkTurbine, kPartTurbine, Pt{L.uT, L.vCol}, 2.4f, 2.4f, L.seq ? "Primary turbine" : "Turbine 1", App::kBoostControl, "boost_hw", 1, 0);
+            comp(CkTurbine, kPartTurbine, Pt{L.uT2, L.vT2}, 2.4f, 2.4f, L.seq ? "Secondary turbine" : "Turbine 2", App::kBoostControl, "boost_hw", 2, 1);
+            if (L.seq) comp(CkSeqValve, -1, Pt{L.uT2, L.vCol + 0.03f}, 1.0f, 1.0f, "Exhaust control valve", App::kBoostControl, "boost_hw", 2, 1);
+        } else {
         pipe(Pt{L.uT, L.vCol}, Pt{L.uT, L.vTail}, kFlowTurbine, NpTurbOut, NtPostTurb, dDia, "Turbine outlet");
         comp(CkTurbine, kPartTurbine, Pt{L.uT, L.vCol}, 3.0f, 3.0f, L.vgt ? "VGT turbine" : "Turbine", App::kBoostControl, "boost_hw", 3);
+        }
         if (!L.vgt) comp(CkWastegate, kPartTurbine, Pt{L.uWg, (L.vCol + L.vTail) * 0.5f}, 1.3f, 1.3f, "Wastegate", App::kBoostControl, "boost_hw", 2);
     } else if (L.two) {
         // the expansion chamber: header, diffuser, belly, baffle and stinger along the bottom of the map
@@ -276,6 +354,9 @@ uint64_t layoutKey(const EngineParams& p) {
     k = k * 3 + (uint64_t)p.fuelSystem; k = k * 3 + (uint64_t)(p.cat != 0); k = k * 8 + (uint64_t)p.muffler; k = k * 3 + (uint64_t)isRotary(p);
     k = k * 3 + (uint64_t)isTwoStroke(p); k = k * 3 + (uint64_t)(p.tsPipe != 0); k = k * 3 + (uint64_t)(p.vgt != 0);
     k = k * 3 + (uint64_t)(p.egrValveDia_mm > 0); k = k * 3 + (uint64_t)(p.egrCooler != 0); k = k * 3 + (uint64_t)(p.dieselInjSystem != 0);
+    k = k * 3 + (uint64_t)(p.turboCount >= 2); k = k * 3 + (uint64_t)(p.twinMode != 0);
+    k = k * 3 + (uint64_t)p.layout;   // (twin turbos group the cylinders by bank)
+    for (int i = 0; i < kMaxCyl; ++i) k = k * 2 + (uint64_t)(p.bank[i] != 0);
     return k;
 }
 
@@ -681,6 +762,14 @@ void App::panelFlowMap() {
         case CkTail:
             dl->AddTriangleFilled(ImVec2(b.x, c.y), ImVec2(a.x, a.y), ImVec2(a.x, b.y), kDim);
             break;
+        case CkSeqValve: {   // a sequential pair's control valve: open from the change-over (exhaust) / once both run (intake)
+            const float open = k.unit == 1 ? (tel_.seqStage >= 2 ? 1.0f : tel_.seqStage == 1 ? 0.35f : 0.0f) : (tel_.seqStage >= 2 ? 1.0f : 0.0f);
+            const ImVec2 q0(a.x, a.y), q1(a.x, b.y), q2(b.x, a.y), q3(b.x, b.y);
+            dl->AddTriangleFilled(q0, q1, c, levelCol(lv, 0.15f + 0.6f * open));
+            dl->AddTriangleFilled(q2, q3, c, levelCol(lv, 0.15f + 0.6f * open));
+            dl->AddTriangle(q0, q1, c, edge, bw); dl->AddTriangle(q2, q3, c, edge, bw);
+            break;
+        }
         case CkEgrValve: {   // poppet seat: a bow-tie filled as far as it is open, in the exhaust's orange
             const float open = clampv(tel_.egrPos, 0.0f, 1.0f);
             const ImVec2 q0(a.x, a.y), q1(a.x, b.y), q2(b.x, a.y), q3(b.x, b.y);
@@ -735,7 +824,10 @@ void App::panelFlowMap() {
         }
     }
     // turbo shaft / supercharger drive
-    if (L.turbo) dashed(dl, P(Pt{L.uC, L.vIn + 0.06f}), P(Pt{L.uT, L.vCol - 0.06f}), kDim, 2.0f, em * 0.4f);
+    if (L.twin) {   // each turbo's shaft: compressor 1 - turbine 1, compressor 2 - turbine 2
+        dashed(dl, P(Pt{L.uC - 0.012f, L.vCa + 0.03f}), P(Pt{L.uT - 0.012f, L.vCol - 0.04f}), kDim, 2.0f, em * 0.4f);
+        dashed(dl, P(Pt{L.uC + 0.012f, L.vCb + 0.04f}), P(Pt{L.uT2, L.vT2 - 0.04f}), kDim, 2.0f, em * 0.4f);
+    } else if (L.turbo) dashed(dl, P(Pt{L.uC, L.vIn + 0.06f}), P(Pt{L.uT, L.vCol - 0.06f}), kDim, 2.0f, em * 0.4f);
     if (L.blower) {
         const float vm = (L.vHd0 + L.vHd1) * 0.5f;
         const ImVec2 pul = P(Pt{L.hx0 - 0.035f, vm});
@@ -803,6 +895,13 @@ void App::panelFlowMap() {
             const char* val = k.part >= 0 ? h.part[k.part].value : "";
             static char vb[64];
             if (k.kind == CkWastegate) { std::snprintf(vb, sizeof(vb), "%.0f %% open", tel_.wastegate * 100); val = vb; }
+            if ((k.kind == CkCompressor || k.kind == CkTurbine) && L.twin) {
+                std::snprintf(vb, sizeof(vb), "%.0f krpm", (k.unit ? tel_.shaftRpm2 : tel_.shaftRpm) / 1000.0f); val = vb;
+            }
+            if (k.kind == CkSeqValve) {
+                const bool open = k.unit == 1 ? tel_.seqStage >= 1 : tel_.seqStage >= 2;
+                std::snprintf(vb, sizeof(vb), "%s", open ? (k.unit == 1 && tel_.seqStage == 1 ? "pre-spool" : "open") : "shut"); val = vb;
+            }
             if (k.kind == CkTurbine && L.vgt) { std::snprintf(vb, sizeof(vb), "vanes %.0f %% open", tel_.wastegate * 100); val = vb; }
             if (k.kind == CkEgrValve) { std::snprintf(vb, sizeof(vb), "%.0f %%  %.0f %% EGR", tel_.egrPos * 100, tel_.egrRate * 100); val = vb; }
             if (k.kind == CkEgrCooler) { std::snprintf(vb, sizeof(vb), "out %.0f C", tel_.egrGasC); val = vb; }
@@ -1006,7 +1105,15 @@ void App::panelFlowMap() {
             ImGui::Text("EGT thermocouple %.0f C   exhaust ports %.1f kPa", tel_.egt, f.pPortEx);
             if (tel_.egtPerCyl) for (int z = 0; z < L.n; ++z) ImGui::Text("  %s%d  %.0f C", L.rotary ? "R" : "#", z + 1, tel_.egtCylC[z]);
             break;
+        case CkSeqValve: {
+            static const char* kSt[] = {"the primary turbo alone", "the secondary pre-spooling / its exhaust valve opening", "both turbos on the charge"};
+            ImGui::Text("Sequential stage: %s", kSt[clampv(tel_.seqStage, 0, 2)]);
+            ImGui::Text("Turbos %.0f / %.0f krpm   change-over from %.0f rpm under load", tel_.shaftRpm / 1000.0f, tel_.shaftRpm2 / 1000.0f, p.seqRpm);
+            break;
+        }
         case CkTurbine: case CkWastegate:
+            if (L.twin) ImGui::Text("Turbo %d: %.0f krpm (the other %.0f krpm)", k.unit + 1, (k.unit ? tel_.shaftRpm2 : tel_.shaftRpm) / 1000.0f,
+                                    (k.unit ? tel_.shaftRpm : tel_.shaftRpm2) / 1000.0f);
             ImGui::Text("Inlet %.1f kPa (EMAP), outlet %.1f kPa: expansion ratio %.2f", f.pTurbIn, f.pTurbOut, tel_.turbEr);
             ImGui::Text("Drive pressure %.2f (EMAP / MAP)", f.pTurbIn / std::max(10.0, f.pPlenum));
             ImGui::Text("Efficiency %.0f %%   U/C %.2f   reduced flow %.2f", tel_.turbEff * 100, tel_.turbUc, tel_.turbMfp);

@@ -18,7 +18,8 @@ enum class Layout : int32_t { Inline = 0, V = 1, Boxer = 2 };
 enum class FuelSystem : int32_t { EFI = 0, Carburetor = 1, DieselDI = 2 };   // DieselDI: compression ignition, direct injection (Package 4)
 enum class Injection : int32_t { Port = 0, ThrottleBody = 1 };
 // OpenStacks: every primary open to the air on its own (zoomies / race stacks) - no collector, no silencer
-enum class HeaderType : int32_t { Log = 0, Collector = 1, TriY = 2, OpenStacks = 3 };
+// TwinScroll (turbo): the cylinders in two groups by firing order - each pulse into its own scroll of the turbine
+enum class HeaderType : int32_t { Log = 0, Collector = 1, TriY = 2, OpenStacks = 3, TwinScroll = 4 };
 enum class Crossover : int32_t { TrueDual = 0, HPipe = 1, XPipe = 2, MergeY = 3 };
 // Glasspack: a short straight-through can with thin packing; ReverseFlow: the OEM three-pass box; Valved: a chambered
 // box with a bypass pipe behind a flap that opens with rpm / load (active exhaust)
@@ -150,6 +151,7 @@ struct EngineParams {
     int32_t exhaustSplit;     // 1: every pipe splits into two before its muffler - two silencers, two tips (dual / quad exit)
     int32_t exhaustValveMode; // valved muffler: 0 auto (opens above exhaustValveRpm or under load), 1 always open, 2 always shut
     float exhaustValveRpm;
+    int32_t wgScreamer;       // turbo: the wastegate vents to the air through its own short pipe (a screamer pipe)
 
     // ---------------------------------------------------------- driver controls
     float throttle;           // 0..1 pedal
@@ -227,6 +229,10 @@ struct EngineParams {
     Induction induction;
     Supercharger scType;
     float compFlow_gs;        // compressor choke flow at max wheel speed (g/s)  -> compressor size
+    int32_t turboCount;       // 1 or 2 turbochargers (compFlow_gs, turbineAR, turboInertia: each one's)
+    int32_t twinMode;         // two: 0 parallel (a V / boxer: one per bank; an inline: front and rear cylinders),
+                              //      1 sequential (one manifold; the second joins above seqRpm under load)
+    float seqRpm;             // sequential: the speed the second turbo comes in
     float turbineAR;          // turbine housing A/R (0.3 small/fast .. 1.4 big/laggy)
     float turboInertia;       // rotating assembly inertia (kg cm^2)
     float wastegateBar;       // boost target (bar gauge)
@@ -364,7 +370,7 @@ struct StructuralKey {
     int32_t cylinders; Layout layout; int32_t bank[kMaxCyl];
     int32_t itb; FuelSystem fuelSystem; Injection injection; int32_t carbBarrels;
     HeaderType header; Crossover crossover; int32_t cat, resonator; Muffler muffler; float resonatorHz; int32_t mufflerExtTubes;
-    int32_t exhaustSplit;
+    int32_t exhaustSplit, wgScreamer, turboCount, twinMode;
     int32_t oversample;
     int32_t evenFire; int32_t firingOrder[kMaxCyl]; // affects tri-Y pairing
     EngineType engineType;
@@ -382,6 +388,8 @@ struct StructuralKey {
         k.header = p.header; k.crossover = p.crossover; k.cat = p.cat; k.resonator = p.resonator;
         k.muffler = p.muffler; k.oversample = p.oversample; k.evenFire = p.evenFire;
         k.resonatorHz = p.resonatorHz; k.mufflerExtTubes = p.mufflerExtTubes; k.exhaustSplit = p.exhaustSplit;
+        k.wgScreamer = p.induction == Induction::Turbo ? p.wgScreamer : 0;
+        k.turboCount = p.induction == Induction::Turbo ? p.turboCount : 1; k.twinMode = k.turboCount > 1 ? p.twinMode : 0;
         k.engineType = p.engineType;
         k.induction = p.induction; k.scType = p.scType;
         k.tsPipe = isTwoStroke(p) ? p.tsPipe : 0; k.tsPipeRpm = isTwoStroke(p) && p.tsPipe ? p.tsPipeRpm : 0.0f;
@@ -412,6 +420,10 @@ void applyRotaryPorting(EngineParams& p, int style);
 const char* rotaryPortingName(int style);
 // sensible forced-induction defaults sized to the engine
 void applyInductionDefaults(EngineParams& p, Induction ind, Supercharger sc = Supercharger::Roots);
+// one turbo or two: each of two sized for its half of the engine (compressor 0.55x, wheel inertia 0.45x one big turbo's;
+// a sequential pair 0.70x / 0.63x - its first turbo carries the engine alone up to the change-over)
+void applyTurboCount(EngineParams& p, int count);
+void applyTwinMode(EngineParams& p, int mode);
 // size a plausible car (or motorcycle) and gearbox to the engine
 void applyVehicleDefaults(EngineParams& p);
 
