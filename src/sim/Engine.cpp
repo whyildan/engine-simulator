@@ -1691,6 +1691,17 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
         lamPipe_ = wbF_ > 1e-9 ? clampv(wbA_ / (wbF_ * fuel_.stoich), 0.3, 9.99) : (wbA_ > 1e-9 ? 9.99 : lamPipe_);
     }
     exhaust.setGasTemp(egtAvg);   // pipe sound speed follows the gas temperature
+    if (exhaust.hasValve()) {
+        // active exhaust flap: auto opens above the set speed or under load (pedal past 60 %) and shuts again below
+        // 300 rpm under it with the pedal back under 45 % (hysteresis, chosen - so it does not flutter at the edge)
+        double target = p_.exhaustValveMode == 1 ? 1.0 : p_.exhaustValveMode == 2 ? 0.0 : -1.0;
+        if (target < 0) {
+            const bool open = exhaust.valveOpen() > 0.5;
+            const double r0 = p_.exhaustValveRpm - (open ? 300.0 : 0.0);
+            target = rpm > r0 || pedal > (open ? 0.45 : 0.6) ? 1.0 : 0.0;
+        }
+        exhaust.stepValve(target, dt);
+    }
     flowStep(dt);
     knockMax = std::max(kn, knockMax - dt * 0.5);
 

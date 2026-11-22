@@ -1,5 +1,6 @@
 #include "ui/Widgets.h"
 #include "core/MathUtil.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -123,6 +124,20 @@ void ExhaustSchematic(const EngineParams& p, ImVec2 size) {
     float collectorX = x0 + w * 0.28f;
     bool merged = !twoBanks || p.crossover == Crossover::MergeY;
     float outY[2];
+    if (p.header == HeaderType::OpenStacks && p.induction != Induction::Turbo && !(isTwoStroke(p) && p.tsPipe)) {
+        for (int i = 0, k = 0; i < n; ++i, ++k) {
+            const float y = p0.y + size.y * (k + 1) / (n + 1);
+            dl->AddRectFilled(ImVec2(x0 - 22, y - 6), ImVec2(x0 - 4, y + 6), col(0.5f, 0.5f, 0.55f), 2);
+            char lb[8];
+            std::snprintf(lb, sizeof(lb), "%d", i + 1);
+            dl->AddText(ImVec2(x0 - 19, y - 7), col(1, 1, 1), lb);
+            const float len = (float)clampv(p.primaryLen_mm[i] / 1000.0, 0.1, 1.5), xe = x0 + w * 0.12f + len * w * 0.25f;
+            dl->AddLine(ImVec2(x0, y), ImVec2(xe, y), pipe, (float)clampv(p.primaryDia_mm / 12.0, 1.5, 5.0));
+            dl->AddTriangleFilled(ImVec2(xe, y - 6), ImVec2(xe, y + 6), ImVec2(xe + 10, y), col(0.9f, 0.5f, 0.2f));
+        }
+        dl->AddText(ImVec2(x0 + w * 0.62f, p0.y + size.y * 0.5f - 8), col(0.6f, 0.6f, 0.65f), "OPEN STACKS");
+        return;
+    }
     for (int b = 0; b < banks; ++b) {
         float yMid = p0.y + bandH * (b + 0.5f);
         int cnt = 0;
@@ -164,11 +179,21 @@ void ExhaustSchematic(const EngineParams& p, ImVec2 size) {
         section(xx, y, nullptr, seg, 0);
         if (p.cat) { section(xx, y, "CAT", seg * 1.1f, 11); section(xx, y, nullptr, seg * 0.5f, 0); }
         if (p.resonator) { section(xx, y, p.resonator == 2 ? "HELM" : "RES", seg * 1.1f, 9); section(xx, y, nullptr, seg * 0.5f, 0); }
-        const char* mn = p.muffler == Muffler::StraightThrough ? "GLASSPACK" : p.muffler == Muffler::Chambered ? "CHAMBERED"
-                       : p.muffler == Muffler::Turbo ? "TURBO" : nullptr;
-        if (mn) section(xx, y, mn, seg * 2.2f, 13);
-        section(xx, y, nullptr, seg * 1.2f, 0);
-        dl->AddTriangleFilled(ImVec2(xx, y - 6), ImVec2(xx, y + 6), ImVec2(xx + 10, y), col(0.9f, 0.5f, 0.2f));
+        static const char* kMn[] = {nullptr, "STRAIGHT", "CHAMBERED", "TURBO", "GLASSPACK", "3-PASS", "VALVED"};
+        const char* mn = kMn[clampv((int)p.muffler, 0, 6)];
+        auto tip = [&](float yy, float xa) {
+            float xb = xa;
+            if (mn) section(xb, yy, mn, seg * (p.exhaustSplit ? 1.8f : 2.2f), p.exhaustSplit ? 9.0f : 13.0f);
+            section(xb, yy, nullptr, seg * 1.2f, 0);
+            dl->AddTriangleFilled(ImVec2(xb, yy - 6), ImVec2(xb, yy + 6), ImVec2(xb + 10, yy), col(0.9f, 0.5f, 0.2f));
+        };
+        if (p.exhaustSplit) {   // a Y into two silencers and tips
+            const float dy = std::min(14.0f, size.y * 0.09f);
+            dl->AddLine(ImVec2(xx, y), ImVec2(xx + seg * 0.5f, y - dy), pipe, thick * 0.8f);
+            dl->AddLine(ImVec2(xx, y), ImVec2(xx + seg * 0.5f, y + dy), pipe, thick * 0.8f);
+            tip(y - dy, xx + seg * 0.5f);
+            tip(y + dy, xx + seg * 0.5f);
+        } else tip(y, xx);
     };
     if (merged) {
         for (int b = 0; b < banks; ++b) dl->AddLine(ImVec2(x, outY[b]), ImVec2(x + seg, yC), pipe, thick);
@@ -183,6 +208,121 @@ void ExhaustSchematic(const EngineParams& p, ImVec2 size) {
         }
         for (int b = 0; b < 2; ++b) path(outY[b], xs);
     }
+}
+
+// ---- step bar: icons drawn with lines (no icon font), in a box of side s centred on c
+static void stepIcon(ImDrawList* dl, int icon, ImVec2 c, float s, ImU32 ink) {
+    const float t = std::max(1.2f, s * 0.075f), h = 0.5f * s;
+    auto P = [&](float x, float y) { return ImVec2(c.x + x * h, c.y + y * h); };   // (-1..1 box)
+    switch (icon) {
+    case IconBlock:   // an inline-four block: the body, four bores on the deck, the sump
+        dl->AddRect(P(-0.95f, -0.35f), P(0.95f, 0.45f), ink, 0.08f * s, 0, t);
+        for (int k = 0; k < 4; ++k) {
+            const float x = -0.70f + 0.47f * k;
+            dl->AddRect(P(x - 0.17f, -0.72f), P(x + 0.17f, -0.35f), ink, 0.04f * s, 0, t);
+        }
+        dl->AddLine(P(-0.6f, 0.45f), P(-0.45f, 0.75f), ink, t);
+        dl->AddLine(P(0.6f, 0.45f), P(0.45f, 0.75f), ink, t);
+        dl->AddLine(P(-0.45f, 0.75f), P(0.45f, 0.75f), ink, t);
+        break;
+    case IconPiston:  // a piston with its rings, the rod down to the big end
+        dl->AddRect(P(-0.55f, -0.85f), P(0.55f, 0.05f), ink, 0.1f * s, 0, t);
+        dl->AddLine(P(-0.55f, -0.55f), P(0.55f, -0.55f), ink, t * 0.8f);
+        dl->AddLine(P(-0.55f, -0.38f), P(0.55f, -0.38f), ink, t * 0.8f);
+        dl->AddLine(P(0, -0.15f), P(0, 0.62f), ink, t * 1.4f);
+        dl->AddCircle(P(0, 0.72f), 0.22f * h, ink, 16, t);
+        break;
+    case IconCam:     // a camshaft: the shaft with four lobes
+        dl->AddLine(P(-1.0f, 0), P(1.0f, 0), ink, t * 1.2f);
+        for (int k = 0; k < 4; ++k) {
+            const float x = -0.66f + 0.44f * k, d = (k % 2) ? -1.0f : 1.0f;
+            dl->AddEllipse(P(x, 0.12f * d), ImVec2(0.14f * h, 0.42f * h), ink, 0, 16, t);
+        }
+        break;
+    case IconTurbo: { // a turbo: the snail housing (a spiral), the wheel's hub, the outlet
+        dl->PathClear();
+        for (int k = 0; k <= 28; ++k) {
+            const float a = 0.3f + 5.4f * k / 28.0f, r = 0.32f + 0.40f * k / 28.0f;
+            dl->PathLineTo(P(r * std::cos(a), r * std::sin(a)));
+        }
+        dl->PathStroke(ink, 0, t);
+        dl->AddCircleFilled(P(0, 0), 0.14f * h, ink, 12);
+        dl->AddLine(P(0.72f, -0.10f), P(0.72f, -0.85f), ink, t);
+        dl->AddLine(P(0.40f, -0.85f), P(1.0f, -0.85f), ink, t);
+        break;
+    }
+    case IconIntake:  // an intake: the plenum, the throttle body on its end, runners down to the head
+        dl->AddRect(P(-0.85f, -0.75f), P(0.55f, -0.30f), ink, 0.08f * s, 0, t);
+        dl->AddRect(P(0.55f, -0.66f), P(0.95f, -0.39f), ink, 0, 0, t);
+        for (int k = 0; k < 4; ++k) {
+            const float x = -0.62f + 0.38f * k;
+            dl->AddBezierQuadratic(P(x, -0.30f), P(x, 0.15f), P(x - 0.20f, 0.70f), ink, t);
+        }
+        break;
+    case IconExhaust: // a header: three primaries sweeping into a collector, the pipe out
+        for (int k = 0; k < 3; ++k) {
+            const float y = -0.70f + 0.45f * k;
+            dl->AddBezierQuadratic(P(-0.95f, y), P(-0.15f, y), P(0.20f, 0.10f), ink, t);
+        }
+        dl->AddLine(P(0.20f, 0.10f), P(0.95f, 0.10f), ink, t * 1.6f);
+        dl->AddLine(P(0.80f, -0.10f), P(0.95f, 0.10f), ink, t * 0.8f);
+        dl->AddLine(P(0.80f, 0.30f), P(0.95f, 0.10f), ink, t * 0.8f);
+        break;
+    case IconWheel:   // a wheel: tyre, rim, five spokes
+        dl->AddCircle(P(0, 0), 0.92f * h, ink, 28, t * 1.4f);
+        dl->AddCircle(P(0, 0), 0.62f * h, ink, 24, t);
+        for (int k = 0; k < 5; ++k) {
+            const float a = -1.5708f + 1.2566f * k;
+            dl->AddLine(P(0.16f * std::cos(a), 0.16f * std::sin(a)), P(0.60f * std::cos(a), 0.60f * std::sin(a)), ink, t);
+        }
+        dl->AddCircleFilled(P(0, 0), 0.14f * h, ink, 12);
+        break;
+    case IconSound:   // a speaker and two wave arcs
+        dl->AddRectFilled(P(-0.95f, -0.25f), P(-0.60f, 0.25f), ink);
+        dl->AddTriangleFilled(P(-0.62f, -0.25f), P(-0.15f, -0.70f), P(-0.15f, 0.25f), ink);
+        dl->AddTriangleFilled(P(-0.62f, 0.25f), P(-0.15f, -0.25f), P(-0.15f, 0.70f), ink);
+        dl->PathArcTo(P(0.0f, 0), 0.40f * h, -0.9f, 0.9f, 12); dl->PathStroke(ink, 0, t);
+        dl->PathArcTo(P(0.0f, 0), 0.78f * h, -0.9f, 0.9f, 16); dl->PathStroke(ink, 0, t);
+        break;
+    default: break;
+    }
+}
+
+int StepBar(const char* id, const int* icons, const char* const* labels, int n, int current) {
+    ImGui::PushID(id);
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    const float W = ImGui::GetContentRegionAvail().x, H = ImGui::GetFrameHeight() * 1.55f;
+    const float tip = H * 0.32f, gap = 3.0f;
+    const float w = (W - tip) / std::max(1, n);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    int clicked = -1;
+    for (int i = 0; i < n; ++i) {
+        const float x0 = p0.x + w * i, x1 = x0 + w - gap, y0 = p0.y, y1 = p0.y + H, ym = 0.5f * (y0 + y1);
+        ImGui::SetCursorScreenPos(ImVec2(x0, y0));
+        ImGui::PushID(i);
+        if (ImGui::InvisibleButton("##step", ImVec2(w, H))) clicked = i;
+        const bool hov = ImGui::IsItemHovered(), sel = i == current;
+        if (hov && labels && labels[i]) ImGui::SetTooltip("%s", labels[i]);
+        ImGui::PopID();
+        // a chevron: notched on the left (but the first), pointed on the right
+        ImVec2 pts[6];
+        int np = 0;
+        pts[np++] = ImVec2(x0, y0);
+        pts[np++] = ImVec2(x1, y0);
+        pts[np++] = ImVec2(x1 + tip, ym);
+        pts[np++] = ImVec2(x1, y1);
+        pts[np++] = ImVec2(x0, y1);
+        if (i > 0) pts[np++] = ImVec2(x0 + tip, ym);
+        const ImU32 fill = sel ? col(0.55f, 0.29f, 0.13f) : hov ? col(0.20f, 0.205f, 0.225f) : col(0.135f, 0.14f, 0.155f);
+        dl->AddConcavePolyFilled(pts, np, fill);
+        dl->AddPolyline(pts, np, sel ? col(1.0f, 0.62f, 0.25f) : col(0.26f, 0.27f, 0.30f), ImDrawFlags_Closed, sel ? 1.6f : 1.0f);
+        const float cx = 0.5f * (x0 + (i > 0 ? tip : 0.0f) + x1 + 0.5f * tip);
+        stepIcon(dl, icons[i], ImVec2(cx, ym), H * 0.62f, sel ? col(1.0f, 0.93f, 0.85f) : hov ? col(0.88f, 0.89f, 0.92f) : col(0.66f, 0.68f, 0.72f));
+    }
+    ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + H + ImGui::GetStyle().ItemSpacing.y));
+    ImGui::Dummy(ImVec2(W, 0));
+    ImGui::PopID();
+    return clicked;
 }
 
 } // namespace es::ui

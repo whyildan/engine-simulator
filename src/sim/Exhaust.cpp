@@ -13,6 +13,8 @@ double ExhaustSystem::areaFor(const Pipe& pp) const {
     case Primary: return circ(p_.primaryDia_mm);
     case Secondary: return circ(p_.primaryDia_mm * 1.25);
     case Collector: case Log: return circ(p_.collectorDia_mm);
+    case Valve: return circ(p_.pipeDia_mm) * pp.areaMul * std::max(0.02, valveOpen_);   // (shut: a leak past the flap)
+    case ValveInv: return circ(p_.pipeDia_mm) * pp.areaMul * std::max(0.06, 1.0 - valveOpen_);
     default: return circ(p_.pipeDia_mm) * pp.areaMul;
     }
 }
@@ -157,11 +159,77 @@ PipeEnd ExhaustSystem::expansionChamber(PipeEnd from) {
     return e;
 }
 
+// the muffler on a pipe of area am x the system pipe's (am < 1: one branch of a split exhaust)
+PipeEnd ExhaustSystem::muffle(PipeEnd e, double am) {
+    fixedZone_ = 0.55;
+    switch (p_.muffler) {
+    case Muffler::StraightThrough:  // perforated core in packing: absorbs highs
+        e = chain(e, Fixed, 0, am * 1.0, 0.45, 1700, 0.45);
+        break;
+    case Muffler::Glasspack:        // a short perforated core in a thin fibreglass wrap: little absorption, the rasp
+                                    // stays (chosen: a third of the straight-through's length, cutoff ~2x)
+        e = chain(e, Fixed, 0, am * 1.6, 0.30, 3200, 0.22);
+        break;
+    case Muffler::Chambered:        // reactive chambers (plane-wave expansion chambers, area ratio 6.5): resonant tone
+        e = chamber(e, am * 6.5, 0.12, 6000, 0.12, p_.mufflerExtTubes != 0);
+        e = chain(e, Fixed, 0, am * 0.8, 0.10, 9000, 0.05);
+        e = chamber(e, am * 6.5, 0.18, 6000, 0.12, p_.mufflerExtTubes != 0);
+        e = chain(e, Fixed, 0, am * 0.8, 0.12, 9000, 0.05);
+        e = chamber(e, am * 6.5, 0.10, 6000, 0.12, p_.mufflerExtTubes != 0);
+        break;
+    case Muffler::ReverseFlow: {    // the OEM three-pass box (Munjal, Acoustics of Ducts and Mufflers, ch. 7: the
+                                    // reverse-flow muffler): gas into the first chamber, back through a perforated tube
+                                    // to the second, forward again to the third. The tubes are inertances between three
+                                    // volumes - a low-pass far below a straight chain of chambers; the perforations and
+                                    // the turns lose energy (chosen: chambers 7x, tubes 0.55x the pipe, 0.30 m long)
+        e = chamber(e, am * 7.0, 0.12, 4500, 0.18, false);
+        e = chain(e, Fixed, 0, am * 0.55, 0.30, 5000, 0.12);
+        e = chamber(e, am * 7.0, 0.10, 4500, 0.18, false);
+        e = chain(e, Fixed, 0, am * 0.55, 0.30, 5000, 0.12);
+        e = chamber(e, am * 7.0, 0.12, 4500, 0.18, false);
+        break;
+    }
+    case Muffler::Valved: {         // active exhaust: a chambered box, and beside it a straight bypass behind a flap
+                                    // that the ECU opens above a speed or under load (stepValve) - quiet cruising,
+                                    // the open pipe when pushed. The bypass is as long as the way through the box (two
+                                    // parallel paths of different length would cancel each other in a band - a
+                                    // Herschel-Quincke tube). The flap diverts, as a two-mode box does: opening the
+                                    // bypass narrows the way into the chambers (to 6 %), so open the gas runs straight
+                                    // through, shut it goes round the chambers (with both ways open the box hung on the
+                                    // bypass as a side branch and gave back what the flap let through - chosen)
+        const int byIn = newPipe(Fixed, 0, am * 1.0, 0.05, 9000, 0.03);
+        net.connect({e, PipeEnd{byIn, 0}});
+        const int toBox = newPipe(ValveInv, 0, am * 1.0, 0.05, 9000, 0.03), toBy = newPipe(Valve, 0, am * 1.0, 0.47, 8000, 0.03);
+        net.connect({PipeEnd{byIn, 1}, PipeEnd{toBox, 0}, PipeEnd{toBy, 0}});
+        valvePipes_.push_back(toBy);
+        valvePipes_.push_back(toBox);
+        PipeEnd b{toBox, 1};
+        b = chamber(b, am * 6.5, 0.14, 6000, 0.12, false);
+        b = chain(b, Fixed, 0, am * 0.8, 0.14, 9000, 0.05);
+        b = chamber(b, am * 6.5, 0.14, 6000, 0.12, false);
+        const int out = newPipe(Fixed, 0, am * 1.0, 0.05, 9000, 0.03);
+        net.connect({b, PipeEnd{toBy, 1}, PipeEnd{out, 0}});
+        e = PipeEnd{out, 1};
+        break;
+    }
+    case Muffler::Turbo:            // chambers + absorptive tubes: quiet, mellow
+        e = chain(e, Fixed, 0, am * 5.0, 0.16, 1800, 0.6);
+        e = chain(e, Fixed, 0, am * 0.6, 0.30, 1400, 0.7);
+        e = chain(e, Fixed, 0, am * 5.0, 0.20, 1800, 0.6);
+        break;
+    case Muffler::None: default: break;
+    }
+    return e;
+}
+
 void ExhaustSystem::finishPath(PipeEnd from, float pan, double midFrac) {
     PipeEnd e = from;
     if (midFrac > 0) e = chain(e, Mid, 0, 1.0, midFrac, 9000, 0.03);
     fixedZone_ = 0.75;
-    if (p_.cat) {
+    if (p_.cat == 2) {   // high-flow metallic catalyst: thin foil, larger cells - more open area, shorter (chosen)
+        e = chain(e, Fixed, 0, 2.4, 0.10, 4000, 0.45);
+        e = chain(e, Fixed, 0, 1.0, 0.30, 9000, 0.03);
+    } else if (p_.cat) {
         e = chain(e, Fixed, 0, 3.2, 0.14, 2600, 0.9);     // catalyst brick: wide, lossy
         e = chain(e, Fixed, 0, 1.0, 0.30, 9000, 0.03);
     }
@@ -187,25 +255,22 @@ void ExhaustSystem::finishPath(PipeEnd from, float pan, double midFrac) {
         net.addNodeEnd(PipeEnd{neck, 1}, &helm_.back());
         e = PipeEnd{seg, 1};
     }
-    fixedZone_ = 0.55;
-    switch (p_.muffler) {
-    case Muffler::StraightThrough:  // perforated core in packing: absorbs highs
-        e = chain(e, Fixed, 0, 1.0, 0.45, 1700, 0.45);
-        break;
-    case Muffler::Chambered:        // reactive chambers (plane-wave expansion chambers, area ratio 6.5): resonant tone
-        e = chamber(e, 6.5, 0.12, 6000, 0.12, p_.mufflerExtTubes != 0);
-        e = chain(e, Fixed, 0, 0.8, 0.10, 9000, 0.05);
-        e = chamber(e, 6.5, 0.18, 6000, 0.12, p_.mufflerExtTubes != 0);
-        e = chain(e, Fixed, 0, 0.8, 0.12, 9000, 0.05);
-        e = chamber(e, 6.5, 0.10, 6000, 0.12, p_.mufflerExtTubes != 0);
-        break;
-    case Muffler::Turbo:            // chambers + absorptive tubes: quiet, mellow
-        e = chain(e, Fixed, 0, 5.0, 0.16, 1800, 0.6);
-        e = chain(e, Fixed, 0, 0.6, 0.30, 1400, 0.7);
-        e = chain(e, Fixed, 0, 5.0, 0.20, 1800, 0.6);
-        break;
-    case Muffler::None: default: break;
+    if (p_.exhaustSplit) {
+        // a Y after the cat / resonator into two branches, each with its own muffler and tip (a single pipe: dual
+        // exit; each bank of a true dual: quad tips). Branches of 0.6 x the pipe's area each (chosen: a 76 mm pipe
+        // into two 2.3 in / 59 mm ones, the common split)
+        const double am = 0.6;
+        const int a = newPipe(Fixed, 0, am, 0.25, 9000, 0.03), b = newPipe(Fixed, 0, am, 0.25, 9000, 0.03);
+        net.connect({e, PipeEnd{a, 0}, PipeEnd{b, 0}});
+        const float pa = clampv(pan - 0.35f, -1.0f, 1.0f), pb = clampv(pan + 0.35f, -1.0f, 1.0f);
+        PipeEnd ea = muffle(PipeEnd{a, 1}, am), eb = muffle(PipeEnd{b, 1}, am);
+        ea = chain(ea, Tail, 0, am, 1.0, 10000, 0.03);
+        eb = chain(eb, Tail, 0, am, 1.0, 10000, 0.03);
+        net.addOpenEnd(ea, pa);
+        net.addOpenEnd(eb, pb);
+        return;
     }
+    e = muffle(e, 1.0);
     e = chain(e, Tail, 0, 1.0, 1.0, 10000, 0.03);
     net.addOpenEnd(e, pan);
 }
@@ -220,7 +285,8 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
     net.init(fs, c, kPatm / (kR * kGasT), kPatm);
 
     burned_.V = 1; burned_.T = kGasT; burned_.m = 1; burned_.mb = 1; burned_.mf = 0;
-    helm_.clear(); helm_.reserve(4);
+    helm_.clear(); helm_.reserve(8);
+    valvePipes_.clear(); valveApplied_ = -1;
     ports_.assign(n, GasNode());
     for (int i = 0; i < n; ++i) {
         GasNode& g = ports_[i];
@@ -274,6 +340,7 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
             gp.V = std::max(4e-6, as[0] * 0.03);   // (nominal: scales the afterfire pops)
         }
         hasTurbine_ = false;
+        if (p.exhaustSplit) outlets *= 2;
         if (gasT_ <= 0) gasT_ = kGasT;
         net.setGasTemp(gasT_, 300.0);
         net.reset(1.0);
@@ -299,6 +366,23 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
     if (grp[1].empty()) grp.pop_back();
     else if (grp[0].empty()) { grp[0] = grp[1]; grp.pop_back(); }
     groups = (int)grp.size();
+
+    if (p.header == HeaderType::OpenStacks && p.induction != Induction::Turbo && !tsPipe_) {
+        // open stacks: every primary ends in the open air - no collector, cat or silencer; each cylinder's pulse
+        // radiates on its own (spread across the stereo field along the engine, a V's banks to their sides)
+        outlets = n;
+        for (int i = 0; i < n; ++i) {
+            float pan = n > 1 ? -0.8f + 1.6f * i / (n - 1) : 0.0f;
+            if (p.layout != Layout::Inline) pan = (p.bank[i] ? 0.55f : -0.55f) + 0.3f * (n > 1 ? (float)i / (n - 1) - 0.5f : 0.0f);
+            net.addOpenEnd(PipeEnd{prim[i], 1}, pan);
+        }
+        if (gasT_ <= 0) gasT_ = kGasT;
+        net.setGasTemp(gasT_, 300.0);
+        net.reset(1.0);
+        net.setTone(p);
+        net.setNonlinear(p.exhaustSteep);
+        return;
+    }
 
     std::vector<PipeEnd> groupOut;
     for (auto& g : grp) {
@@ -391,11 +475,22 @@ void ExhaustSystem::build(const EngineParams& p, const float phase[kMaxCyl], dou
         }
         }
     }
+    if (p.exhaustSplit) outlets *= 2;
     if (gasT_ <= 0) gasT_ = kGasT;
     net.setGasTemp(gasT_, 300.0);
     net.reset(1.0);
     net.setTone(p);
     net.setNonlinear(p.exhaustSteep);
+}
+
+// the flap's actuator: ~0.25 s to swing (chosen: an electric / vacuum flap moves in a few tenths of a second); the pipe
+// areas follow when it has moved more than 1 %
+void ExhaustSystem::stepValve(double target, double dt) {
+    if (valvePipes_.empty()) return;
+    valveOpen_ += (clampv(target, 0.0, 1.0) - valveOpen_) * (1.0 - std::exp(-dt / 0.25));
+    if (std::fabs(valveOpen_ - valveApplied_) < 0.01) return;
+    valveApplied_ = valveOpen_;
+    for (int id : valvePipes_) net.pipes[id].area = areaFor(net.pipes[id]);
 }
 
 void ExhaustSystem::setGasTemp(double egtK) {

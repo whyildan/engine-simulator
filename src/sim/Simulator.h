@@ -29,6 +29,7 @@ struct Telemetry {
     float tsDelivery = 0, tsTrapping = 0, tsScavenging = 0;   // two-stroke, cylinder 1, last cycle: delivery ratio, TE, SE
     float tsCrankcaseKPa = 0, tsReed = 0;                     // ... crankcase pressure, inlet opening 0..1 (reed lift / port)
     float tsPowerValve = 1, tsOilSmokeGh = 0;
+    float exhValve = -1;                                       // valved muffler's flap 0 shut..1 open (-1: no valve)
     float bovLift = 0;                                         // blow-off valve lift 0..1                 // ... power valve 0 lowered..1 lifted, unburned oil out (g/h)
     float tsSquishMs = 0, tsSquishKeMJ = 0, tsBurnDeg = 0;    // ... max squish velocity, squished kinetic energy, burn period
     float egrPos = 0, egrGs = 0, egrRate = 0, vgtOpen = 0;   // EGR valve 0..1, flow g/s, share of the charge; VGT vane opening

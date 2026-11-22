@@ -2,7 +2,7 @@
 // the model while working on it.
 // usage: model_render <preset> <out.bmp> [crankDeg] [yaw] [pitch] [zoom] [fx fy fz]
 //   fx fy fz: the point to look at, as fractions of the model's box (0.5 0.5 0.5 = its centre); with zoom > 1 it
-//   frames that part
+//   frames that part; then key=value: inlet=N header=N muffler=N split=0/1 cat=0/1/2
 #include "sim/EngineParams.h"
 #include "ui/EngineView3D.h"
 #include "ui/EngineModel.h"
@@ -58,6 +58,10 @@ int main(int argc, char** argv) {
         if (!eq) continue;
         const std::string k(argv[i], eq - argv[i]);
         if (k == "inlet") p.tsInlet = std::atoi(eq + 1);
+        if (k == "header") p.header = (HeaderType)std::atoi(eq + 1);
+        if (k == "muffler") p.muffler = (Muffler)std::atoi(eq + 1);
+        if (k == "split") p.exhaustSplit = std::atoi(eq + 1);
+        if (k == "cat") p.cat = std::atoi(eq + 1);
     }
     float ph[kMaxCyl]; computePhases(p, ph);
     EngineViewLive live;

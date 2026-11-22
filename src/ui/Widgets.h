@@ -15,5 +15,8 @@ void Lamp(const char* label, bool on, ImU32 color);
 void ExhaustSchematic(const EngineParams& p, ImVec2 size);
 // help marker "(?)" with tooltip
 void Help(const char* text);
+// a row of chevron steps with drawn icons (Engine Setup's build flow); returns the step clicked, or -1
+enum StepIcon { IconBlock, IconPiston, IconCam, IconTurbo, IconIntake, IconExhaust, IconWheel, IconSound };
+int StepBar(const char* id, const int* icons, const char* const* labels, int n, int current);
 
 } // namespace es::ui

@@ -273,7 +273,7 @@ uint64_t layoutKey(const EngineParams& p) {
     uint64_t k = (uint64_t)p.cylinders;
     k = k * 7 + (uint64_t)p.induction; k = k * 5 + (uint64_t)p.scType; k = k * 3 + (uint64_t)(p.intercooler != 0);
     k = k * 3 + (uint64_t)(p.bov != 0); k = k * 3 + (uint64_t)(p.scBypass != 0); k = k * 3 + (uint64_t)(p.itb != 0);
-    k = k * 3 + (uint64_t)p.fuelSystem; k = k * 3 + (uint64_t)(p.cat != 0); k = k * 5 + (uint64_t)p.muffler; k = k * 3 + (uint64_t)isRotary(p);
+    k = k * 3 + (uint64_t)p.fuelSystem; k = k * 3 + (uint64_t)(p.cat != 0); k = k * 8 + (uint64_t)p.muffler; k = k * 3 + (uint64_t)isRotary(p);
     k = k * 3 + (uint64_t)isTwoStroke(p); k = k * 3 + (uint64_t)(p.tsPipe != 0); k = k * 3 + (uint64_t)(p.vgt != 0);
     k = k * 3 + (uint64_t)(p.egrValveDia_mm > 0); k = k * 3 + (uint64_t)(p.egrCooler != 0); k = k * 3 + (uint64_t)(p.dieselInjSystem != 0);
     return k;

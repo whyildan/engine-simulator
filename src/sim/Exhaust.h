@@ -30,6 +30,10 @@ public:
     int ductCount() const { return (int)ducts_.size(); }
     // exhaust gas temperature at the valves (K): sets the temperature (sound speed) of every pipe
     void setGasTemp(double egtK);
+    // valved muffler: the flap in its bypass moves toward `target` (0 shut .. 1 open) with the actuator's lag
+    void stepValve(double target, double dt);
+    double valveOpen() const { return valveOpen_; }
+    bool hasValve() const { return !valvePipes_.empty(); }
 
     GasNode& port(int i) { return ports_[i]; }
     // two-stroke: the port window feeds its pipe directly (no lumped port volume - it soaked up and smoothed the
@@ -66,11 +70,14 @@ public:
     int outlets = 1;
 
 private:
-    enum Role { Primary, Secondary, Collector, Log, Mid, Balance, Tail, Fixed };
+    enum Role { Primary, Secondary, Collector, Log, Mid, Balance, Tail, Fixed, Valve, ValveInv };   // (ValveInv: shut as the flap opens)
     PipeEnd chain(PipeEnd from, Role role, int idx, double areaMul, double lenParam,
                   double fc = 9000, double loss = 0.03);
     int newPipe(Role role, int idx, double areaMul, double lenParam, double fc, double loss);
     void finishPath(PipeEnd from, float pan, double midFrac);
+    PipeEnd muffle(PipeEnd e, double am);   // the muffler (am: its pipe's area / the system pipe's)
+    std::vector<int> valvePipes_;           // valved muffler: the bypass pipes behind the flap
+    double valveOpen_ = 0, valveApplied_ = -1;
     double areaFor(const Pipe& pp) const;
     double lengthFor(const Pipe& pp) const;
 

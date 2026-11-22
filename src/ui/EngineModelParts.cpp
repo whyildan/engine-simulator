@@ -189,25 +189,88 @@ void blowerBelt(Scene& sc, V3 cp, float rc, V3 pul, float rp, float side, bool t
     }
 }
 
-void tailWithFlame(Scene& sc, const std::vector<V3>& ctrl, float rt, const EngineViewLive& live, float egt, int salt, float canLen = 0) {
-    const std::vector<V3> path = spline(ctrl, 8);
-    sc.put(tubeOf("tail", path, rt), M4{}, hot(egt, 0.35f));
-    // silencer can on the way (canLen: its length; 0 = the old short can)
-    const V3 a = path[path.size() / 2], b = path[path.size() / 2 + 2 < path.size() ? path.size() / 2 + 2 : path.size() - 1];
-    const float hl = canLen > 0 ? 0.5f * canLen : 2.6f * rt, rc = canLen > 0 ? 2.0f * rt : 2.3f * rt;
+// afterfire pop: a flame out of a tip (the app's orange, a hot yellow core)
+void popFlame(Scene& sc, V3 tip, V3 d, float rt, const EngineViewLive& live, int salt) {
+    if (live.popFlash <= 0.02f) return;
+    const float k = live.popFlash;
+    for (int j = 0; j < 7; ++j) {
+        const float t = (j + 0.5f) / 7.0f;
+        const float jit = 0.25f * rt * (rnd(salt, j + (int)(live.time * 37)) - 0.5f);
+        sc.glow(tip + d * (t * 9.0f * rt * k) + v3(jit, jit * 0.7f, 0), rt * (1.6f - t) * (0.8f + k), kAccent[0], 0.45f + 0.25f * (1 - t), 0.12f, 0.9f * k * (1 - t * 0.6f));
+    }
+    sc.glow(tip + d * rt, rt * 1.2f, 1.0f, 0.92f, 0.6f, 0.9f * k);
+}
+
+// the silencer as its kind looks: a round can (chambered, turbo, straight-through), a slim long one (glasspack), the
+// flat oval OEM box (reverse-flow), a can with the flap's actuator on it (valved); none: the bare pipe
+void silencer(Scene& sc, const EngineParams& p, V3 a, V3 b, float rt, float canLen) {
+    const V3 at = (a + b) * 0.5f, dir = b - a;
+    const float hl0 = canLen > 0 ? 0.5f * canLen : 2.6f * rt;
+    switch (p.muffler) {
+    case Muffler::None: return;
+    case Muffler::Glasspack: {
+        const float hl = 0.75f * hl0, rc = 1.45f * rt;
+        const Cached& can = meshOf(key("glasspack", {rt, hl}), [&] { return mesh::lathe({{0, -hl}, {rt * 1.05f, -hl}, {rc, -hl + 0.6f * rt}, {rc, hl - 0.6f * rt},
+                                                                                       {rt * 1.05f, hl}, {0, hl}}, 24); });
+        sc.put(can, alongY(at, dir), kSteelDark);
+        return;
+    }
+    case Muffler::ReverseFlow: {   // a flat box with rounded ends (the OEM oval)
+        const float hl = 1.1f * hl0;
+        const Cached& box = meshOf(key("oembox", {rt, hl}), [&] {
+            Data d = mesh::box(2.5f * rt, hl, 1.35f * rt);
+            mesh::append(d, mesh::lathe({{0, -hl - 0.15f * rt}, {1.3f * rt, -hl}, {1.3f * rt, hl}, {0, hl + 0.15f * rt}}, 20), translate(v3(-2.5f * rt, 0, 0)));
+            mesh::append(d, mesh::lathe({{0, -hl - 0.15f * rt}, {1.3f * rt, -hl}, {1.3f * rt, hl}, {0, hl + 0.15f * rt}}, 20), translate(v3(2.5f * rt, 0, 0)));
+            return d; });
+        sc.put(box, alongY(at, dir), kSteelDark);
+        return;
+    }
+    default: break;
+    }
+    const float hl = hl0, rc = canLen > 0 ? 2.0f * rt : 2.3f * rt;
     const Cached& can = meshOf(key("muffcan", {rt, hl, rc}), [&] { return mesh::lathe({{0, -hl}, {rc * 0.9f, -hl}, {rc, -hl + 0.4f * rt}, {rc, hl - 0.4f * rt},
                                                                                       {rc * 0.9f, hl}, {0, hl}}, 28); });
-    sc.put(can, alongY((a + b) * 0.5f, b - a), kSteelDark);
-    // afterfire pop: a flame out of the tip (the app's orange, a hot yellow core)
-    if (live.popFlash > 0.02f) {
-        const V3 tip = path.back(), d = norm(path.back() - path[path.size() - 2]);
-        const float k = live.popFlash;
-        for (int j = 0; j < 7; ++j) {
-            const float t = (j + 0.5f) / 7.0f;
-            const float jit = 0.25f * rt * (rnd(salt, j + (int)(live.time * 37)) - 0.5f);
-            sc.glow(tip + d * (t * 9.0f * rt * k) + v3(jit, jit * 0.7f, 0), rt * (1.6f - t) * (0.8f + k), kAccent[0], 0.45f + 0.25f * (1 - t), 0.12f, 0.9f * k * (1 - t * 0.6f));
-        }
-        sc.glow(tip + d * rt, rt * 1.2f, 1.0f, 0.92f, 0.6f, 0.9f * k);
+    sc.put(can, alongY(at, dir), kSteelDark);
+    if (p.muffler == Muffler::Valved) {   // the flap's actuator on the can, its rod down to the bypass
+        const V3 up = v3(0, 1, 0), pos = at + norm(dir) * (0.6f * hl) + up * (rc + 0.35f * rt);
+        const Cached& act = meshOf(key("flapact", {rt}), [&] { return mesh::box(0.55f * rt, 0.35f * rt, 0.45f * rt); });
+        sc.put(act, translate(pos), kAlu);
+        sc.put(tubeOf("flaprod", {pos - up * (0.3f * rt), pos - up * (0.9f * rt)}, 0.08f * rt, 8), M4{}, kSteel);
+    }
+}
+
+void tailWithFlame(Scene& sc, const EngineParams& p, const std::vector<V3>& ctrl, float rt, const EngineViewLive& live, float egt, int salt, float canLen = 0) {
+    const std::vector<V3> path = spline(ctrl, 8);
+    const size_t n = path.size();
+    // the catalyst: a fat short can a quarter of the way along (high-flow: slimmer)
+    if (p.cat) {
+        const V3 a = path[n / 4], b = path[std::min(n - 1, n / 4 + 1)];
+        const float hl = p.cat == 2 ? 1.0f * rt : 1.4f * rt, rc = p.cat == 2 ? 1.55f * rt : 1.9f * rt;
+        const Cached& cat = meshOf(key("catcan", {rt, hl, rc}), [&] { return mesh::lathe({{0, -hl - 0.6f * rt}, {rt, -hl - 0.6f * rt}, {rc, -hl}, {rc, hl},
+                                                                                         {rt, hl + 0.6f * rt}, {0, hl + 0.6f * rt}}, 24); });
+        sc.put(cat, alongY((a + b) * 0.5f, b - a), kSteel);
+    }
+    if (!p.exhaustSplit || n < 6) {
+        sc.put(tubeOf("tail", path, rt), M4{}, hot(egt, 0.35f));
+        const V3 a = path[n / 2], b = path[n / 2 + 2 < n ? n / 2 + 2 : n - 1];
+        silencer(sc, p, a, b, rt, canLen);
+        popFlame(sc, path.back(), norm(path.back() - path[n - 2]), rt, live, salt);
+        return;
+    }
+    // split: the pipe to a Y two fifths of the way, then two branches side by side, each with its silencer and tip
+    const size_t k = n * 2 / 5;
+    sc.put(tubeOf("tail", std::vector<V3>(path.begin(), path.begin() + k + 1), rt), M4{}, hot(egt, 0.35f));
+    const V3 dk = norm(path[k + 1] - path[k]);
+    V3 side = cross(dk, v3(0, 1, 0));
+    side = len(side) > 1e-3f ? norm(side) : v3(1, 0, 0);
+    const float rb = 0.78f * rt, off = 1.7f * rt;
+    for (int sgn = -1; sgn <= 1; sgn += 2) {
+        std::vector<V3> br = {path[k], path[k] + dk * (0.8f * rt) + side * (0.6f * sgn * off)};
+        for (size_t j = k + 2; j < n; ++j) br.push_back(path[j] + side * (sgn * off));
+        sc.put(tubeOf(sgn < 0 ? "tailA" : "tailB", br, rb), M4{}, hot(egt, 0.35f));
+        const size_t m = br.size() / 2 + 1;
+        silencer(sc, p, br[m], br[std::min(br.size() - 1, m + 2)], rb, canLen * 0.85f);
+        popFlame(sc, br.back(), norm(br.back() - br[br.size() - 2]), rb, live, salt + (sgn > 0 ? 3 : 0));
     }
 }
 
@@ -295,6 +358,25 @@ void buildExhaust(Scene& sc, const EngineParams& p, const EngineBits& eb, const 
             const float cr0 = std::max({rt * 1.7f, rp * 2.2f, ringMin + rp * 1.05f});
             std::vector<PortOut> byZ = ports;
             std::sort(byZ.begin(), byZ.end(), [](const PortOut& a, const PortOut& b2) { return a.p.z < b2.p.z; });
+            if (p.header == HeaderType::OpenStacks && !(isTwoStroke(p) && p.tsPipe)) {
+                // open stacks: each primary out of its port, a sweep down and back, ending in a flared tip
+                for (int k = 0; k < np; ++k) {
+                    const PortOut& q = byZ[k];
+                    // (zoomies: a short pipe straight out of each port, swept up and back - drawn so whatever the
+                    //  primary length, which the sound uses; a long one would run past the gearbox)
+                    const float L = clampv(p.primaryLen_mm[q.cyl], 1.0f * B, 2.2f * B);
+                    const V3 b0 = q.p + q.d * (0.40f * B);
+                    const V3 end = q.p + q.d * (0.55f * L) + v3(0, 0.30f * L, 0.22f * L);
+                    const std::vector<V3> path = spline({q.p, b0, lerp(b0, end, 0.55f) + q.d * (0.10f * B), end}, 8);
+                    (void)k; (void)side;
+                    sc.put(tubeOf("stack", path, rp), M4{}, hot(egtOf(q.cyl)));
+                    const V3 d = norm(path.back() - path[path.size() - 2]);
+                    const Cached& flare = meshOf(key("stackflare", {rp, B}), [&] { return mesh::lathe({{rp * 0.92f, 0}, {rp, 0}, {rp * 1.75f, 0.55f * B}, {rp * 1.65f, 0.55f * B}}, 24); });
+                    sc.put(flare, alongY(path.back(), d), hot(egtOf(q.cyl)));
+                    popFlame(sc, path.back() + d * (0.55f * B), d, rp * 1.5f, live, q.cyl + 40);
+                }
+                continue;
+            }
             if (p.header == HeaderType::Log && np > 1) {
                 const V3 L0 = v3(avgP.x, avgP.y, z0 - 0.2f * B) + avgD * (0.60f * B);
                 const V3 L1 = v3(L0.x, L0.y, z1 + 0.3f * B);
@@ -325,7 +407,7 @@ void buildExhaust(Scene& sc, const EngineParams& p, const EngineBits& eb, const 
             sc.put(cone, alongY(C0, v3(0, 0, 1)), hot(egtMean, 0.8f));
             const V3 E0 = C0 + v3(0, 0, cl);
             collectors.push_back(E0);
-            tailWithFlame(sc, {E0, E0 + v3(0, -0.10f * B, 1.2f * B), E0 + v3(0, -0.30f * B, 3.0f * B), E0 + v3(0, -0.35f * B, 4.8f * B),
+            tailWithFlame(sc, p, {E0, E0 + v3(0, -0.10f * B, 1.2f * B), E0 + v3(0, -0.30f * B, 3.0f * B), E0 + v3(0, -0.35f * B, 4.8f * B),
                                E0 + v3(0, -0.35f * B, 6.2f * B)}, rt, live, egtMean, b, 1.8f * B);
             continue;
         }
@@ -386,7 +468,7 @@ void buildExhaust(Scene& sc, const EngineParams& p, const EngineBits& eb, const 
         }
         collectors.push_back(C);
         if (turbo) continue;
-        tailWithFlame(sc, {C, C + v3(0, -0.15f * B, 0.7f * B), C + v3(0, -0.30f * B, 2.0f * B), C + v3(0, -0.32f * B, 3.4f * B)}, rt, live, egtMean, b);
+        tailWithFlame(sc, p, {C, C + v3(0, -0.15f * B, 0.7f * B), C + v3(0, -0.30f * B, 2.0f * B), C + v3(0, -0.32f * B, 3.4f * B)}, rt, live, egtMean, b);
     }
     if (turbo && !collectors.empty()) {
         turbineIn = collectors[0];   // (the turbine inlet flange: the gas goes down into it)
@@ -636,7 +718,7 @@ void buildBoost(Scene& sc, const EngineParams& p, const EngineBits& eb, const En
         {   // straight back past the flywheel, then the silencer and the tail
             const float zb = std::max(o0.z + 0.6f * B, eb.zRear + 0.7f * B);
             const V3 d0 = o0 + v3(0, 0, 0.18f * B);
-            tailWithFlame(sc, {d0, v3(d0.x, d0.y - 0.15f * B, zb), v3(d0.x, d0.y - 0.35f * B, zb + 1.6f * B), v3(d0.x, d0.y - 0.40f * B, zb + 3.2f * B),
+            tailWithFlame(sc, p, {d0, v3(d0.x, d0.y - 0.15f * B, zb), v3(d0.x, d0.y - 0.35f * B, zb + 1.6f * B), v3(d0.x, d0.y - 0.40f * B, zb + 3.2f * B),
                                v3(d0.x, d0.y - 0.40f * B, zb + 4.4f * B)}, rtl, live, live.egtGas, 7, 1.6f * B);
         }
         V3 cE, cD;
@@ -933,7 +1015,7 @@ void buildTwoStrokeCyl(Scene& sc, const EngineParams& p, const M4& cf, double ph
     // silencer and tail after the pipe
     const V3 endW = pw.back(), tdW = norm(pw.back() - pw[pw.size() - 2]);
     const V3 tupW = norm(xdir(cf, v3(0, 1, 0)));
-    tailWithFlame(sc, {endW, endW + tdW * (0.8f * B) + tupW * (0.15f * B), endW + tdW * (2.2f * B) + tupW * (0.6f * B), endW + tdW * (3.2f * B) + tupW * (0.9f * B)},
+    tailWithFlame(sc, p, {endW, endW + tdW * (0.8f * B) + tupW * (0.15f * B), endW + tdW * (2.2f * B) + tupW * (0.6f * B), endW + tdW * (3.2f * B) + tupW * (0.9f * B)},
                   std::max(rad.back(), 0.10f * B), live, egt, idx + 20);
     sc.fit = true;
 }
@@ -1051,7 +1133,7 @@ void buildRotaryEngine(Scene& sc, const EngineParams& p, const float phases[kMax
     turbineIn = col + v3(0, -0.45f * R, 0);
     if (turbo) sc.put(tubeOf("rexhdrop", {col, turbineIn}, rRun * 1.1f), M4{}, hot(live.egtGas));
     if (!turbo)
-        tailWithFlame(sc, {col, col + v3(0, -0.10f * R, 0.5f * R), col + v3(0, -0.20f * R, 1.6f * R), col + v3(0, -0.22f * R, 2.6f * R)}, 0.16f * R, live,
+        tailWithFlame(sc, p, {col, col + v3(0, -0.10f * R, 0.5f * R), col + v3(0, -0.20f * R, 1.6f * R), col + v3(0, -0.22f * R, 2.6f * R)}, 0.16f * R, live,
                       live.egtGas, 11);
     // front pulley and rear flywheel on the e-shaft
     const float shR = -(float)(shaftDeg * kDeg);

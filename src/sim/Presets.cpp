@@ -89,6 +89,7 @@ static EngineParams base() {
     p.collectorLen_mm = 300; p.collectorDia_mm = 55; p.crossover = Crossover::TrueDual;
     p.pipeDia_mm = 55; p.midpipeLen_mm = 1500; p.cat = 1; p.resonator = 1;
     p.muffler = Muffler::Chambered; p.tailpipeLen_mm = 600; p.resonatorHz = 0; p.mufflerExtTubes = 0;
+    p.exhaustSplit = 0; p.exhaustValveMode = 0; p.exhaustValveRpm = 3500;
 
     p.throttle = 0; p.ignition = 0; p.starter = 0; p.ambientTemp_C = 25;
     p.listener = ListenerPos::Tailpipe; p.volume = 1.0f; p.oversample = 2;
@@ -803,6 +804,344 @@ EngineParams makePreset(int idx) {
         p.cal.idleKp *= 0.6f; p.cal.idleKi *= 0.6f; p.cal.idleKd *= 0.6f; p.cal.idleSparkGain *= 0.8f;
     }
     std::snprintf(p.name, sizeof(p.name), "%s", presetName(idx));
+    return p;
+}
+
+// ======================================================================= preset groups (the engine picker)
+static const char* kGroupNames[] = {"Petrol - inline and single", "Petrol - V and boxer", "Turbo and supercharged", "Rotary",
+                                    "Diesel", "Two-stroke"};
+static const signed char kPresetGroup[] = {
+    0, 0, 0, 1, 1, 1, 1, 1, 1, 1,   //  0-9: I4 K20, I3, I6, V6, V8 carb, V8 flat, V10, V12, flat-4, V-twin
+    0, 0, 3, 3, 3, 3, 2, 2, 3, 2,   // 10-19: single, I4 ITB, rotaries 12-15, turbo I4, Roots V8, turbo rotary, turbo I6
+    2, 0, 1, 3, 4, 5, 4, 4, 4, 4,   // 20-29: centrifugal V6, I5, flat-6, bridge port, TDI, 2T single, diesels 26-29
+    5, 5, 5,                        // 30-32: two-strokes
+};
+static_assert(sizeof(kPresetGroup) == sizeof(kNames) / sizeof(kNames[0]), "every preset needs a group");
+int presetGroupCount() { return (int)(sizeof(kGroupNames) / sizeof(kGroupNames[0])); }
+const char* presetGroupName(int g) { return kGroupNames[clampv(g, 0, presetGroupCount() - 1)]; }
+int presetGroup(int i) { return kPresetGroup[clampv(i, 0, presetCount() - 1)]; }
+
+// ======================================================================= an engine from scratch
+// Rules of thumb, chosen (labelled): valve, port, runner, throttle and header sizes follow the bore and the
+// displacement in the proportions of the presets' real engines (K20A, small-block V8, EA189, RD350, 13B); the rev limit
+// follows a mean piston speed per character. Diesel, two-stroke and rotary start from one of their presets (whose
+// calibration points are researched) scaled to the size asked for.
+
+int recipeCylinderChoices(BuildKind k, Layout l, int* out, int maxOut) {
+    static const int kPetI[] = {1, 2, 3, 4, 5, 6, 8}, kPetV[] = {2, 4, 6, 8, 10, 12}, kPetB[] = {2, 4, 6};
+    static const int kDieI[] = {1, 2, 3, 4, 5, 6}, kDieV[] = {6, 8, 10, 12}, kDieB[] = {4};
+    static const int kTwo[] = {1, 2, 3, 4}, kRot[] = {1, 2, 3, 4};
+    const int* s = kPetI; int n = 7;
+    switch (k) {
+    case BuildKind::Petrol: if (l == Layout::V) { s = kPetV; n = 6; } else if (l == Layout::Boxer) { s = kPetB; n = 3; } break;
+    case BuildKind::Diesel:
+        if (l == Layout::V) { s = kDieV; n = 4; } else if (l == Layout::Boxer) { s = kDieB; n = 1; } else { s = kDieI; n = 6; }
+        break;
+    case BuildKind::TwoStroke: s = kTwo; n = 4; break;
+    case BuildKind::Rotary: s = kRot; n = 4; break;
+    }
+    n = std::min(n, maxOut);
+    for (int i = 0; i < n; ++i) out[i] = s[i];
+    return n;
+}
+
+void recipeDisplacementRange(BuildKind k, int cylinders, float& lo, float& hi) {
+    // per cylinder (per rotor), L
+    float a = 0.1f, b = 1.2f;
+    if (k == BuildKind::Diesel) { a = 0.3f; b = 2.0f; }
+    else if (k == BuildKind::TwoStroke) { a = 0.05f; b = 0.5f; }
+    else if (k == BuildKind::Rotary) { a = 0.3f; b = 1.0f; }
+    lo = a * std::max(1, cylinders); hi = b * std::max(1, cylinders);
+}
+
+EngineRecipe defaultRecipe(BuildKind k) {
+    EngineRecipe r;
+    r.kind = k;
+    switch (k) {
+    case BuildKind::Petrol: break;
+    case BuildKind::Diesel:
+        r.cylinders = 4; r.displacement_L = 2.0f; r.boreStroke = 0.85f; r.cam = CamLayout::DOHC; r.drive = CamDrive::Belt; r.aspiration = 1;
+        break;
+    case BuildKind::TwoStroke:
+        r.cylinders = 1; r.displacement_L = 0.25f; r.boreStroke = 0.92f; r.valves = 0; r.character = 1;
+        break;
+    case BuildKind::Rotary:
+        r.cylinders = 2; r.displacement_L = 1.3f; r.boreStroke = 1.0f; r.valves = 0;
+        break;
+    }
+    return r;
+}
+
+void recipeAutoName(const EngineRecipe& r, char* out, int outSize) {
+    const int n = r.cylinders;
+    char head[24], size[24];
+    if (r.kind == BuildKind::Rotary) std::snprintf(head, sizeof(head), "%d-rotor", n);
+    else if (r.kind == BuildKind::TwoStroke) std::snprintf(head, sizeof(head), "%d-cyl", n);
+    else if (n == 1) std::snprintf(head, sizeof(head), "Single");
+    else if (r.layout == Layout::V) std::snprintf(head, sizeof(head), n == 2 ? "V-twin" : "V%d", n);
+    else if (r.layout == Layout::Boxer) std::snprintf(head, sizeof(head), "Flat-%d", n);
+    else std::snprintf(head, sizeof(head), "I%d", n);
+    if (r.displacement_L < 1.0f || r.kind == BuildKind::TwoStroke) std::snprintf(size, sizeof(size), "%.0f cc", r.displacement_L * 1000.0f);
+    else std::snprintf(size, sizeof(size), "%.1f", r.displacement_L);
+    static const char* kAsp[] = {"", " turbo", " Roots", " twin-screw", " centrifugal"};
+    const char* asp = r.kind == BuildKind::TwoStroke ? "" : kAsp[clampv(r.aspiration, 0, 4)];
+    const char* tail = "";
+    switch (r.kind) {
+    case BuildKind::Petrol: tail = r.fuel == 1 ? " ITB" : r.fuel == 2 ? " carb" : ""; break;
+    case BuildKind::Diesel: tail = " diesel"; break;
+    case BuildKind::TwoStroke: tail = r.fuel == 1 ? " two-stroke EFI" : " two-stroke"; break;
+    case BuildKind::Rotary: {
+        static const char* kPort[] = {"", " street port", " bridge port", " peripheral port"};
+        tail = kPort[clampv(r.character, 0, 3)];
+        break;
+    }
+    }
+    std::snprintf(out, outSize, "%s %s%s%s", head, size, asp, tail);
+}
+
+// combinations the model does not run reliably yet are swapped for the nearest one that does (the dialog shows them
+// greyed out): a bridge port only on two rotors (its idle - the tiny shared plenum that keeps the rotors in step - was
+// tuned on the 13B: on three rotors it idles at the end of the idle valve's travel and floods with boost), two-stroke
+// injection only on a single (as the KTM TPI: injected multi-cylinder two-strokes stall at a street idle)
+bool recipeAllowed(const EngineRecipe& r, int what, int value) {
+    if (what == 0) return !(r.kind == BuildKind::Rotary && value == 2 && r.cylinders != 2);   // porting
+    if (what == 1) return !(r.kind == BuildKind::TwoStroke && value == 1 && r.cylinders > 1);  // fuel
+    return true;
+}
+void recipeLimit(EngineRecipe& r) {
+    if (!recipeAllowed(r, 0, r.character)) r.character = 1;
+    if (!recipeAllowed(r, 1, r.fuel)) r.fuel = 0;
+}
+
+static void sizeBoreStroke(EngineParams& p, double totalL, int n, double boreStroke) {
+    const double v = totalL / std::max(1, n) * 1e6;   // mm3 per cylinder
+    const double b = std::cbrt(4.0 * v * boreStroke / kPi);
+    p.bore_mm = (float)(std::round(b * 10.0) / 10.0);
+    p.stroke_mm = (float)(std::round(b / boreStroke * 10.0) / 10.0);
+}
+static float round1(double x) { return (float)(std::round(x * 10.0) / 10.0); }
+static float roundTo(double x, double step) { return (float)(std::round(x / step) * step); }
+// the usual vee angle for the count (chosen: the common production angles)
+static float veeAngle(int n) { return n == 6 || n == 12 ? 60.0f : n == 10 ? 72.0f : 90.0f; }
+static void forcedInduction(EngineParams& p, int aspiration) {
+    if (aspiration == 1) applyInductionDefaults(p, Induction::Turbo);
+    else if (aspiration >= 2)
+        applyInductionDefaults(p, Induction::Supercharger, aspiration == 2 ? Supercharger::Roots : aspiration == 3 ? Supercharger::TwinScrew : Supercharger::Centrifugal);
+}
+
+static EngineParams buildPetrol(const EngineRecipe& r, int chr) {
+    EngineParams p = base();
+    const int n = r.cylinders;
+    const double D = r.displacement_L, Vc = D / n;
+    p.cylinders = n;
+    p.layout = n == 1 ? Layout::Inline : r.layout;
+    if (p.layout == Layout::V) p.bankAngle = veeAngle(n);
+    applyLayoutDefaults(p);
+    sizeBoreStroke(p, D, n, clampv((double)r.boreStroke, 0.7, 1.5));
+    const double B = p.bore_mm, S = p.stroke_mm;
+    p.rod_mm = (float)std::round(S * (chr == 2 ? 1.75 : 1.65));   // rod / stroke ratio, chosen (1.5-1.8 is usual)
+    // valves: 4 per cylinder ~0.39 / 0.33 x bore (K20A 35 / 30 on 86), 2 per cylinder ~0.48 / 0.39 (small-block 49 / 39 on
+    // 101.6)
+    const bool four = r.valves >= 4;
+    p.intakeValves = p.exhaustValves = four ? 2 : 1;
+    p.intakeValveDia_mm = round1(B * (four ? 0.39 : 0.48));
+    p.exhaustValveDia_mm = round1(B * (four ? 0.33 : 0.39));
+    // cams per character (chosen: a road cam, a fast-road cam, a race cam), lift as a share of the valve size
+    static const float kDurIn[3] = {232, 256, 282}, kDurEx[3] = {236, 260, 286}, kClIn[3] = {112, 108, 104}, kClEx[3] = {114, 112, 108};
+    static const float kLift[3] = {1.0f, 1.08f, 1.18f};
+    p.intakeDuration = kDurIn[chr]; p.exhaustDuration = kDurEx[chr];
+    p.intakeCenterline = kClIn[chr]; p.exhaustCenterline = kClEx[chr];
+    p.intakeLift_mm = round1(p.intakeValveDia_mm * (four ? 0.28 : 0.24) * kLift[chr]);
+    p.exhaustLift_mm = round1(p.exhaustValveDia_mm * (four ? 0.31 : 0.30) * kLift[chr]);
+    p.camLayout = r.cam; p.camDrive = r.drive;
+    static const float kCr[3] = {10.5f, 11.3f, 12.5f};
+    p.compression = kCr[chr] - (r.fuel == 2 ? 0.8f : 0.0f);
+    // rev limit from the mean piston speed (m/s; chosen: road 17.5, sporty 20.5, race 23.5)
+    static const float kCm[3] = {17.5f, 20.5f, 23.5f};
+    p.revLimit = clampv(roundTo(kCm[chr] * 30000.0 / S, 100.0), 4000.0f, 12500.0f);
+    p.limiter = chr == 2 ? Limiter::IgnitionCut : Limiter::FuelCut;
+    p.baseAdvance = 12; p.mechAdvance = chr == 2 ? 16.0f : 18.0f; p.mechAdvanceRpm = roundTo(0.55 * p.revLimit, 100.0); p.vacuumAdvance = 10;
+    static const float kIdle[3] = {800, 900, 1100};
+    p.idleTargetRpm = kIdle[chr] + (n <= 2 ? 150.0f : 0.0f);
+    static const float kFly[3] = {0.06f, 0.05f, 0.035f};   // kg m2 per litre (K20A 0.12 at 2.0, small-block 0.30 at 5.7)
+    p.flywheel = clampv((float)(0.02 + D * kFly[chr]), 0.03f, 0.4f);
+    // intake
+    static const float kRunner[3] = {420, 330, 260}, kFilter[3] = {0.4f, 0.3f, 0.1f}, kInj[3] = {560, 620, 700};
+    p.runnerLen_mm = kRunner[chr];
+    p.runnerDia_mm = (float)std::round(p.intakeValveDia_mm * (four ? 1.1 : 0.98));
+    p.airFilter = kFilter[chr];
+    p.injector_ccmin = clampv(roundTo(Vc * kInj[chr], 10.0), 100.0f, 2500.0f);   // cc/min per litre of cylinder (K20A 310)
+    if (r.fuel == 1) {        // individual throttle bodies, ~0.55 x bore (I4 ITB race: 45 on 81)
+        p.itb = 1; p.throttleBore_mm = clampv((float)std::round(0.55 * B), 28.0f, 60.0f);
+        p.runnerDia_mm = (float)std::round(p.runnerDia_mm * 1.15); p.airFilter = std::min(p.airFilter, 0.15f);
+    } else if (r.fuel == 2) { // carburettor: venturi area from the small-block's 4 x 32 mm at 5.7 L / 6200 rpm; with
+                              // fewer cylinders the carb sees the pulsed flow of one or two of them and is larger for
+                              // its size ((4 / n)^0.8, chosen: the 0.5 L thumper's 36 mm)
+        p.fuelSystem = FuelSystem::Carburetor;
+        p.carbBarrels = n >= 6 ? 4 : n >= 2 ? 2 : 1;
+        const double area = 0.091 * std::pow(std::max(1.0, 4.0 / n), 0.8) * D * p.revLimit;
+        p.venturi_mm = clampv((float)std::round(std::sqrt(4.0 * area / (kPi * p.carbBarrels))), 18.0f, 46.0f);
+        p.throttleBore_mm = (float)std::round(p.venturi_mm * 1.35);
+        p.plenum_L = clampv((float)(0.7 * D), 0.3f, 6.0f);
+        p.idleScrew = n <= 2 ? 4.0f : 3.5f;
+        if (n <= 2) p.accelPump = 1.3f;   // (the thumper's)
+    } else {                  // one throttle body (K20A 62 at 2.0 L, I6 72 at 3.0)
+        p.throttleBore_mm = clampv((float)std::round(46.0 * std::sqrt(D)), 30.0f, 110.0f);
+        p.plenum_L = clampv((float)(1.3 * D), 0.4f, 8.0f);
+    }
+    // exhaust: primaries ~1.27 x the exhaust valve (4 valves), ~1.13 (2 valves); one pipe per bank
+    static const float kPrim[3] = {550, 700, 800};
+    p.primaryDia_mm = (float)std::round(p.exhaustValveDia_mm * (four ? 1.27 : 1.13));
+    for (int i = 0; i < kMaxCyl; ++i) p.primaryLen_mm[i] = kPrim[chr];
+    const int banks = p.layout == Layout::Inline ? 1 : 2, perBank = std::max(1, n / banks);
+    p.header = p.layout == Layout::Inline && n == 4 && chr >= 1 ? HeaderType::TriY : HeaderType::Collector;
+    p.collectorDia_mm = std::max(p.primaryDia_mm, (float)std::round(p.primaryDia_mm * std::sqrt((double)perBank) * 0.72));
+    p.pipeDia_mm = clampv((float)std::round(40.0 * std::sqrt(D / banks)), 38.0f, 90.0f);
+    if (banks == 2) p.crossover = chr == 0 ? Crossover::HPipe : chr == 1 ? Crossover::XPipe : Crossover::TrueDual;
+    p.cat = chr < 2; p.resonator = chr == 0;
+    p.muffler = chr == 0 ? Muffler::Chambered : Muffler::StraightThrough;
+    forcedInduction(p, r.aspiration);
+    if (isBoosted(p)) {
+        p.mechAdvance = std::min(p.mechAdvance, 12.0f);   // (the boosted presets run 11-12)
+        if (r.aspiration == 1 && chr == 0) p.muffler = Muffler::Turbo;
+    }
+    p.sweepStartRpm = 1500; p.sweepEndRpm = p.revLimit - 100;
+    return p;
+}
+
+// diesel: a turbo one is the EA189 2.0 TDI (preset 26) scaled - its common rail, boost and EGR set points per litre;
+// a naturally aspirated one the Hatz 1B40 (preset 29: injection pump, no turbo, EGR or glow plugs)
+static EngineParams buildDiesel(const EngineRecipe& r) {
+    EngineParams p = makePreset(r.aspiration ? 26 : 29);
+    const bool four0 = p.intakeValves >= 2;
+    const int n0 = p.cylinders;
+    const double B0 = p.bore_mm, S0 = p.stroke_mm, D0 = ratedDisplacementL(p), Vc0 = D0 / n0;
+    const int n = r.cylinders;
+    const double D = r.displacement_L, Vc = D / n, kv = Vc / Vc0, kd = D / D0;
+    p.cylinders = n;
+    p.layout = n == 1 ? Layout::Inline : r.layout;
+    if (p.layout == Layout::V) p.bankAngle = veeAngle(n);
+    applyLayoutDefaults(p);
+    sizeBoreStroke(p, D, n, clampv((double)r.boreStroke, 0.7, 1.2));
+    const double B = p.bore_mm, S = p.stroke_mm;
+    p.rod_mm = (float)std::round(S * 1.55);
+    const bool four = r.valves >= 4;
+    p.intakeValves = p.exhaustValves = four ? 2 : 1;
+    const double kValve = four == four0 ? 1.0 : four ? 1.0 / 1.26 : 1.26;   // (one valve ~1.26 x the size of a pair's)
+    p.intakeValveDia_mm = round1(p.intakeValveDia_mm * B / B0 * kValve);
+    p.exhaustValveDia_mm = round1(p.exhaustValveDia_mm * B / B0 * kValve);
+    p.camLayout = r.cam; p.camDrive = r.drive;
+    p.revLimit = clampv(roundTo(p.revLimit * S0 / S, 100.0), 2400.0f, 5500.0f);   // the same piston speed
+    p.dieselMaxFuel = (float)(p.dieselMaxFuel * kv); p.dieselInjRate = (float)(p.dieselInjRate * kv);
+    p.nozzleHoleDia_mm = clampv((float)(p.nozzleHoleDia_mm * std::sqrt(kv)), 0.08f, 0.25f);
+    p.flywheel = clampv((float)(p.flywheel * std::pow(kd, 0.8)), 0.06f, 1.2f);
+    p.compFlow_gs = (float)(p.compFlow_gs * kd); p.chargeVolume_L = (float)(p.chargeVolume_L * kd);
+    p.turboInertia = clampv((float)(p.turboInertia * kd), 0.03f, 0.6f);
+    p.egrValveDia_mm = (float)std::round(p.egrValveDia_mm * std::sqrt(kd));
+    p.plenum_L = (float)(p.plenum_L * kd); p.throttleBore_mm = (float)std::round(p.throttleBore_mm * std::sqrt(kd));
+    p.runnerDia_mm = (float)std::round(p.runnerDia_mm * B / B0);
+    p.injector_ccmin = (float)(p.injector_ccmin * kv);
+    const int banks = p.layout == Layout::Inline ? 1 : 2;
+    p.primaryDia_mm = (float)std::round(p.primaryDia_mm * std::sqrt(kv));
+    p.collectorDia_mm = (float)std::round(p.collectorDia_mm * std::sqrt(kd / banks));
+    p.pipeDia_mm = clampv((float)std::round(p.pipeDia_mm * std::sqrt(kd / banks)), 38.0f, 110.0f);
+    if (n > 2) p.idleTargetRpm = std::min(p.idleTargetRpm, 800.0f);   // (the Hatz single idles at 1200)
+    p.sweepStartRpm = 1000; p.sweepEndRpm = p.revLimit - 100;
+    return p;
+}
+
+// two-stroke: the RD350 twin (preset 30, reed valves, power valve, expansion chambers) scaled; the pipe tuned for a
+// mean piston speed per character
+static EngineParams buildTwoStroke(const EngineRecipe& r, int chr) {
+    EngineParams p = makePreset(30);
+    const int n = r.cylinders;
+    const double D = r.displacement_L, cc = D / n * 1000.0;
+    p.cylinders = n; p.layout = Layout::Inline;
+    applyLayoutDefaults(p);
+    sizeBoreStroke(p, D, n, clampv((double)r.boreStroke, 0.8, 1.4));
+    const double S = p.stroke_mm;
+    p.rod_mm = (float)std::round(S * 1.9);   // (RD350 105 / 54)
+    // port timing per character (deg ATDC the port opens; Blair Fig. 1.9: road ~95 / 120, racing ~80 / 115)
+    static const float kExh[3] = {92, 84, 80}, kTr[3] = {120, 117, 114}, kCm[3] = {14.5f, 17.0f, 19.5f}, kCr[3] = {6.8f, 7.4f, 8.2f};
+    p.tsExhaustOpen = kExh[chr]; p.tsTransferOpen = kTr[chr];
+    p.tsPipeRpm = clampv(roundTo(kCm[chr] * 30000.0 / S, 100.0), 4000.0f, 14000.0f);
+    p.revLimit = clampv(roundTo(p.tsPipeRpm * 1.15, 100.0), 5000.0f, 15000.0f);
+    p.tsPowerValve = 1; p.tsPvRpmLow = roundTo(0.72 * p.tsPipeRpm, 100.0); p.tsPvRpmHigh = roundTo(0.95 * p.tsPipeRpm, 100.0);
+    p.tsReedArea_cm2 = (float)std::round(0.48 * std::pow(cc, 2.0 / 3.0));   // (RD350 14 at 173 cc, CR250 20 at 250)
+    p.compression = trappedToGeometricCr(p, kCr[chr]);
+    p.venturi_mm = clampv((float)std::round(2.1 * std::sqrt(cc)), 16.0f, 44.0f);   // (RD350 26 at 173 cc)
+    p.throttleBore_mm = p.venturi_mm; p.runnerDia_mm = p.venturi_mm + 4.0f;
+    static const float kIdle[3] = {1250, 1400, 1600}, kScrew[3] = {1.0f, 1.4f, 1.8f};
+    p.idleTargetRpm = kIdle[chr];
+    p.idleScrew = kScrew[chr];   // (more idle air for the longer port timings: a racing 125 stalls on the road setting)
+    p.flywheel = clampv((float)(0.01 + 0.06 * D), 0.015f, 0.12f);   // (RD350 0.03, CR250 0.02)
+    if (r.fuel == 1) {   // injection (KTM TPI-like): oil from a pump, not in the fuel
+        p.fuelSystem = FuelSystem::EFI; p.injection = Injection::Port;
+        p.injector_ccmin = clampv(roundTo(0.82 * cc, 10.0), 80.0f, 600.0f);   // (TPI 240 at 293 cc)
+        p.tsOilRatio = 0; p.plenum_L = 0.3f;
+    }
+    p.sweepStartRpm = 2500; p.sweepEndRpm = p.revLimit - 200;
+    return p;
+}
+
+// rotary: the 13B family (presets 12 stock / 13 street port / 23 bridge port / 14 peripheral port) scaled - every
+// rotor dimension by the same factor (the shape, K = R / e, kept)
+static EngineParams buildRotary(const EngineRecipe& r, int porting) {
+    static const int kTpl[4] = {12, 13, 23, 14};
+    EngineParams p = makePreset(kTpl[clampv(porting, 0, 3)]);
+    auto chamberL = [](const EngineParams& q) { return 3.0 * std::sqrt(3.0) * q.rotorRadius_mm * q.eccentricity_mm * q.rotorWidth_mm * 1e-6; };
+    const double vf0 = chamberL(p), D0 = vf0 * p.cylinders;
+    const int n = r.cylinders;
+    const double D = r.displacement_L, vf = D / n, k = std::cbrt(vf / vf0), kd = D / D0;
+    p.cylinders = n;
+    applyLayoutDefaults(p);
+    p.rotorRadius_mm = round1(p.rotorRadius_mm * k); p.eccentricity_mm = round1(p.eccentricity_mm * k); p.rotorWidth_mm = round1(p.rotorWidth_mm * k);
+    p.rIntakeArea_cm2 = round1(p.rIntakeArea_cm2 * k * k); p.rExhaustArea_cm2 = round1(p.rExhaustArea_cm2 * k * k);
+    p.throttleBore_mm = (float)std::round(p.throttleBore_mm * (p.itb ? k : std::sqrt(kd)));
+    p.plenum_L = std::max(0.3f, (float)(p.plenum_L * kd));
+    p.runnerDia_mm = (float)std::round(p.runnerDia_mm * k);
+    p.injector_ccmin = (float)(p.injector_ccmin * vf / vf0);
+    p.primaryDia_mm = (float)std::round(p.primaryDia_mm * k);
+    p.collectorDia_mm = (float)std::round(p.collectorDia_mm * std::sqrt(kd));
+    p.pipeDia_mm = clampv((float)std::round(p.pipeDia_mm * std::sqrt(kd)), 40.0f, 100.0f);
+    p.flywheel = clampv((float)(p.flywheel * std::pow(kd, 0.8)), 0.06f, 0.5f);
+    p.revLimit = clampv(roundTo(p.revLimit / k, 100.0), 6000.0f, 11000.0f);   // the same apex seal speed
+    forcedInduction(p, r.aspiration);
+    p.sweepEndRpm = p.revLimit - 200;
+    return p;
+}
+
+EngineParams buildEngine(const EngineRecipe& in) {
+    EngineRecipe r = in;
+    {   // a cylinder count the kind / layout is built with (the nearest), a displacement in its range
+        int ch[16];
+        const int nch = recipeCylinderChoices(r.kind, r.layout, ch, 16);
+        int best = ch[0];
+        for (int i = 0; i < nch; ++i) if (std::abs(ch[i] - r.cylinders) < std::abs(best - r.cylinders)) best = ch[i];
+        r.cylinders = best;
+        float lo, hi;
+        recipeDisplacementRange(r.kind, r.cylinders, lo, hi);
+        r.displacement_L = clampv(r.displacement_L, lo, hi);
+    }
+    recipeLimit(r);
+    const int chr = clampv(r.character, 0, r.kind == BuildKind::Rotary ? 3 : 2);
+    EngineParams p;
+    switch (r.kind) {
+    default:
+    case BuildKind::Petrol: p = buildPetrol(r, chr); break;
+    case BuildKind::Diesel: p = buildDiesel(r); break;
+    case BuildKind::TwoStroke: p = buildTwoStroke(r, chr); break;
+    case BuildKind::Rotary: p = buildRotary(r, chr); break;
+    }
+    if (r.kind != BuildKind::Rotary) p.cooling = r.cooling;
+    // finished like a preset: firing phases, a car to drive, components, the base calibration
+    finish(p);
+    applyVehicleDefaults(p);
+    applyComponentDefaults(p);
+    p.n2oShotHp = (float)(std::round(std::max(50.0, 30.0 * equivalentDisplacementL(p)) / 25.0) * 25.0);
+    generateCalibration(p);
+    if (r.name[0]) std::snprintf(p.name, sizeof(p.name), "%s", r.name);
+    else recipeAutoName(r, p.name, (int)sizeof(p.name));
     return p;
 }
 

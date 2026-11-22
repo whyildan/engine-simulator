@@ -677,6 +677,7 @@ const EngineField kEngineFields[] = {
     EI("crossover", crossover), EF("pipe_dia_mm", pipeDia_mm), EF("midpipe_len_mm", midpipeLen_mm), EI("cat", cat),
     EI("resonator", resonator), EI("muffler", muffler), EF("tailpipe_len_mm", tailpipeLen_mm),
     EF("resonator_hz", resonatorHz), EI("muffler_ext_tubes", mufflerExtTubes),
+    EI("exhaust_split", exhaustSplit), EI("exhaust_valve_mode", exhaustValveMode), EF("exhaust_valve_rpm", exhaustValveRpm),
     // rotary
     EF("rotor_radius_mm", rotorRadius_mm), EF("eccentricity_mm", eccentricity_mm), EF("rotor_width_mm", rotorWidth_mm),
     EF("r_intake_open", rIntakeOpen), EF("r_intake_close", rIntakeClose), EF("r_intake_area_cm2", rIntakeArea_cm2),

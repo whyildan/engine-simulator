@@ -125,7 +125,7 @@ void App::pullDyno() {
                                            {0.95f, 0.85f, 0.3f}, {0.6f, 0.5f, 1.0f}, {0.3f, 0.9f, 0.85f}, {1.0f, 0.5f, 0.5f}};
         DynoRun r;
         char buf[160];
-        const char* ms[] = {"no muffler", "glasspack", "chambered", "turbo"};
+        const char* ms[] = {"no muffler", "straight-through", "chambered", "turbo", "glasspack", "reverse-flow", "valved"};
         if (isRotary(p_))
             std::snprintf(buf, sizeof(buf), "#%d %s | %d-rotor %.1fL CR%.1f | IO %.0f IC %.0f | %s%s", (int)runs_.size() + 1, p_.name,
                           p_.cylinders, ratedDisplacementL(p_), p_.compression, p_.rIntakeOpen, p_.rIntakeClose,
@@ -199,6 +199,7 @@ void App::frame(float dt) {
     else animAngle_ = std::fmod(animAngle_ + tel_.rpm / 60.0f * 360.0f * dt * animSpeed_, (float)cycleDeg(p_));
 
     shell();
+    newEngineUi();
     if (showDemo_) ImPlot::ShowDemoWindow(&showDemo_);
 
     // publish changed parameters to the simulation thread

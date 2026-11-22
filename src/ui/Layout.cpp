@@ -202,14 +202,35 @@ void App::workArea() {
     switch (section_) {
     case kEngineSetup: {
         beginSplit("##es_cfg", 0.56f);
-        if (ImGui::BeginTabBar("engtabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
-            if (ImGui::BeginTabItem("Engine", nullptr, tabJump("engine"))) { panelEngine(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem(isRotary(p_) || isTwoStroke(p_) ? "Ports###valv" : "Valvetrain###valv", nullptr, tabJump("valv"))) { panelValvetrain(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Exhaust", nullptr, tabJump("exhaust"))) { panelExhaust(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Vehicle")) { panelVehicle(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Sound")) { panelAudio(); ImGui::EndTabItem(); }
-            if (ImGui::BeginTabItem("Components", nullptr, tabJump("components"))) { panelComponents(); ImGui::EndTabItem(); }
-            ImGui::EndTabBar();
+        {
+            // the build flow, left to right as an engine is put together: block, parts, valvetrain, induction, intake
+            // and fuel, exhaust - then the car it sits in and how it sounds (chevron steps with drawn icons)
+            static const int kIcons[] = {ui::IconBlock, ui::IconPiston, ui::IconCam, ui::IconTurbo, ui::IconIntake, ui::IconExhaust,
+                                         ui::IconWheel, ui::IconSound};
+            static const char* kJump[] = {"engine", "components", "valv", "induction", "intake", "exhaust", "vehicle", "sound"};
+            const bool ported = isRotary(p_) || isTwoStroke(p_);
+            const char* labels[] = {"Engine - type, layout, size, firing order", "Parts - rotating assembly, valvetrain parts, air path, injectors, ignition",
+                                    ported ? "Ports - timing and areas" : "Valvetrain - cams, lift, VTEC / VTC",
+                                    "Induction - turbocharger / supercharger", "Intake and fuel - air path, fuel system",
+                                    "Exhaust - headers, pipes, cat, mufflers", "Vehicle - car, gearbox", "Sound - tone, impulse response, space"};
+            for (int i = 0; i < 8; ++i) if (!jumpTab_.empty() && jumpTab_ == kJump[i]) { setupStep_ = i; jumpTab_.clear(); }
+            const int c = ui::StepBar("##essteps", kIcons, labels, 8, setupStep_);
+            if (c >= 0) setupStep_ = c;
+            ImGui::TextColored(ImVec4(1.0f, 0.68f, 0.32f, 1), "%s", labels[setupStep_]);
+            ImGui::Separator();
+            ImGui::BeginChild("##es_step", ImVec2(0, 0), ImGuiChildFlags_None);
+            switch (setupStep_) {
+            default:
+            case 0: panelEngine(); break;
+            case 1: panelComponents(); break;
+            case 2: panelValvetrain(); break;
+            case 3: panelBoost(); break;
+            case 4: panelFuelIntake(); break;
+            case 5: panelExhaust(); break;
+            case 6: panelVehicle(); break;
+            case 7: panelAudio(); break;
+            }
+            ImGui::EndChild();
         }
         splitNext("##es_view");
         panelEngineView();

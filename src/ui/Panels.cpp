@@ -180,6 +180,10 @@ void App::panelEngine() {
     presetCombo("Preset");
     Help("Loading a preset while the engine runs swaps the engine live (the sound crossfades).\n"
          "My engines: engines you saved or imported (Save / share this engine below).");
+    if (ImGui::Button("New engine from scratch...")) newEngineReq_ = true;
+    Help("Build an engine of your own: petrol, diesel, two-stroke or rotary, its layout, cylinders, size and a few\n"
+         "build choices - bore, stroke, valves, cams, intake, exhaust, the car and the base calibration are sized\n"
+         "from them. Save it under Save / share this engine to keep it.");
     ImGui::InputText("Name", p_.name, sizeof(p_.name));
     engineFileUi();
     {
@@ -770,8 +774,11 @@ void App::panelExhaust() {
     ExhaustSchematic(p_, ImVec2(ImGui::GetContentRegionAvail().x, 170));
     ImGui::PushItemWidth(-170);
     ImGui::SeparatorText("Headers");
-    Combo("Header type", &p_.header, "Log manifold\0N-into-1 collector\0Tri-Y / 4-2-1\0");
-    Help("Log: compact cast manifold, muffled.\nCollector: long tube headers, every pulse separate.\nTri-Y: pairs cylinders 360 deg apart (smooth mid-range).");
+    Combo("Header type", &p_.header, "Log manifold\0N-into-1 collector\0Tri-Y / 4-2-1\0Open stacks (zoomies)\0");
+    Help("Log: compact cast manifold, muffled.\nCollector: long tube headers, every pulse separate.\nTri-Y: pairs cylinders 360 deg apart (smooth mid-range).\n"
+         "Open stacks: every primary ends in the open air - no collector, cat or silencer (drag / race stacks).\n"
+         "With a turbo the primaries go to the turbine instead.");
+    const bool stacks = p_.header == HeaderType::OpenStacks && p_.induction != Induction::Turbo && !(isTwoStroke(p_) && p_.tsPipe);
     SliderF("Primary diameter", &p_.primaryDia_mm, 25, 60, "%.0f mm");
     if (ImGui::Checkbox("Equal length primaries", &equalPrimaries_) && equalPrimaries_)
         for (int i = 1; i < kMaxCyl; ++i) p_.primaryLen_mm[i] = p_.primaryLen_mm[0];
@@ -786,41 +793,71 @@ void App::panelExhaust() {
         }
     }
     if (p_.header == HeaderType::TriY) SliderF("Secondary length", &p_.secondaryLen_mm, 80, 1000, "%.0f mm");
-    SliderF("Collector length", &p_.collectorLen_mm, 50, 800, "%.0f mm");
-    SliderF("Collector diameter", &p_.collectorDia_mm, 30, 110, "%.0f mm");
+    if (!stacks) {
+        SliderF("Collector length", &p_.collectorLen_mm, 50, 800, "%.0f mm");
+        SliderF("Collector diameter", &p_.collectorDia_mm, 30, 110, "%.0f mm");
 
-    bool twoBanks = false;
-    if (p_.layout != Layout::Inline) {
-        bool b0 = false, b1 = false;
-        for (int i = 0; i < p_.cylinders; ++i) (p_.bank[i] ? b1 : b0) = true;
-        twoBanks = b0 && b1;
-    }
-    ImGui::SeparatorText("System");
-    if (twoBanks) {
-        Combo("Crossover", &p_.crossover, "True dual (separate)\0H-pipe\0X-pipe\0Y (merge into one)\0");
-        Help("True dual: each bank on its own (left/right stereo).\nH-pipe: deep, balanced.\nX-pipe: smoother, raspier.\nY: single exit.");
-    }
-    SliderF("Pipe diameter", &p_.pipeDia_mm, 30, 110, "%.0f mm");
-    SliderF("Mid-pipe length", &p_.midpipeLen_mm, 100, 4000, "%.0f mm");
-    Check("Catalytic converter", &p_.cat);
-    Combo("Resonator", &p_.resonator, "None\0Inline chamber\0Helmholtz (tuned side branch)\0");
-    Help("Inline chamber: a short expansion chamber in the pipe.\n"
-         "Helmholtz: a neck into a closed volume beside the pipe, sized for one frequency - it cancels the pipe's wave\n"
-         "there (the cruise \"drone\"). Auto tunes it to the firing frequency at 2000 rpm.");
-    if (p_.resonator == 2) {
-        const double perRev = p_.cylinders / revsPerFiring(p_);
-        char lb[48];
-        std::snprintf(lb, sizeof(lb), p_.resonatorHz > 1 ? "%.0f Hz" : "auto (%.0f Hz)", p_.resonatorHz > 1 ? p_.resonatorHz : perRev * 2000.0 / 60.0);
-        ImGui::SliderFloat("Resonator tuning", &p_.resonatorHz, 0, 400, lb);
-        Help("Frequency the Helmholtz resonator cancels; 0 = auto. Firing frequency = cylinders / 2 x rpm / 60.");
-    }
-    Combo("Muffler", &p_.muffler, "None (straight pipe)\0Straight-through / glasspack\0Chambered\0Turbo (quiet)\0");
-    if (p_.muffler == Muffler::Chambered) {
-        Check("Extended inlet / outlet tubes", &p_.mufflerExtTubes);
-        Help("Tubes reaching L/2 (inlet) and L/4 (outlet) into each chamber: the closed spaces around them are\n"
-             "quarter-wave resonators that fill the chambers' transmission-loss dips - fewer pass bands.");
-    }
-    SliderF("Tailpipe length", &p_.tailpipeLen_mm, 50, 2500, "%.0f mm");
+        bool twoBanks = false;
+        if (p_.layout != Layout::Inline) {
+            bool b0 = false, b1 = false;
+            for (int i = 0; i < p_.cylinders; ++i) (p_.bank[i] ? b1 : b0) = true;
+            twoBanks = b0 && b1;
+        }
+        ImGui::SeparatorText("System");
+        if (twoBanks) {
+            Combo("Crossover", &p_.crossover, "True dual (separate)\0H-pipe\0X-pipe\0Y (merge into one)\0");
+            Help("True dual: each bank on its own (left/right stereo).\nH-pipe: deep, balanced.\nX-pipe: smoother, raspier.\nY: single exit.");
+        }
+        SliderF("Pipe diameter", &p_.pipeDia_mm, 30, 110, "%.0f mm");
+        SliderF("Mid-pipe length", &p_.midpipeLen_mm, 100, 4000, "%.0f mm");
+        Combo("Catalytic converter", &p_.cat, "None\0Ceramic (OEM)\0High-flow metallic\0");
+        Help("Ceramic: the OEM brick - wide, lossy, takes the edge off.\nHigh-flow metallic: thin foil, bigger cells - less\n"
+             "back pressure, more of the sound through.");
+        Combo("Resonator", &p_.resonator, "None\0Inline chamber\0Helmholtz (tuned side branch)\0");
+        Help("Inline chamber: a short expansion chamber in the pipe.\n"
+             "Helmholtz: a neck into a closed volume beside the pipe, sized for one frequency - it cancels the pipe's wave\n"
+             "there (the cruise \"drone\"). Auto tunes it to the firing frequency at 2000 rpm.");
+        if (p_.resonator == 2) {
+            const double perRev = p_.cylinders / revsPerFiring(p_);
+            char lb[48];
+            std::snprintf(lb, sizeof(lb), p_.resonatorHz > 1 ? "%.0f Hz" : "auto (%.0f Hz)", p_.resonatorHz > 1 ? p_.resonatorHz : perRev * 2000.0 / 60.0);
+            ImGui::SliderFloat("Resonator tuning", &p_.resonatorHz, 0, 400, lb);
+            Help("Frequency the Helmholtz resonator cancels; 0 = auto. Firing frequency = cylinders / 2 x rpm / 60.");
+        }
+        {
+            static const Muffler kOrder[] = {Muffler::None, Muffler::Glasspack, Muffler::StraightThrough, Muffler::Chambered, Muffler::Valved,
+                                             Muffler::Turbo, Muffler::ReverseFlow};
+            static const char* kName[] = {"None (straight pipe)", "Straight-through (perforated, packed)", "Chambered", "Turbo (quiet)", "Glasspack",
+                                          "Reverse-flow 3-pass (OEM)", "Valved / active (flap bypass)"};
+            if (ImGui::BeginCombo("Muffler", kName[clampv((int)p_.muffler, 0, 6)])) {   // (loudest first)
+                for (Muffler m : kOrder) if (ImGui::Selectable(kName[(int)m], m == p_.muffler)) p_.muffler = m;
+                ImGui::EndCombo();
+            }
+            Help("None: open pipe.\nGlasspack: a short perforated core in a thin wrap - loud, raspy.\n"
+                 "Straight-through: a longer packed core - absorbs the highs, keeps the bass.\n"
+                 "Chambered: reactive chambers - the resonant muscle-car tone.\n"
+                 "Valved: a chambered box with a straight bypass behind a flap (active exhaust): quiet when cruising, open\n"
+                 "when pushed.\nTurbo: chambers and absorbing tubes - quiet, mellow.\n"
+                 "Reverse-flow: the OEM three-pass box - the gas turns twice through perforated tubes; the quietest.");
+        }
+        if (p_.muffler == Muffler::Valved) {
+            Combo("Flap", &p_.exhaustValveMode, "Auto (speed / load)\0Always open (sport)\0Always shut (quiet)\0");
+            if (p_.exhaustValveMode == 0) {
+                SliderF("Opens above", &p_.exhaustValveRpm, 1500, 8000, "%.0f rpm");
+                Help("Auto: opens above this speed or past 60 % pedal; shuts 300 rpm below it with the pedal under 45 %.");
+            }
+            if (tel_.exhValve >= 0) ImGui::Text("Flap %.0f %% open", tel_.exhValve * 100.0f);
+        }
+        if (p_.muffler == Muffler::Chambered) {
+            Check("Extended inlet / outlet tubes", &p_.mufflerExtTubes);
+            Help("Tubes reaching L/2 (inlet) and L/4 (outlet) into each chamber: the closed spaces around them are\n"
+                 "quarter-wave resonators that fill the chambers' transmission-loss dips - fewer pass bands.");
+        }
+        Check("Split into two mufflers and tips", &p_.exhaustSplit);
+        Help("A Y after the cat / resonator: each branch (0.6 x the pipe's area) gets its own muffler and tip - a single\n"
+             "pipe becomes a dual exit, a true dual becomes four tips.");
+        SliderF("Tailpipe length", &p_.tailpipeLen_mm, 50, 2500, "%.0f mm");
+    } else ImGui::TextDisabled("Open stacks: the primaries are the whole exhaust (no collector, cat or silencer).");
 
     // ---- exhaust sensors (Package 2)
     ImGui::SeparatorText("Exhaust sensors");
@@ -1859,17 +1896,18 @@ void App::panelComponents() {
              "Long runners: torque low down. Short runners + big plenum: power up top.");
         int ex = -1;
         const char* exNow = p_.header == HeaderType::Log ? "cast log manifold" : p_.header == HeaderType::TriY ? "tri-Y / 4-2-1 header"
-                            : p_.primaryLen_mm[0] >= 600 ? "long-tube header" : "shorty header";
+                            : p_.header == HeaderType::OpenStacks ? "open stacks" : p_.primaryLen_mm[0] >= 600 ? "long-tube header" : "shorty header";
         if (!isRotary(p_) && !(isTwoStroke(p_) && p_.tsPipe) && ImGui::BeginCombo("Exhaust manifold", exNow)) {
             if (ImGui::Selectable("Cast log manifold")) ex = 0;
             if (ImGui::Selectable("Shorty header")) ex = 1;
             if (ImGui::Selectable("Long-tube header")) ex = 2;
             if (ImGui::Selectable("Tri-Y / 4-2-1 header")) ex = 3;
+            if (ImGui::Selectable("Open stacks (zoomies)")) ex = 4;
             ImGui::EndCombo();
         }
         if (ex >= 0) {
-            float len[] = {140, 300, 800, 450};
-            HeaderType ht[] = {HeaderType::Log, HeaderType::Collector, HeaderType::Collector, HeaderType::TriY};
+            float len[] = {140, 300, 800, 450, 350};
+            HeaderType ht[] = {HeaderType::Log, HeaderType::Collector, HeaderType::Collector, HeaderType::TriY, HeaderType::OpenStacks};
             p_.header = ht[ex];
             for (int i = 0; i < kMaxCyl; ++i) p_.primaryLen_mm[i] = len[ex];
         }

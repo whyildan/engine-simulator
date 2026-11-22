@@ -17,9 +17,12 @@ constexpr int kMaxCyl = 16;
 enum class Layout : int32_t { Inline = 0, V = 1, Boxer = 2 };
 enum class FuelSystem : int32_t { EFI = 0, Carburetor = 1, DieselDI = 2 };   // DieselDI: compression ignition, direct injection (Package 4)
 enum class Injection : int32_t { Port = 0, ThrottleBody = 1 };
-enum class HeaderType : int32_t { Log = 0, Collector = 1, TriY = 2 };
+// OpenStacks: every primary open to the air on its own (zoomies / race stacks) - no collector, no silencer
+enum class HeaderType : int32_t { Log = 0, Collector = 1, TriY = 2, OpenStacks = 3 };
 enum class Crossover : int32_t { TrueDual = 0, HPipe = 1, XPipe = 2, MergeY = 3 };
-enum class Muffler : int32_t { None = 0, StraightThrough = 1, Chambered = 2, Turbo = 3 };
+// Glasspack: a short straight-through can with thin packing; ReverseFlow: the OEM three-pass box; Valved: a chambered
+// box with a bypass pipe behind a flap that opens with rpm / load (active exhaust)
+enum class Muffler : int32_t { None = 0, StraightThrough = 1, Chambered = 2, Turbo = 3, Glasspack = 4, ReverseFlow = 5, Valved = 6 };
 enum class Limiter : int32_t { IgnitionCut = 0, FuelCut = 1 };
 enum class ListenerPos : int32_t { Tailpipe = 0, EngineBay = 1, Cabin = 2 };
 enum class DynoMode : int32_t { Off = 0, Hold = 1, Sweep = 2, Step = 3 };
@@ -138,12 +141,15 @@ struct EngineParams {
     Crossover crossover;
     float pipeDia_mm;
     float midpipeLen_mm;
-    int32_t cat;
+    int32_t cat;              // 0 none, 1 ceramic (OEM), 2 high-flow metallic
     int32_t resonator;        // 0 none, 1 inline chamber, 2 Helmholtz side branch (tuned: resonatorHz)
     Muffler muffler;
     float tailpipeLen_mm;
     float resonatorHz;        // Helmholtz resonator tuning, Hz (0 = auto: firing frequency at 2000 rpm - cruise drone)
     int32_t mufflerExtTubes;  // chambered muffler: extended inlet / outlet tubes (L/2, L/4) inside each chamber
+    int32_t exhaustSplit;     // 1: every pipe splits into two before its muffler - two silencers, two tips (dual / quad exit)
+    int32_t exhaustValveMode; // valved muffler: 0 auto (opens above exhaustValveRpm or under load), 1 always open, 2 always shut
+    float exhaustValveRpm;
 
     // ---------------------------------------------------------- driver controls
     float throttle;           // 0..1 pedal
@@ -358,6 +364,7 @@ struct StructuralKey {
     int32_t cylinders; Layout layout; int32_t bank[kMaxCyl];
     int32_t itb; FuelSystem fuelSystem; Injection injection; int32_t carbBarrels;
     HeaderType header; Crossover crossover; int32_t cat, resonator; Muffler muffler; float resonatorHz; int32_t mufflerExtTubes;
+    int32_t exhaustSplit;
     int32_t oversample;
     int32_t evenFire; int32_t firingOrder[kMaxCyl]; // affects tri-Y pairing
     EngineType engineType;
@@ -374,7 +381,7 @@ struct StructuralKey {
         k.itb = p.itb; k.fuelSystem = p.fuelSystem; k.injection = p.injection; k.carbBarrels = p.carbBarrels;
         k.header = p.header; k.crossover = p.crossover; k.cat = p.cat; k.resonator = p.resonator;
         k.muffler = p.muffler; k.oversample = p.oversample; k.evenFire = p.evenFire;
-        k.resonatorHz = p.resonatorHz; k.mufflerExtTubes = p.mufflerExtTubes;
+        k.resonatorHz = p.resonatorHz; k.mufflerExtTubes = p.mufflerExtTubes; k.exhaustSplit = p.exhaustSplit;
         k.engineType = p.engineType;
         k.induction = p.induction; k.scType = p.scType;
         k.tsPipe = isTwoStroke(p) ? p.tsPipe : 0; k.tsPipeRpm = isTwoStroke(p) && p.tsPipe ? p.tsPipeRpm : 0.0f;
@@ -407,5 +414,42 @@ const char* rotaryPortingName(int style);
 void applyInductionDefaults(EngineParams& p, Induction ind, Supercharger sc = Supercharger::Roots);
 // size a plausible car (or motorcycle) and gearbox to the engine
 void applyVehicleDefaults(EngineParams& p);
+
+// ---- the preset list, grouped for the picker
+int presetGroupCount();
+const char* presetGroupName(int g);
+int presetGroup(int presetIdx);
+
+// ---- an engine from scratch (New engine): a handful of top-level choices; everything else is sized from them by
+//      rules of thumb (Presets.cpp, buildEngine) and finished like a preset (vehicle, components, base calibration)
+enum class BuildKind : int32_t { Petrol = 0, Diesel = 1, TwoStroke = 2, Rotary = 3 };
+struct EngineRecipe {
+    BuildKind kind = BuildKind::Petrol;
+    Layout layout = Layout::Inline;
+    int cylinders = 4;              // rotors for a rotary
+    float displacement_L = 2.0f;    // rated (a rotary: rotors x chamber displacement)
+    float boreStroke = 1.0f;        // bore / stroke (not a rotary)
+    int valves = 4;                 // per cylinder: 2 or 4 (four-strokes)
+    CamLayout cam = CamLayout::DOHC;
+    CamDrive drive = CamDrive::Chain;
+    int fuel = 0;                   // petrol: 0 port EFI, 1 ITB, 2 carburettor | two-stroke: 0 carburettor, 1 EFI
+    int aspiration = 0;             // 0 natural, 1 turbo, 2 Roots, 3 twin-screw, 4 centrifugal (diesel: 0 / 1)
+    int character = 0;              // 0 street, 1 sport, 2 race | rotary: the porting, 0 stock .. 3 peripheral
+    Cooling cooling = Cooling::Liquid;
+    char name[48] = "";
+};
+// a sensible starting recipe for a kind of engine
+EngineRecipe defaultRecipe(BuildKind k);
+// cylinder counts the kind / layout can be built with (returns how many, written to out)
+int recipeCylinderChoices(BuildKind k, Layout l, int* out, int maxOut);
+// the displacement range (L, total) for the kind and cylinder count
+void recipeDisplacementRange(BuildKind k, int cylinders, float& lo, float& hi);
+// the name an engine from this recipe gets when none is typed ("I4 2.0 turbo", "2-rotor 1.3 bridge port"...)
+void recipeAutoName(const EngineRecipe& r, char* out, int outSize);
+// whether a choice works with the rest of the recipe (what: 0 the rotary porting, 1 the fuel system); recipeLimit swaps
+// the ones that do not for the nearest that does (buildEngine applies it)
+bool recipeAllowed(const EngineRecipe& r, int what, int value);
+void recipeLimit(EngineRecipe& r);
+EngineParams buildEngine(const EngineRecipe& r);
 
 } // namespace es

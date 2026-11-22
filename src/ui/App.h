@@ -194,7 +194,16 @@ private:
     bool loadEngineFrom(const std::string& path, bool keepCopy);
     const char* engineLabel() const;
     void presetCombo(const char* id);
+    void newEngineUi();   // the New engine dialog (a modal, opened by newEngineReq_)
     void engineFileUi();
+    std::vector<std::string> presetBrief_;   // "V8  5.7 L  carb" per preset (filled on first use)
+    std::vector<int> presetOrder_;           // presets by group, then cylinders, then size
+    char presetFind_[64] = {};
+    bool newEngineReq_ = false;
+    EngineRecipe recipe_;
+    EngineRecipe recipePreviewOf_;
+    EngineParams recipePreview_{};
+    bool recipePreviewValid_ = false;
     std::vector<EngineFileInfo> engList_;
     bool engListDirty_ = true, engMsgErr_ = false;
     std::string engMsg_;
@@ -222,6 +231,7 @@ private:
     std::vector<DynoRun> runs_;
     int lastRunId_ = -1;
     int presetIdx_ = 0;
+    int setupStep_ = 0;   // Engine Setup: the step of the build flow shown
     bool keyThrottle_ = false, brakeKey_ = false, clutchKey_ = false;
     float animAngle_ = 0, animSpeed_ = 0.02f;
     ui::ViewCam engCam_;
