@@ -128,6 +128,10 @@ target_link_libraries(enginesim PRIVATE enginesim_core imgui_lib d3d11 dxgi d3dc
 add_executable(model_test tests/model_test.cpp src/ui/Mesh3D.cpp src/ui/EngineModel.cpp src/ui/EngineModelParts.cpp)
 target_include_directories(model_test PRIVATE src)
 target_link_libraries(model_test PRIVATE enginesim_core imgui_lib)
+# the 3D engine model rendered offscreen to a .bmp (no window): checking the model while working on it
+add_executable(model_render tools/model_render.cpp src/ui/Gpu3D.cpp src/ui/Mesh3D.cpp src/ui/EngineModel.cpp src/ui/EngineModelParts.cpp)
+target_include_directories(model_render PRIVATE src)
+target_link_libraries(model_render PRIVATE enginesim_core imgui_lib d3d11 d3dcompiler)
 endif()
 
 # ---------------------------------------------------------------- headless tools

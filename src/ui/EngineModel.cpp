@@ -206,13 +206,13 @@ Data valveMesh(float B, float dia) {
     return mesh::lathe({{0, 0}, {R, 0}, {R, 0.018f * B}, {R * 0.55f, 0.05f * B}, {stem, 0.16f * B}, {stem, L}, {0, L}}, 32);
 }
 
-Data springMesh(float B) {   // unit height (scaled along y with the valve), wire in mm
+// one turn of a valve spring: a wire ring (the spring is drawn as turns stacked over its height, so the wire keeps
+// its thickness however far the spring is compressed)
+Data springTurnMesh(float B) {
     std::vector<V3> path;
-    std::vector<float> rad;
-    const float rc = 0.085f * B, turns = 6.5f;
-    const int n = 220;
-    for (int k = 0; k <= n; ++k) { const float t = (float)k / n, a = t * turns * 2 * kPiF; path.push_back(v3(rc * std::cos(a), t, rc * std::sin(a))); rad.push_back(0.014f * B); }
-    return mesh::tube(path, rad, 8);
+    const float rc = 0.085f * B;
+    for (int k = 0; k < 24; ++k) { const float a = 2 * kPiF * k / 24; path.push_back(v3(rc * std::cos(a), 0, rc * std::sin(a))); }
+    return mesh::tube(path, std::vector<float>(path.size(), 0.013f * B), 8, true, false);
 }
 
 Data lobeMesh(float Rb, float rn, float nd, float w) { return mesh::extrude(circlesHull({{0, 0, Rb}, {nd, 0, rn}}, 32), -0.5f * w, 0.5f * w); }
@@ -428,7 +428,7 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
             const V3 ax = v3(std::sin(tilt), std::cos(tilt), 0);   // up the valve, towards its cam / rocker
             const float seatX = s.sgn * (ohv ? 0.17f : 0.23f) * B;
             const Cached& mValve = meshOf(key("valve", {B, s.dia}), [&] { return valveMesh(B, s.dia); });
-            const Cached& mSpring = meshOf(key("spring", {B}), [&] { return springMesh(B); });
+            const Cached& mTurn = meshOf(key("springturn", {B}), [&] { return springTurnMesh(B); });
             const Cached& mRet = meshOf(key("retainer", {B}), [&] { return mesh::lathe({{0.03f * B, 0}, {0.10f * B, 0.01f * B}, {0.10f * B, 0.025f * B}, {0.03f * B, 0.03f * B}}, 24); });
             const float rn = Rb * (0.36f + 0.0011f * (float)s.dur);
             const float lift = (float)s.lift;
@@ -444,15 +444,21 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
                 if (open) vm = s.intake ? emissive(kSteel, kCharge[0] * 0.10f, kCharge[1] * 0.12f, kCharge[2] * 0.18f)
                                         : emissive(kSteel, kAccent[0] * 0.18f, kAccent[1] * 0.10f, kAccent[2] * 0.04f);
                 sc.put(mValve, vf, vm);
-                // spring from its seat in the head to the retainer (moves with the valve)
-                const float sBot = 0.27f * B, sTop = stemL - 0.06f * B - lift;
-                sc.put(mSpring, cf * translate(seat + ax * sBot) * rotZ(-tilt) * scale(v3(1, std::max(1.0f, sTop - sBot), 1)), kSteelDark);
+                // spring from its seat in the head to the retainer (the retainer moves with the valve, the turns close up)
+                const float sBot = 0.30f * B, sTop = stemL - 0.06f * B - lift;
+                const int turns = 6;
+                for (int j = 0; j < turns; ++j) {
+                    const float y = sBot + (sTop - sBot) * (j + 0.5f) / turns;
+                    sc.put(mTurn, cf * translate(seat + ax * y) * rotZ(-tilt) * rotX(0.06f), kSteelDark);
+                }
                 sc.put(mRet, vf * translate(v3(0, stemL - 0.06f * B, 0)), kSteel);
                 const V3 tip0 = seat + ax * stemL;   // the stem's tip with the valve shut
                 if (dohc) {
                     // bucket on the stem, the lobe right above it: base circle on the bucket when shut, the nose
                     // pushes it down to full lift
-                    const Cached& mBucket = meshOf(key("bucket", {B}), [&] { return mesh::lathe({{0, 0}, {0.085f * B, 0}, {0.085f * B, bucketH}, {0, bucketH}}, 28); });
+                    const Cached& mBucket = meshOf(key("bucketcup", {B}), [&] { return mesh::lathe({{0, bucketH}, {0.115f * B, bucketH}, {0.118f * B, bucketH - 0.01f * B},
+                                                                                                   {0.118f * B, -0.11f * B}, {0.104f * B, -0.11f * B},
+                                                                                                   {0.104f * B, bucketH - 0.025f * B}, {0, bucketH - 0.025f * B}}, 32); });
                     sc.put(mBucket, vf * translate(v3(0, stemL, 0)), kSilver);
                     const float nd = Rb + (float)s.maxLift - rn;
                     const Cached& mLobe = meshOf(key("lobe", {Rb, rn, nd, B}), [&] { return lobeMesh(Rb, rn, nd, 0.11f * B); });
@@ -567,8 +573,10 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
     std::vector<std::tuple<float, float, float>> pulleys;   // (x, y, r) in the front plane
     if (two) camLines.clear();
     std::vector<std::pair<V3, float>> sprocketsAt;            // world centre, radius (drawn below)
-    const float crankSprR = 0.24f * B, camSprR = 2.0f * crankSprR;   // (2:1 - the cams turn at half crank speed)
-    pulleys.push_back({0, 0, crankSprR});
+    // cam sprockets (and a diesel's pump pulley, 0.85 of them) twice the crank sprocket (2:1: the cams turn at half
+    // crank speed) - 0.48 bore, or smaller where two cams sit closer than that (DOHC: ~0.85 bore apart): they keep a
+    // gap for the belt / chain between them (gears: just clear), and the crank sprocket shrinks with them
+    std::vector<std::pair<V3, float>> sprCentres;            // centre (front plane), size relative to a cam sprocket
     for (int b = 0; b < ((vee || boxer) ? 2 : 1) && !two; ++b) {
         float ax = 0;
         bool any = false;
@@ -598,23 +606,41 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
             const Cached& mCap = meshOf(key("camcap", {B}), [&] { return mesh::box(0.07f * B, 0.06f * B, 0.05f * B); });
             for (int i = 0; i < n; ++i) if (cyl[i].bank == b) sc.put(mCap, at * translate(v3(0, 0.02f * B, cyl[i].z + 0.5f * pitch * 0.85f)), kGold);
             const V3 w = xform(bf, v3(c.x, c.y, 0));
-            pulleys.push_back({w.x, w.y, camSprR});
-            sprocketsAt.push_back({v3(w.x, w.y, zFront), camSprR});
+            sprCentres.push_back({v3(w.x, w.y, zFront), 1.0f});
         }
     }
     if (ohv && ohvCamSet) {   // the block cam: one shaft along the engine
         const Cached& mShaft = meshOf(key("blockcam", {B, zFront, zRear}), [&] { return rodZ(0.05f * B, zFront, zRear - 0.2f * B, 16); });
         sc.put(mShaft, translate(v3(ohvCamXY.x, ohvCamXY.y, 0)) * rotZ(crankRad * 0.5f), kSteel);
-        pulleys.push_back({ohvCamXY.x, ohvCamXY.y, camSprR});
-        sprocketsAt.push_back({v3(ohvCamXY.x, ohvCamXY.y, zFront), camSprR});
+        sprCentres.push_back({v3(ohvCamXY.x, ohvCamXY.y, zFront), 1.0f});
     }
     // diesel: the distributor injection pump on the intake side, driven at cam speed by the same belt / chain
     if (diesel && !two) {
         const float sideX = (vee || boxer) ? 0.0f : -1.0f;   // inline: the intake side (-x)
         const V3 pc = v3(sideX * 1.05f * B, (vee || boxer) ? valveTop + 0.4f * B : 0.52f * deck, zFront);
-        pulleys.push_back({pc.x, pc.y, camSprR * 0.85f});
-        sprocketsAt.push_back({pc, camSprR * 0.85f});
+        sprCentres.push_back({pc, 0.85f});
         eb.pump = pc; eb.hasPump = true;
+    }
+    float camSprR = 0.48f * B;
+    {
+        const float gap = (!two && p.camDrive == CamDrive::Gears) ? 0.01f * B : 0.07f * B;
+        for (size_t a = 0; a < sprCentres.size(); ++a) {
+            const V3 ca = sprCentres[a].first;
+            // against the crank sprocket (half size) and every other sprocket
+            const float dc = len(v3(ca.x, ca.y, 0));
+            camSprR = std::min(camSprR, (dc - gap) / (sprCentres[a].second + 0.5f));
+            for (size_t b2 = a + 1; b2 < sprCentres.size(); ++b2) {
+                const V3 cb = sprCentres[b2].first;
+                camSprR = std::min(camSprR, (len(v3(ca.x - cb.x, ca.y - cb.y, 0)) - gap) / (sprCentres[a].second + sprCentres[b2].second));
+            }
+        }
+        camSprR = std::max(camSprR, 0.12f * B);
+    }
+    const float crankSprR = 0.5f * camSprR;
+    pulleys.push_back({0, 0, crankSprR});
+    for (const auto& sc2 : sprCentres) {
+        pulleys.push_back({sc2.first.x, sc2.first.y, camSprR * sc2.second});
+        sprocketsAt.push_back({sc2.first, camSprR * sc2.second});
     }
     {
         const CamDrive drive = two ? CamDrive::Belt : p.camDrive;
@@ -626,18 +652,49 @@ void buildPistonEngine(Scene& sc, const EngineParams& p, const float phases[kMax
             sc.put(mCamSpr, translate(sp.first) * rotZ(crankRad * 0.5f * (gears ? -1.0f : 1.0f)), kSteel);
         }
         if (gears && !two) {
-            // gear train: idlers on the line from the crank gear to each cam gear, each turning the other way
-            for (const auto& sp : sprocketsAt) {
-                const V3 c1 = v3(sp.first.x, sp.first.y, 0);
-                const float d = len(c1), gap = d - crankSprR - sp.second;
-                if (gap < 0.03f * B) continue;
-                const int k = std::max(1, (int)std::lround(gap / (0.7f * B)));
-                const float ri = 0.5f * gap / k;
-                const V3 u = c1 * (1.0f / std::max(1e-3f, d));
-                const Cached& mIdl = meshOf(key("idler", {ri, B}), [&] { return gearMesh(ri, 0.04f * B, std::max(10, (int)(ri / (0.012f * B))), 0.12f * B, 0.06f * B); });
-                for (int j = 0; j < k; ++j) {
-                    const V3 c = u * (crankSprR + ri + 2.0f * ri * j);
-                    sc.put(mIdl, translate(v3(c.x, c.y, zFront)) * rotZ(crankRad * (crankSprR / ri) * (j % 2 == 0 ? -1.0f : 1.0f)), kSteel);
+            // gear train: every cam (and pump) gear is driven from the nearest gear already in the train - the crank
+            // gear, or a gear it drives (a 6BT's pump gear runs off the cam gear) - through idlers on the line between
+            // them; a route whose idlers would hit another gear is not used (the next nearest source is tried)
+            struct G { V3 c; float r, sgn; };                    // centre (front plane), radius, turning sense
+            std::vector<G> train = {{v3(0, 0, 0), crankSprR, 1.0f}};
+            std::vector<G> all = train;
+            for (const auto& sp : sprocketsAt) all.push_back({v3(sp.first.x, sp.first.y, 0), sp.second, -1.0f});
+            std::vector<int> order(sprocketsAt.size());
+            for (size_t k = 0; k < order.size(); ++k) order[k] = (int)k;
+            std::sort(order.begin(), order.end(), [&](int a, int b2) { return len(all[a + 1].c) < len(all[b2 + 1].c); });
+            auto clearOf = [&](V3 c, float r, int skipA, int skipB) {
+                for (size_t g = 0; g < all.size(); ++g) {
+                    if ((int)g == skipA || (int)g == skipB) continue;
+                    if (len(c - all[g].c) < r + all[g].r + 0.01f * B) return false;
+                }
+                return true;
+            };
+            for (int t : order) {
+                const G tgt = all[t + 1];
+                // sources: the crank (index 0) and the sprockets already connected, nearest first
+                std::vector<int> src = {0};
+                for (size_t g = 1; g < all.size(); ++g) if ((int)g != t + 1 && all[g].sgn > 1.5f) src.push_back((int)g);
+                std::sort(src.begin(), src.end(), [&](int a, int b2) { return len(all[a].c - tgt.c) < len(all[b2].c - tgt.c); });
+                for (int s0 : src) {
+                    const G from = all[s0];
+                    const float d = len(tgt.c - from.c), gap = d - from.r - tgt.r;
+                    std::vector<G> idl;
+                    if (gap >= 0.03f * B) {
+                        const int k = std::max(1, (int)std::lround(gap / (0.7f * B)));
+                        const float ri = 0.5f * gap / k;
+                        const V3 u = (tgt.c - from.c) * (1.0f / std::max(1e-3f, d));
+                        for (int j = 0; j < k; ++j) idl.push_back({from.c + u * (from.r + ri + 2.0f * ri * j), ri, (j % 2 == 0 ? -1.0f : 1.0f) * (s0 == 0 ? 1.0f : -1.0f)});
+                    }
+                    bool ok = true;
+                    for (const G& g : idl) ok = ok && clearOf(g.c, g.r, s0, t + 1);
+                    if (!ok) continue;
+                    for (const G& g : idl) {
+                        all.push_back(g);
+                        const Cached& mIdl = meshOf(key("idler", {g.r, B}), [&] { return gearMesh(g.r, 0.04f * B, std::max(10, (int)(g.r / (0.012f * B))), 0.12f * B, 0.06f * B); });
+                        sc.put(mIdl, translate(v3(g.c.x, g.c.y, zFront)) * rotZ(crankRad * (crankSprR / g.r) * -g.sgn), kSteel);
+                    }
+                    all[t + 1].sgn = 2.0f;   // connected: it can drive the next one
+                    break;
                 }
             }
         }

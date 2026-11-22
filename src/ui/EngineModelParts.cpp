@@ -108,13 +108,14 @@ std::vector<V3> beltAround(V3 a, float ra, V3 b, float rb) {
     return out;
 }
 
-void tailWithFlame(Scene& sc, const std::vector<V3>& ctrl, float rt, const EngineViewLive& live, float egt, int salt) {
+void tailWithFlame(Scene& sc, const std::vector<V3>& ctrl, float rt, const EngineViewLive& live, float egt, int salt, float canLen = 0) {
     const std::vector<V3> path = spline(ctrl, 8);
     sc.put(tubeOf("tail", path, rt), M4{}, hot(egt, 0.35f));
-    // silencer can on the way
+    // silencer can on the way (canLen: its length; 0 = the old short can)
     const V3 a = path[path.size() / 2], b = path[path.size() / 2 + 2 < path.size() ? path.size() / 2 + 2 : path.size() - 1];
-    const Cached& can = meshOf(key("muffcan", {rt}), [&] { return mesh::lathe({{0, -2.6f * rt}, {2.1f * rt, -2.6f * rt}, {2.3f * rt, -2.2f * rt}, {2.3f * rt, 2.2f * rt},
-                                                                              {2.1f * rt, 2.6f * rt}, {0, 2.6f * rt}}, 28); });
+    const float hl = canLen > 0 ? 0.5f * canLen : 2.6f * rt, rc = canLen > 0 ? 2.0f * rt : 2.3f * rt;
+    const Cached& can = meshOf(key("muffcan", {rt, hl, rc}), [&] { return mesh::lathe({{0, -hl}, {rc * 0.9f, -hl}, {rc, -hl + 0.4f * rt}, {rc, hl - 0.4f * rt},
+                                                                                      {rc * 0.9f, hl}, {0, hl}}, 28); });
     sc.put(can, alongY((a + b) * 0.5f, b - a), kSteelDark);
     // afterfire pop: a flame out of the tip (the app's orange, a hot yellow core)
     if (live.popFlash > 0.02f) {
@@ -199,6 +200,53 @@ void buildExhaust(Scene& sc, const EngineParams& p, const EngineBits& eb, const 
         const V3 down = v3(0, -1, 0);
         V3 C = avgP + avgD * (1.05f * B) + down * (1.15f * B);
         C.z = eb.zRear + 0.55f * B;
+        if (!turbo) {
+            // no turbo: the primaries leave the ports, turn down and run back along the side of the engine as a bundle,
+            // into a collector cone beside the rear of the block; from there a long pipe to the rear, a silencer half
+            // way, the tail pipe at the end (the view can be panned / zoomed out to follow it)
+            const V3 side = norm(v3(avgD.x, 0, avgD.z));
+            const V3 run = avgP + side * (0.95f * B) + down * (0.95f * B);   // the bundle's line along the engine
+            const V3 C0 = v3(run.x, run.y - 0.15f * B, z1 + 0.80f * B);          // collector: where the primaries meet
+            const int np = (int)ports.size();
+            // the collector's mouth: wide enough for the primaries side by side on a ring
+            const float ringMin = np > 1 ? rp * 1.08f / std::sin(kPiF / std::max(2, np)) : 0.0f;
+            const float cr0 = std::max({rt * 1.7f, rp * 2.2f, ringMin + rp * 1.05f});
+            std::vector<PortOut> byZ = ports;
+            std::sort(byZ.begin(), byZ.end(), [](const PortOut& a, const PortOut& b2) { return a.p.z < b2.p.z; });
+            if (p.header == HeaderType::Log && np > 1) {
+                const V3 L0 = v3(avgP.x, avgP.y, z0 - 0.2f * B) + avgD * (0.60f * B);
+                const V3 L1 = v3(L0.x, L0.y, z1 + 0.3f * B);
+                sc.put(tubeOf("log", spline({L0, L1, L1 + v3(0, -0.4f * B, 0.25f * B) + side * (0.2f * B), C0}, 8), rt * 1.05f), M4{}, hot(egtMean, 0.8f));
+                for (const PortOut& q : ports)
+                    sc.put(tubeOf("stub", spline({q.p, q.p + q.d * (0.30f * B), v3(L0.x, L0.y, q.p.z)}, 6), rp), M4{}, hot(egtOf(q.cyl)));
+            } else {
+                for (int k = 0; k < np; ++k) {
+                    const PortOut& q = byZ[k];
+                    // a 4-1 header: out of the port and down, then one sweep back along the side of the engine to its
+                    // own place on a ring round the collector's mouth, arriving parallel to the pipe
+                    const float ang = 2.0f * kPiF * k / std::max(1, np) + 0.25f * kPiF;
+                    const float ringR = np > 1 ? std::max(0.5f * cr0, ringMin) : 0.0f;
+                    const V3 ring = side * (ringR * std::cos(ang)) + down * (ringR * std::sin(ang));
+                    const V3 entry = C0 + ring;
+                    const V3 b0 = q.p + q.d * (0.30f * B), b1 = q.p + q.d * (0.60f * B) + down * (0.50f * B);
+                    std::vector<V3> ctrl = {q.p, b0, b1};
+                    const float far = entry.z - b1.z;
+                    if (far > 1.2f * B) ctrl.push_back(lerp(b1, entry - v3(0, 0, 0.5f * B), 0.5f) + down * (0.08f * B));
+                    if (far > 0.6f * B) ctrl.push_back(entry - v3(0, 0, 0.45f * B));
+                    ctrl.push_back(entry);
+                    sc.put(tubeOf("primary", spline(ctrl, 8), rp), M4{}, hot(egtOf(q.cyl)));
+                }
+            }
+            // collector cone into the pipe
+            const float cl = 0.75f * B, cr = cr0;
+            const Cached& cone = meshOf(key("collcone", {cr, rt, cl}), [&] { return mesh::lathe({{0, 0}, {cr, 0}, {cr, 0.15f * cl}, {rt, cl}, {0, cl}}, 28); });
+            sc.put(cone, alongY(C0, v3(0, 0, 1)), hot(egtMean, 0.8f));
+            const V3 E0 = C0 + v3(0, 0, cl);
+            collectors.push_back(E0);
+            tailWithFlame(sc, {E0, E0 + v3(0, -0.10f * B, 1.2f * B), E0 + v3(0, -0.30f * B, 3.0f * B), E0 + v3(0, -0.35f * B, 4.8f * B),
+                               E0 + v3(0, -0.35f * B, 6.2f * B)}, rt, live, egtMean, b, 1.8f * B);
+            continue;
+        }
         if (p.header == HeaderType::Log && ports.size() > 1) {
             // log manifold: one pipe along the head, short stubs into it
             const V3 L0 = v3(avgP.x, avgP.y, z0 - 0.2f * B) + avgD * (0.60f * B);

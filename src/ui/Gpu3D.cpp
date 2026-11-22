@@ -367,4 +367,22 @@ void end() {
 
 void* texture() { return srvOut; }
 
+bool readPixels(std::vector<uint8_t>& rgba, int& w, int& h) {
+    if (!g_ok || !texOut) return false;
+    D3D11_TEXTURE2D_DESC td = {};
+    texOut->GetDesc(&td);
+    td.Usage = D3D11_USAGE_STAGING; td.BindFlags = 0; td.CPUAccessFlags = D3D11_CPU_ACCESS_READ; td.MiscFlags = 0;
+    ID3D11Texture2D* st = nullptr;
+    if (FAILED(g_dev->CreateTexture2D(&td, nullptr, &st))) return false;
+    g_ctx->CopyResource(st, texOut);
+    D3D11_MAPPED_SUBRESOURCE ms;
+    if (FAILED(g_ctx->Map(st, 0, D3D11_MAP_READ, 0, &ms))) { rel(st); return false; }
+    w = (int)td.Width; h = (int)td.Height;
+    rgba.resize((size_t)w * h * 4);
+    for (int y = 0; y < h; ++y) std::memcpy(&rgba[(size_t)y * w * 4], (const uint8_t*)ms.pData + (size_t)y * ms.RowPitch, (size_t)w * 4);
+    g_ctx->Unmap(st, 0);
+    rel(st);
+    return true;
+}
+
 } // namespace es::ui::gpu

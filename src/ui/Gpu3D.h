@@ -4,6 +4,7 @@
 #include "ui/Math3D.h"
 #include "ui/Mesh3D.h"
 #include <cstdint>
+#include <vector>
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
@@ -35,5 +36,7 @@ void draw(int mesh, const M4& world, const Material& m);
 void glow(V3 pos, float size, float r, float g, float b, float a);   // additive soft dot (flames, sparks, particles)
 void end();
 void* texture();
+// the last frame's pixels (tools: offscreen renders)
+bool readPixels(std::vector<uint8_t>& rgba, int& w, int& h);
 
 } // namespace es::ui::gpu
