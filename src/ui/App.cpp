@@ -93,6 +93,18 @@ void App::keyboard(float dt) {
             if (g.listenerNext) p_.listener = (ListenerPos)(((int)p_.listener + 1) % 3);
             if (g.listenerPrev) p_.listener = (ListenerPos)(((int)p_.listener + 2) % 3);
         }
+        // rumble: the engine's vibration through its mounts (sim/Vibration.h, m/s^2 RMS) - the big motor the band
+        // below ~35 Hz, the small one the band above. A power law (0.6 - chosen) so a smooth V12's faint shake can
+        // still be felt next to a V-twin's thump; full at ~1 m/s^2 (chosen). Off while the window is in the background
+        // or the simulation is paused.
+        float lo = 0, hi = 0;
+        if (rumbleOn_ && g.connected && hwnd && GetForegroundWindow() == hwnd && !tel_.paused) {
+            auto m = [&](float a) { return std::clamp(std::pow(std::max(0.0f, a) / 1.0f, 0.6f) * rumbleGain_, 0.0f, 1.0f); };
+            lo = m(tel_.vibLow); hi = m(tel_.vibHigh);
+        }
+        rumbleLo_ = lo; rumbleHi_ = hi;
+        if (g.connected) pad_.setRumble(lo, hi);
+
     }
     if (io.WantTextInput || captured) return;
     bool up = ImGui::IsKeyDown(ImGuiKey_W) || ImGui::IsKeyDown(ImGuiKey_UpArrow);

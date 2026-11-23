@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -540,6 +541,25 @@ static void EngineView3DFlat(const EngineParams& p, const float phases[kMaxCyl],
                 const float zc = std::max(vc.z, c.D * 0.05f);
                 u0 = std::min(u0, vc.x / zc); u1 = std::max(u1, vc.x / zc); w0 = std::min(w0, vc.y / zc); w1 = std::max(w1, vc.y / zc);
             }
+        // hold the fit: the bounds only grow while the engine and the view stay the same, so the moving parts (the
+        // pistons, the crank throws) do not make the whole drawing breathe with the cycle
+        {
+            static float hU0, hU1, hW0, hW1, hKey[8] = {};
+            const float key[8] = {cam.yaw, cam.pitch, cam.depth, size.x, size.y, (float)p.cylinders + 100.0f * (float)p.layout,
+                                  p.bore_mm + 1000.0f * p.stroke_mm, p.rod_mm + 1000.0f * p.bankAngle};
+            if (std::memcmp(key, hKey, sizeof(key)) != 0) { std::memcpy(hKey, key, sizeof(key)); hU0 = u0; hU1 = u1; hW0 = w0; hW1 = w1; }
+            hU0 = std::min(hU0, u0); hU1 = std::max(hU1, u1); hW0 = std::min(hW0, w0); hW1 = std::max(hW1, w1);
+            u0 = hU0; u1 = hU1; w0 = hW0; w1 = hW1;
+        }
+        // the engine on its mounts: moved after the fit (the frame stays put, the engine moves in it)
+        if (live.shakeX != 0 || live.shakeY != 0 || live.shakeRoll != 0) {
+            const float cr = std::cos(live.shakeRoll), sr = std::sin(live.shakeRoll);
+            auto rot = [&](V3 v) { return v3(v.x * cr - v.y * sr, v.x * sr + v.y * cr, v.z); };
+            for (Slab& s : sc.slabs) {
+                s.O = rot(s.O) + v3(live.shakeX, live.shakeY, 0);
+                s.U = rot(s.U); s.V = rot(s.V); s.N = rot(s.N);
+            }
+        }
         const float fit = std::min(size.x / std::max(1e-6f, u1 - u0), (size.y - ImGui::GetFontSize() * 1.5f) / std::max(1e-6f, w1 - w0)) * 0.88f;
         c.f = fit * cam.zoom;
         c.scr = ImVec2(p0.x + size.x * 0.5f - c.f * (u0 + u1) * 0.5f + cam.panX,
@@ -614,8 +634,11 @@ void EngineView3D(const EngineParams& p, const float phases[kMaxCyl], float cran
     const float bg[3] = {0.065f, 0.067f, 0.075f};   // the app's window background
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (gpu::begin(w, h, bg, view, proj, eye)) {
-        for (const ModelItem& it : model.items) gpu::draw(it.mesh, it.world, it.mat);
-        for (const ModelGlow& g : model.glows) gpu::glow(g.p, g.size, g.r, g.g, g.b, g.a);
+        // the engine on its mounts (live.shake*: roll about the crank axis, then the offset)
+        const bool shaking = live.shakeX != 0 || live.shakeY != 0 || live.shakeRoll != 0;
+        const m3::M4 shake = m3::translate(m3::v3(live.shakeX, live.shakeY, 0)) * m3::rotZ(live.shakeRoll);
+        for (const ModelItem& it : model.items) gpu::draw(it.mesh, shaking ? shake * it.world : it.world, it.mat);
+        for (const ModelGlow& g : model.glows) gpu::glow(shaking ? m3::xform(shake, g.p) : g.p, g.size, g.r, g.g, g.b, g.a);
         gpu::end();
         dl->AddImage((ImTextureID)gpu::texture(), p0, ImVec2(p0.x + w, p0.y + h));
     }

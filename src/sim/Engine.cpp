@@ -28,6 +28,7 @@ Engine::Engine(const EngineParams& p, double fs) : p_(p), fs_(fs) {
     computePhases(p_, phase_);
     updateValves();
     comp_.build(p_);
+    vib.setup(p_, comp_);
     vtIn_ = valvetrainSpec(p_, true); vtEx_ = valvetrainSpec(p_, false);
     repairSeen_ = p_.comp.repairCount;
     cyls_.assign(geom_.rotary ? 3 * n : n, Cylinder());
@@ -221,6 +222,7 @@ void Engine::apply(const EngineParams& p) {
     computePhases(p_, phase_);
     updateValves();
     comp_.build(p_);
+    vib.setup(p_, comp_);
     vtIn_ = valvetrainSpec(p_, true); vtEx_ = valvetrainSpec(p_, false);
     vdIn_.clear(); vdEx_.clear(); vdInHi_.clear(); vdExHi_.clear();
     baroPa_ = ambientPressurePa(p_);
@@ -1612,6 +1614,14 @@ void Engine::step(double dt, double pedal, double loadTorque, bool signedLoad) {
     }
     double tLoad = signedLoad ? loadTorque + scTorque * std::tanh(omega_ / 3.0)
                               : (loadTorque + scTorque) * std::tanh(omega_ / 3.0);
+    // engine vibration through the mounts (every 4th step: it only has to follow up to a few hundred Hz)
+    if (++vibTick_ >= 4) {
+        vibTick_ = 0;
+        double ph[kMaxCyl];
+        const int nv = std::min((int)cyls_.size(), kMaxCyl);
+        for (int i = 0; i < nv; ++i) ph[i] = cyls_[i].phase;
+        vib.step(4.0 * dt, thetaNew, omega_, ph, nv, torqueInst_);
+    }
     double J = totalInertia();
     double net = torqueInst_ - tFric;
     omega_ += (net - tLoad + tStarter) / J * dt;

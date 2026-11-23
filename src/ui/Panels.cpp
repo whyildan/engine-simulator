@@ -1100,6 +1100,22 @@ void App::panelVehicle() {
              "Brake: Cross / A (full) or the right stick pulled back (analog). Triangle / Y = neutral.\n"
              "Options / Start = start the engine, Share / Back = ignition, Circle / B = driving mode,\n"
              "D-pad left / right = listener position. Works while this window has the focus.");
+        ImGui::Checkbox("Engine vibration on the controller", &rumbleOn_);
+        if (rumbleOn_) {
+            ImGui::SameLine();
+            ImGui::PushItemWidth(ImGui::GetFontSize() * 8);
+            ImGui::SliderFloat("##rumblegain", &rumbleGain_, 0.2f, 2.0f, "strength %.1f");
+            ImGui::PopItemWidth();
+        }
+        if (g.connected && !pad_.rumbleSupported())
+            ImGui::TextDisabled("This controller's motors can't be driven directly (Bluetooth DualShock / DualSense: use Steam Input or DS4Windows)");
+        else if (g.connected && rumbleOn_)
+            ImGui::TextDisabled("motors: big %3.0f %%   small %3.0f %%   (mounts pass on %.2f / %.2f m/s^2)", rumbleLo_ * 100, rumbleHi_ * 100,
+                                tel_.vibLow, tel_.vibHigh);
+        Help("The engine's own vibration, as its mounts pass it on to the car: the shaking forces of the pistons\n"
+             "(a single's or V-twin's primary, an inline-4's secondary buzz that grows with revs), their rocking couples,\n"
+             "and the firing pulses rolling the block (a rough idle, a lumpy cam, misfires, cranking). Below ~35 Hz it\n"
+             "drives the big motor, above it the small one. A V12 or a straight six barely trembles, a V-twin thumps.");
     }
     int tm = (int)p_.transMode;
     if (ImGui::Combo("Transmission", &tm, "Manual (you work the clutch)\0Manual, automatic clutch\0Automatic\0")) {
@@ -1836,6 +1852,12 @@ void App::panelEngineView() {
     ImGui::SameLine();
     ImGui::Checkbox("Flat view", &engCam_.flat);
     Help("The older flat cutaway drawing (also used when the 3D renderer is not available).");
+    ImGui::SameLine();
+    ImGui::Checkbox("Shake on mounts", &engCam_.shake);
+    Help("The engine moves the way the simulation's vibration model moves it on its rubber mounts - the piston\n"
+         "shaking forces and the firing pulses rolling the block (the same motion the controller's rumble comes\n"
+         "from) - replayed at the view's slow-motion crank angle and exaggerated 10x: a real block moves a few\n"
+         "millimetres at most. A V-twin or a single rocks, a lumpy V8 lopes at idle, a V12 or a straight six stays still.");
     float phases[kMaxCyl];
     computePhases(p_, phases);
     ui::EngineViewLive live;
@@ -1862,6 +1884,15 @@ void App::panelEngineView() {
         lastT = now;
         if (tel_.afterfires != lastAf) { if (tel_.afterfires > lastAf) flash = 1.0f; lastAf = tel_.afterfires; }
         live.popFlash = flash;
+    }
+    if (engCam_.shake && tel_.rpm > 30.0f && !tel_.paused) {
+        // the block's motion recorded over the last cycle at the crank angle the view shows (x10 - chosen)
+        const float kShow = 10.0f;
+        const int nb = std::min(1080, (int)cycleDeg(p_));
+        const int b = clampv((int)std::fmod(std::max(0.0f, animAngle_), (float)nb), 0, nb - 1);
+        live.shakeX = tel_.vibTrX[b] * 1000.0f * kShow;
+        live.shakeY = tel_.vibTrY[b] * 1000.0f * kShow;
+        live.shakeRoll = tel_.vibTrRoll[b] * kShow;
     }
     ImVec2 avail = ImGui::GetContentRegionAvail();
     EngineView3D(p_, phases, animAngle_, live, engCam_, ImVec2(avail.x, std::max(120.0f, avail.y)));

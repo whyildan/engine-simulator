@@ -62,6 +62,7 @@ add_library(enginesim_core STATIC
   src/sim/Valvetrain.cpp
   src/sim/Components.cpp
   src/sim/Thermal.cpp
+  src/sim/Vibration.cpp
   src/ecu/Sensors.cpp
   src/ecu/Ecu.cpp
   src/ecu/Calibration.cpp
@@ -306,3 +307,7 @@ target_link_libraries(sound_test PRIVATE enginesim_core)
 
 add_executable(fuel_drain_test tests/fuel_drain_test.cpp)
 target_link_libraries(fuel_drain_test PRIVATE enginesim_core)
+add_executable(vib_probe tests/vib_probe.cpp)
+target_link_libraries(vib_probe PRIVATE enginesim_core)
+add_executable(vibration_test tests/vibration_test.cpp)
+target_link_libraries(vibration_test PRIVATE enginesim_core)

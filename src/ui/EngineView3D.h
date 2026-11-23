@@ -14,6 +14,7 @@ struct ViewCam {
     float depth = 1;            // cutaway slab thickness scale (flat view)
     float glass = 0.16f;        // opacity of the glass liners / heads (3D view)
     bool flat = false;          // use the flat (2.5D) view
+    bool shake = true;          // the engine moves on its mounts (Vibration.h), exaggerated
 };
 
 // live state the parameters alone do not tell
@@ -33,6 +34,7 @@ struct EngineViewLive {
     bool glowPlugOn = false;    // diesel glow plugs
     float egr = 0;              // EGR valve opening 0..1
     float popFlash = 0;         // 0..1: an afterfire pop just now (flame at the tail pipe)
+    float shakeX = 0, shakeY = 0, shakeRoll = 0;   // the block's motion on its mounts (mm, mm, rad; exaggerated)
 };
 
 // draws the engine (piston or rotary) into `size` at the cursor and handles orbit / zoom / pan on it

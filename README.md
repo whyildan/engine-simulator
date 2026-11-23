@@ -84,7 +84,7 @@ enginesim.exe --preset 23 --section 11   # start with the bridge-port rotary, in
 | `T` (hold) | transbrake · `G` (hold) rolling anti-lag · `X` nitrous arming switch |
 | `L` | listener: tailpipe / engine bay / cabin |
 | `V` | driving mode (car as the load) |
-| Game controller | `R2`/`RT` gas · `L2`/`LT` clutch (analog) · `R1`/`RB` shift up · `L1`/`LB` shift down · `✕`/`A` or right stick back: brake · `△`/`Y` neutral · `Options`/`Start` start the engine · `Share`/`Back` ignition · `○`/`B` driving mode · D-pad ←/→ listener (Xbox pads via XInput; DualShock 4 / DualSense directly or via Steam / DS4Windows) |
+| Game controller | `R2`/`RT` gas · `L2`/`LT` clutch (analog) · `R1`/`RB` shift up · `L1`/`LB` shift down · `✕`/`A` or right stick back: brake · `△`/`Y` neutral · `Options`/`Start` start the engine · `Share`/`Back` ignition · `○`/`B` driving mode · D-pad ←/→ listener (Xbox pads via XInput; DualShock 4 / DualSense directly or via Steam / DS4Windows). The engine's vibration through its mounts drives the rumble motors (piston shaking forces and couples, firing pulses; big motor below ~35 Hz, small above) |
 | `E` / `Q` | shift up / down · `N` neutral · `C` (hold) clutch · `B` brake |
 
 ### Presets
@@ -309,6 +309,7 @@ build/Release/engine_file_test.exe  # engine files: every preset round trips, pa
 ```bash
 build/Release/fuel_test.exe          # fuels: properties, knock by octane, E85 / methanol with and without flex fuel, refuel, cold start
 build/Release/fuel_drain_test.exe    # running out of fuel: EFI, carburettor and diesel stall on an empty tank and restart after refuelling
+build/Release/vibration_test.exe     # engine vibration: a V-twin shakes, a V12 / straight six stays smooth, an I4's secondary grows with revs
 ```
 
 ```bash

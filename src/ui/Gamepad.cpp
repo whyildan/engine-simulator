@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cwctype>
+#include <string>
 
 namespace es::ui {
 
@@ -18,32 +20,82 @@ enum Btn : uint32_t {
     kLisPrev = 1u << 6, kLisNext = 1u << 7, kBrake = 1u << 8,
 };
 typedef DWORD(WINAPI* XInputGetStateFn)(DWORD, XINPUT_STATE*);
+typedef DWORD(WINAPI* XInputSetStateFn)(DWORD, XINPUT_VIBRATION*);
 float trig(float v, float dead) { return v <= dead ? 0.0f : std::min(1.0f, (v - dead) / (1.0f - dead)); }
 }
 
 struct Gamepad::Impl {
     HMODULE xi = nullptr;
     XInputGetStateFn xget = nullptr;
+    XInputSetStateFn xset = nullptr;
     int xUser = -1;
     IDirectInput8W* di = nullptr;
     IDirectInputDevice8W* dev = nullptr;
     std::string diName;
     bool ps = false;   // a Sony pad: its known layout (else a generic DirectInput pad, same layout assumed)
+    // a DualShock 4 / DualSense on USB: its HID device, opened for the rumble output report
+    HANDLE hid = INVALID_HANDLE_VALUE;
+    int sony = 0;      // 0 none, 4 DualShock 4, 5 DualSense
 
     Impl() {
         for (const char* dll : {"xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll"})
             if ((xi = LoadLibraryA(dll))) break;
-        if (xi) xget = (XInputGetStateFn)GetProcAddress(xi, "XInputGetState");
+        if (xi) {
+            xget = (XInputGetStateFn)GetProcAddress(xi, "XInputGetState");
+            xset = (XInputSetStateFn)GetProcAddress(xi, "XInputSetState");
+        }
         DirectInput8Create(GetModuleHandleW(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8W, (void**)&di, nullptr);
     }
     ~Impl() {
+        rumble(0, 0);
         dropDev();
         if (di) di->Release();
         if (xi) FreeLibrary(xi);
     }
     void dropDev() {
         if (dev) { dev->Unacquire(); dev->Release(); dev = nullptr; }
+        if (hid != INVALID_HANDLE_VALUE) { CloseHandle(hid); hid = INVALID_HANDLE_VALUE; }
+        sony = 0;
         diName.clear();
+    }
+    // the Sony pad's HID interface (DirectInput gives its path): a USB one only - see Gamepad.h
+    void openHid(WORD pid) {
+        DIPROPGUIDANDPATH gp{};
+        gp.diph.dwSize = sizeof(gp); gp.diph.dwHeaderSize = sizeof(DIPROPHEADER); gp.diph.dwHow = DIPH_DEVICE;
+        if (FAILED(dev->GetProperty(DIPROP_GUIDANDPATH, &gp.diph))) return;
+        std::wstring path = gp.wszPath;
+        for (wchar_t& c : path) c = (wchar_t)towlower(c);
+        if (path.find(L"00001124-0000-1000-8000-00805f9b34fb") != std::wstring::npos || path.find(L"_vid&0002") != std::wstring::npos)
+            return;   // Bluetooth
+        const int kind = (pid == 0x05C4 || pid == 0x09CC || pid == 0x0BA0) ? 4 : (pid == 0x0CE6 || pid == 0x0DF2) ? 5 : 0;
+        if (!kind) return;
+        hid = CreateFileW(gp.wszPath, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (hid == INVALID_HANDLE_VALUE)
+            hid = CreateFileW(gp.wszPath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (hid != INVALID_HANDLE_VALUE) sony = kind;
+    }
+    // motors 0..1 -> the pad. XInput: left = low frequency (big), right = high frequency (small). Sony USB output
+    // reports (as SDL's hidapi drivers write them): DualShock 4 report 0x05, 32 bytes - [1] 0x01 = set the rumble only
+    // (not the light bar), [4] small motor, [5] big motor; DualSense report 0x02, 48 bytes - [1] 0x03 = rumble
+    // emulation on, audio haptics off, [3] small (right), [4] big (left)
+    bool rumble(float lo, float hi) {
+        const auto b8 = [](float v) { return (BYTE)std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+        if (xUser >= 0 && xset) {
+            XINPUT_VIBRATION v{};
+            v.wLeftMotorSpeed = (WORD)std::lround(std::clamp(lo, 0.0f, 1.0f) * 65535.0f);
+            v.wRightMotorSpeed = (WORD)std::lround(std::clamp(hi, 0.0f, 1.0f) * 65535.0f);
+            return xset(xUser, &v) == ERROR_SUCCESS;
+        }
+        if (hid != INVALID_HANDLE_VALUE && sony) {
+            BYTE r[64] = {};
+            DWORD len;
+            if (sony == 4) { r[0] = 0x05; r[1] = 0x01; r[4] = b8(hi); r[5] = b8(lo); len = 32; }
+            else { r[0] = 0x02; r[1] = 0x03; r[3] = b8(hi); r[4] = b8(lo); len = 48; }
+            DWORD wrote = 0;
+            if (!WriteFile(hid, r, len, &wrote, nullptr)) { CloseHandle(hid); hid = INVALID_HANDLE_VALUE; sony = 0; return false; }
+            return true;
+        }
+        return false;
     }
     static BOOL CALLBACK enumCb(const DIDEVICEINSTANCEW* inst, void* ctx) {
         auto* self = static_cast<Impl*>(ctx);
@@ -56,6 +108,7 @@ struct Gamepad::Impl {
         if (FAILED(d->SetDataFormat(&c_dfDIJoystick2))) { d->Release(); return DIENUM_CONTINUE; }
         self->dev = d;
         self->ps = vid == 0x054C;   // Sony
+        self->pid = HIWORD(vidpid);
         char nm[MAX_PATH];
         WideCharToMultiByte(CP_UTF8, 0, inst->tszProductName, -1, nm, sizeof(nm), nullptr, nullptr);
         self->diName = nm;
@@ -72,7 +125,9 @@ struct Gamepad::Impl {
         r.lMin = 0; r.lMax = 1000;
         dev->SetProperty(DIPROP_RANGE, &r.diph);
         dev->Acquire();
+        if (ps) openHid(pid);
     }
+    WORD pid = 0;
 };
 
 Gamepad::~Gamepad() { delete impl_; }
@@ -157,6 +212,16 @@ void Gamepad::poll(void* hwndv) {
     n.shiftUp = press & kUp; n.shiftDown = press & kDown; n.neutral = press & kNeutral; n.start = press & kStart;
     n.ignition = press & kIgn; n.driveMode = press & kDrive; n.listenerPrev = press & kLisPrev; n.listenerNext = press & kLisNext;
     s_ = n;
+    rumbleOk_ = got && ((I.xUser >= 0 && I.xset) || I.sony != 0);
+}
+
+// (only when it changes by a step, or every half second to keep it alive)
+void Gamepad::setRumble(float low, float high) {
+    if (!impl_) return;
+    const double now = GetTickCount64() * 1e-3;
+    if (std::fabs(low - sentLo_) < 1.0f / 128 && std::fabs(high - sentHi_) < 1.0f / 128 && now - sentAt_ < 0.5) return;
+    if (impl_->rumble(low, high)) { sentLo_ = low; sentHi_ = high; sentAt_ = now; }
+    else sentLo_ = sentHi_ = -1;
 }
 
 } // namespace es::ui

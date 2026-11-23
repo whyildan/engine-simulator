@@ -213,6 +213,7 @@ void Simulator::render(float* out, int frames) {
     t.fuelRon = (float)e.fuel().ron; t.fuelMon = (float)e.fuel().mon; t.fuelLhv = (float)(e.fuel().lhv * 1e-6);
     t.tankAlcohol = (float)e.tankFuel().alcoholPct; t.tankRon = (float)e.tankFuel().ron;
     t.tankLitres = (float)e.tankLitres(); t.tankCap = (float)Engine::kTankCapL; t.fuelSupply = (float)e.fuelSupply();
+    t.vibLow = (float)e.vib.low(); t.vibHigh = (float)e.vib.high();
     t.ecuFlexPct = (float)e.ecu.flexPct; t.ecuStoich = (float)e.ecu.stoichEcu; t.ecuTargetLambda = (float)e.ecu.targetLambda;
     t.ecuFlexCold = (float)e.ecu.flexCold; t.ecuFlexLive = e.ecu.flexLive;
     t.lambdaPipe = (float)e.lambdaPipe(); t.emapKPa = (float)e.emapKPa();
@@ -339,6 +340,9 @@ void Simulator::render(float* out, int frames) {
     }
     t.traceLen = (int)e.cycle();
     std::memcpy(t.traceP, e.traceP, sizeof(t.traceP));
+    static_assert(sizeof(t.vibTrX) == sizeof(e.vib.trX), "vibration trace size");
+    std::memcpy(t.vibTrX, e.vib.trX, sizeof(t.vibTrX)); std::memcpy(t.vibTrY, e.vib.trY, sizeof(t.vibTrY));
+    std::memcpy(t.vibTrRoll, e.vib.trRoll, sizeof(t.vibTrRoll));
     std::memcpy(t.traceV, e.traceV, sizeof(t.traceV));
     std::memcpy(t.traceExh, e.traceExh, sizeof(t.traceExh));
     std::memcpy(t.traceInt, e.traceInt, sizeof(t.traceInt));

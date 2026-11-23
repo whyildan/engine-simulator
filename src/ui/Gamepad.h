@@ -6,6 +6,9 @@
 //   Cross / A brake (full) - or the right stick pulled back (analog)
 //   Triangle / Y neutral    Options / Start  start the engine    Share / Back  ignition on / off
 //   Circle / B driving mode (car / dyno)     D-pad left / right  listener position
+// Rumble: XInput's two motors (left = big, slow; right = small, fast); a DualShock 4 / DualSense on a USB cable
+// through its HID output report (over Bluetooth that report would switch the pad to its extended input reports,
+// which DirectInput does not read - there the rumble goes through Steam Input / DS4Windows as an XInput pad).
 #include <cstdint>
 #include <string>
 
@@ -28,6 +31,9 @@ public:
     // reads the first connected pad (call once a frame; looks for a newly connected one every 2 s)
     void poll(void* hwnd);
     const PadState& state() const { return s_; }
+    // rumble motors 0..1 (low: the big, slow motor; high: the small, fast one); sent when it changes
+    void setRumble(float low, float high);
+    bool rumbleSupported() const { return rumbleOk_; }
 
 private:
     PadState s_;
@@ -35,6 +41,9 @@ private:
     Impl* impl_ = nullptr;
     uint32_t held_ = 0;          // buttons held on the last frame (for the edges)
     double nextScan_ = 0;
+    bool rumbleOk_ = false;
+    float sentLo_ = -1, sentHi_ = -1;
+    double sentAt_ = 0;
 };
 
 } // namespace es::ui

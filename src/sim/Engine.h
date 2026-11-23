@@ -5,6 +5,7 @@
 #include "sim/Boost.h"
 #include "sim/Components.h"
 #include "sim/Thermal.h"
+#include "sim/Vibration.h"
 #include "sim/Valvetrain.h"
 #include "sim/Fuel.h"
 #include "sim/FlowStats.h"
@@ -41,6 +42,7 @@ public:
     double theta() const { return theta_; }
     double netTorque() const { return torqueAvg_; }      // indicated - friction, cycle averaged (N m)
     double instTorque() const { return torqueInst_; }
+    EngineVibration vib;      // what the mounts pass on (Vibration.h): the game controller's rumble
     double inertia() const { return totalInertia(); }
     double totalInertia() const {
         return std::max(0.01, (double)p_.flywheel) + (geom_.rotary ? 0.002 * nPorts_ : comp_.extraInertia);
@@ -243,6 +245,7 @@ private:
     void nitrousStep(double dt);
     bool fuelCutNow_ = false;
     ComponentModel comp_;
+    int vibTick_ = 0;
     int repairSeen_ = 0;
     double burnDuration(Cylinder& c, double rpm, double lambda);
     double transferFlow(Cylinder& c, Crankcase& cc, double cdA, double dt);

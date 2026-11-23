@@ -70,6 +70,8 @@ struct Telemetry {
     // fuel (Package 1): what burns now (fuel line), what is in the tank, and what the ECU believes
     float lambda = 1, fuelStoich = 14.7f, fuelAlcohol = 0, fuelRon = 95, fuelMon = 85, fuelLhv = 43.5f;
     float tankAlcohol = 0, tankRon = 95, tankLitres = 30, tankCap = 50;
+    float vibTrX[1080] = {}, vibTrY[1080] = {}, vibTrRoll[1080] = {};   // block motion over the cycle (m, rad)
+    float vibLow = 0, vibHigh = 0;   // engine vibration through the mounts, m/s^2 RMS below / above ~35 Hz
     float fuelSupply = 1;   // 0..1 liquid fuel still reaching the engine (Engine::fuelSupply)
     float ecuFlexPct = 0, ecuStoich = 14.7f, ecuTargetLambda = 1, ecuFlexCold = 0;
     bool ecuFlexLive = false;

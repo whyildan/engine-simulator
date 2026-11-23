@@ -236,6 +236,9 @@ private:
     bool keyThrottle_ = false, brakeKey_ = false, clutchKey_ = false;
     ui::Gamepad pad_;                                  // game controller (Gamepad.h: R2 gas, L2 clutch, R1 / L1 gears)
     bool padThr_ = false, padClutch_ = false, padBrake_ = false;
+    bool rumbleOn_ = true;                             // engine vibration on the controller's motors
+    float rumbleGain_ = 1.0f;
+    float rumbleLo_ = 0, rumbleHi_ = 0;                // what the motors get now (0..1)
     float animAngle_ = 0, animSpeed_ = 0.02f;
     ui::ViewCam engCam_;
     bool autoStart_ = false;
